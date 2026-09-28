@@ -284,7 +284,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16] [--speed=1|2|4|8] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -461,7 +461,9 @@ int main(int argc, char **argv) {
             case MENU_MEMORY_4:
             case MENU_MEMORY_8:
             case MENU_MEMORY_16:
-                settings.memory = item == MENU_MEMORY_4 ? 4 : item == MENU_MEMORY_8 ? 8 : 16;
+            case MENU_MEMORY_20:
+            case MENU_MEMORY_32:
+                settings.memory = item == MENU_MEMORY_4 ? 4 : item == MENU_MEMORY_8 ? 8 : item == MENU_MEMORY_16 ? 16 : item == MENU_MEMORY_20 ? 20 : 32;
                 machine_set_memory(machine, settings.memory);
                 settings_save(&settings);
                 notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Run > Reset (clears the machine)";
@@ -511,6 +513,8 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_4, machine_memory_next(machine) == 4);
         menu_set_checked(MENU_MEMORY_8, machine_memory_next(machine) == 8);
         menu_set_checked(MENU_MEMORY_16, machine_memory_next(machine) == 16);
+        menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
+        menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
         menu_set_checked(MENU_SPEED_1, machine_speed(machine) == 1);
         menu_set_checked(MENU_SPEED_2, machine_speed(machine) == 2);
         menu_set_checked(MENU_SPEED_4, machine_speed(machine) == 4);

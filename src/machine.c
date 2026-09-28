@@ -35,6 +35,10 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 #define STATUS5_IOPOS_DCD      (1u << 11)
 #define STATUS5_IONEG_DCD      (1u << 4)
 #define IODIN_MINICARD1_ABSENT (1u << 5)
+#define MFIO_EEPROM_SCL        (1u << 18)
+#define MFIO_EEPROM_SDA        (1u << 20)
+#define EEPROM_ADDRESS         0x50
+#define CARD_DRAM_MAX          0x01000000u
 #define IODIN_MINICARD2_ABSENT (1u << 6)
 
 #define POWER_ONBUTN   (1u << 31)
@@ -140,6 +144,11 @@ struct machine {
     uint8_t *dram;
     uint32_t dram_size;
     uint32_t dram_size_next;
+    uint8_t *card_dram;
+    uint32_t card_dram_size;
+    uint32_t card_dram_size_next;
+    uint8_t  eeprom_phase, eeprom_shift, eeprom_bit, eeprom_addr;
+    bool     eeprom_selected, eeprom_read, eeprom_in_ack, eeprom_scl, eeprom_sda, eeprom_sda_out;
     uint8_t *rom;
     uint32_t rom_size;
     uint64_t rom_hash;
@@ -428,6 +437,109 @@ static void sound_event(machine_t *m) {
     sound_capture_half(m);
 }
 
+enum { EEPROM_IDLE, EEPROM_CONTROL, EEPROM_WORD, EEPROM_WRITE, EEPROM_TRANSMIT };
+
+static uint8_t eeprom_byte(const machine_t *m, uint8_t address) {
+    switch (address) {
+        case 16: return 0x99;
+        case 59: return 1;
+        case 64: return 2;
+        case 67: return (uint8_t)(((m->card_dram_size >> 20) - 1) & 0x3F);
+        case 96: return 12;
+        case 97: return 11;
+        case 98: return 1;
+        case 101: return 127;
+        default: return 0;
+    }
+}
+
+static void eeprom_drive(machine_t *m, bool level) {
+    if (m->eeprom_sda_out == level) return;
+    m->eeprom_sda_out = level;
+    intc_set_pending(m, level ? 2 : 3, MFIO_EEPROM_SDA);
+}
+
+static void eeprom_load_byte(machine_t *m) {
+    m->eeprom_shift = eeprom_byte(m, m->eeprom_addr);
+    m->eeprom_addr++;
+    eeprom_drive(m, (m->eeprom_shift & 0x80) != 0);
+    m->eeprom_shift <<= 1;
+}
+
+static void eeprom_pins(machine_t *m) {
+    if (!m->card_dram_size) return;
+    uint32_t outputs = m->mfio_direc & m->mfio_sel;
+    bool scl = !(outputs & MFIO_EEPROM_SCL) || (m->mfio_dout & MFIO_EEPROM_SCL);
+    bool sda = !(outputs & MFIO_EEPROM_SDA) || (m->mfio_dout & MFIO_EEPROM_SDA);
+    bool previous_scl = m->eeprom_scl, previous_sda = m->eeprom_sda;
+    m->eeprom_scl = scl;
+    m->eeprom_sda = sda;
+    if (scl && previous_scl && sda != previous_sda) {
+        m->eeprom_bit = 0;
+        m->eeprom_in_ack = false;
+        if (sda) {
+            m->eeprom_phase = EEPROM_IDLE;
+        } else {
+            m->eeprom_phase = EEPROM_CONTROL;
+            m->eeprom_shift = 0;
+            m->eeprom_selected = false;
+        }
+        eeprom_drive(m, true);
+        return;
+    }
+    if (m->eeprom_phase == EEPROM_IDLE) return;
+    if (scl && !previous_scl) {
+        if (m->eeprom_bit < 8) {
+            if (m->eeprom_phase != EEPROM_TRANSMIT) m->eeprom_shift = (uint8_t)(m->eeprom_shift << 1 | (sda ? 1 : 0));
+            m->eeprom_bit++;
+        } else if (m->eeprom_phase == EEPROM_TRANSMIT && sda) {
+            m->eeprom_phase = EEPROM_IDLE;
+            m->eeprom_bit = 0;
+            m->eeprom_in_ack = false;
+            eeprom_drive(m, true);
+        }
+    } else if (!scl && previous_scl) {
+        if (m->eeprom_in_ack) {
+            m->eeprom_in_ack = false;
+            m->eeprom_bit = 0;
+            switch (m->eeprom_phase) {
+                case EEPROM_CONTROL:
+                    if (!m->eeprom_selected) { m->eeprom_phase = EEPROM_IDLE; eeprom_drive(m, true); }
+                    else if (m->eeprom_read) { m->eeprom_phase = EEPROM_TRANSMIT; eeprom_load_byte(m); }
+                    else { m->eeprom_phase = EEPROM_WORD; eeprom_drive(m, true); }
+                    break;
+                case EEPROM_WORD:
+                    m->eeprom_phase = EEPROM_WRITE;
+                    eeprom_drive(m, true);
+                    break;
+                case EEPROM_TRANSMIT:
+                    eeprom_load_byte(m);
+                    break;
+                default:
+                    break;
+            }
+            return;
+        }
+        if (m->eeprom_bit == 8) {
+            m->eeprom_in_ack = true;
+            bool acknowledge = true;
+            if (m->eeprom_phase == EEPROM_CONTROL) {
+                m->eeprom_selected = (m->eeprom_shift >> 1) == EEPROM_ADDRESS;
+                m->eeprom_read = (m->eeprom_shift & 1) != 0;
+                acknowledge = m->eeprom_selected;
+            } else if (m->eeprom_phase == EEPROM_WORD) {
+                m->eeprom_addr = m->eeprom_shift;
+            }
+            eeprom_drive(m, m->eeprom_phase == EEPROM_TRANSMIT ? true : !acknowledge);
+            return;
+        }
+        if (m->eeprom_phase == EEPROM_TRANSMIT) {
+            eeprom_drive(m, (m->eeprom_shift & 0x80) != 0);
+            m->eeprom_shift <<= 1;
+        }
+    }
+}
+
 static uint32_t soc_read(machine_t *m, uint32_t offset, int size) {
     uint32_t index = offset / 4;
     switch (offset & ~3u) {
@@ -471,7 +583,7 @@ static uint32_t soc_read(machine_t *m, uint32_t offset, int size) {
         }
         case 0x180: {
             uint32_t direction = (m->io_ctl >> 16) & 0x7F;
-            uint32_t board = IODIN_MMODULE_ATTACHED | (m->serial_connected ? 0 : IODIN_SERIAL_DCD) | IODIN_MINICARD1_ABSENT | IODIN_MINICARD2_ABSENT;
+            uint32_t board = IODIN_MMODULE_ATTACHED | (m->serial_connected ? 0 : IODIN_SERIAL_DCD) | (m->card_dram_size ? 0 : IODIN_MINICARD1_ABSENT) | IODIN_MINICARD2_ABSENT;
             uint32_t din = ((m->io_ctl >> 8) & direction) | (board & ~direction & 0x7F);
             return m->io_ctl | din;
         }
@@ -479,7 +591,7 @@ static uint32_t soc_read(machine_t *m, uint32_t offset, int size) {
         case 0x188: return m->mfio_direc;
         case 0x18C: {
             uint32_t outputs = m->mfio_direc & m->mfio_sel;
-            uint32_t inputs = m->serial_connected ? 0 : MFIO_SERIAL_CTS;
+            uint32_t inputs = (m->serial_connected ? 0 : MFIO_SERIAL_CTS) | ((m->card_dram_size && m->eeprom_sda_out) ? MFIO_EEPROM_SDA : 0);
             return (m->mfio_dout & outputs) | (inputs & ~outputs);
         }
         case 0x0B0: case 0x0B4: case 0x0B8: case 0x0BC: case 0x0C0: case 0x0C4:
@@ -617,9 +729,9 @@ static void soc_write(machine_t *m, uint32_t offset, int size, uint32_t value) {
             return;
         case 0x164: return;
         case 0x180: m->io_ctl = value & 0x7F7F7F00u; return;
-        case 0x184: m->mfio_dout = value; return;
-        case 0x188: m->mfio_direc = value; return;
-        case 0x190: m->mfio_sel = value; return;
+        case 0x184: m->mfio_dout = value; eeprom_pins(m); return;
+        case 0x188: m->mfio_direc = value; eeprom_pins(m); return;
+        case 0x190: m->mfio_sel = value; eeprom_pins(m); return;
         case 0x1C4: power_write(m, value); return;
         default:
             if (index < REG_COUNT) {
@@ -667,6 +779,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END) {
+        if (m->card_dram_size) { *value = read_host(m->card_dram + (pa & (m->card_dram_size - 1)), size); return true; }
         note_access(m, "bank1 read", pa, size, 0);
         *value = 0xFFFFFFFFu >> (32 - size * 8);
         return true;
@@ -691,6 +804,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
         pccard_write(&m->card_socket, pa, size, value);
         return true;
     }
+    if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END && m->card_dram_size) {
+        write_host(m->card_dram + (pa & (m->card_dram_size - 1)), size, value);
+        return true;
+    }
     note_access(m, "unmapped write", pa, size, value);
     return true;
 }
@@ -698,6 +815,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
 static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     machine_t *m = context;
     if (pa < DRAM_DECODE_END) return m->dram + (pa & (m->dram_size - 1));
+    if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END && m->card_dram_size) return m->card_dram + (pa & (m->card_dram_size - 1));
     if (pa >= ROM_PA && pa - ROM_PA + 4096 <= m->rom_size) return m->rom + (pa - ROM_PA);
     return NULL;
 }
@@ -748,6 +866,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     }
     machine_t *m = calloc(1, sizeof *m);
     m->dram_size = m->dram_size_next = DRAM_SIZE;
+    m->eeprom_scl = m->eeprom_sda = m->eeprom_sda_out = true;
     m->dram = calloc(1, m->dram_size);
     m->rom_size = (uint32_t)((rom_size + 4095) & ~(size_t)4095);
     m->rom = malloc(m->rom_size);
@@ -767,6 +886,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
 
 void machine_destroy(machine_t *m) {
     if (!m) return;
+    free(m->card_dram);
     if (m->card_socket.image) fclose(m->card_socket.image);
     free(m->dram);
     free(m->rom);
@@ -1015,7 +1135,11 @@ bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
     X(uart_a_ctl1, m->uart_a.ctl1) X(uart_a_baud_divisor, m->uart_a.baud_divisor) \
     X(uart_a_dma_buffer, m->uart_a.dma_buffer) X(uart_a_dma_length, m->uart_a.dma_length) \
     X(uart_a_dma_count, m->uart_a.dma_count) X(uart_a_dma_armed, m->uart_a.dma_armed) \
-    X(serial_connected, m->serial_connected) X(serial_tag, m->serial_tag)
+    X(serial_connected, m->serial_connected) X(serial_tag, m->serial_tag) \
+    X(eeprom_phase, m->eeprom_phase) X(eeprom_shift, m->eeprom_shift) X(eeprom_bit, m->eeprom_bit) \
+    X(eeprom_addr, m->eeprom_addr) X(eeprom_selected, m->eeprom_selected) X(eeprom_read, m->eeprom_read) \
+    X(eeprom_in_ack, m->eeprom_in_ack) X(eeprom_scl, m->eeprom_scl) X(eeprom_sda, m->eeprom_sda) \
+    X(eeprom_sda_out, m->eeprom_sda_out)
 
 static bool write_record(FILE *file, const char *name, const void *data, uint32_t size) {
     uint8_t length = (uint8_t)strlen(name);
@@ -1035,6 +1159,7 @@ bool machine_save(machine_t *m, const char *path, int64_t host_time) {
     STATE_FIELDS(SAVE_FIELD)
 #undef SAVE_FIELD
     ok = ok && write_record(file, "dram", m->dram, m->dram_size);
+    if (m->card_dram_size) ok = ok && write_record(file, "dram_card", m->card_dram, m->card_dram_size);
     uint8_t end = 0;
     ok = ok && fwrite(&end, 1, 1, file) == 1;
     ok = fclose(file) == 0 && ok;
@@ -1078,6 +1203,10 @@ static void apply_record(machine_t *m, const state_record_t *record) {
         if (record->size == m->dram_size) memcpy(m->dram, record->data, m->dram_size);
         return;
     }
+    if (!strcmp(record->name, "dram_card")) {
+        if (record->size == m->card_dram_size) memcpy(m->card_dram, record->data, m->card_dram_size);
+        return;
+    }
     machine_logf(m, "state: ignoring unknown record %s\n", record->name);
 }
 
@@ -1100,15 +1229,18 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         ok = rom_hash == m->rom_hash;
     }
     bool has_dram = false;
+    uint32_t saved_card = 0;
     if (ok) {
         const uint8_t *cursor = contents + header, *end = contents + length;
         state_record_t record;
         uint32_t saved_dram = 0;
+        saved_card = 0;
         while (next_record(&cursor, end, &record)) {
             if (!strcmp(record.name, "dram") && record.size >= DRAM_SIZE && record.size <= DRAM_MAX && !(record.size & (record.size - 1))) {
                 has_dram = true;
                 saved_dram = record.size;
             }
+            if (!strcmp(record.name, "dram_card") && record.size <= CARD_DRAM_MAX && !(record.size & (record.size - 1))) saved_card = record.size;
         }
         ok = has_dram;
         if (ok && saved_dram != m->dram_size) {
@@ -1126,10 +1258,12 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         char current_path[sizeof m->card_path];
         memcpy(current_path, m->card_path, sizeof current_path);
         m->card_socket.image = NULL;
-        uint32_t dram_next = m->dram_size_next;
+        uint32_t dram_next = m->dram_size_next, card_next = m->card_dram_size_next;
         m->dram_size_next = m->dram_size;
+        m->card_dram_size_next = saved_card;
         machine_reset(m);
         m->dram_size_next = dram_next;
+        m->card_dram_size_next = card_next;
         m->pccard.inserted = false;
         const uint8_t *cursor = contents + header, *end = contents + length;
         state_record_t record;
@@ -1185,6 +1319,8 @@ void machine_reset(machine_t *m) {
     uint32_t speed = m->cpu.speed;
     uint8_t *dram = m->dram, *rom = m->rom;
     uint32_t dram_size = m->dram_size, dram_size_next = m->dram_size_next;
+    uint8_t *card_dram = m->card_dram;
+    uint32_t card_size = m->card_dram_size, card_size_next = m->card_dram_size_next;
     uint32_t rom_size = m->rom_size;
     uint64_t rom_hash = m->rom_hash;
     machine_log_fn log = m->log;
@@ -1200,8 +1336,18 @@ void machine_reset(machine_t *m) {
             dram_size = dram_size_next;
         }
     }
+    if (card_size_next != card_size) {
+        free(card_dram);
+        card_dram = card_size_next ? calloc(1, card_size_next) : NULL;
+        card_size = card_dram ? card_size_next : 0;
+    }
     memset(m, 0, sizeof *m);
     memset(dram, 0, dram_size);
+    if (card_dram) memset(card_dram, 0, card_size);
+    m->card_dram = card_dram;
+    m->card_dram_size = card_size;
+    m->card_dram_size_next = card_size_next;
+    m->eeprom_scl = m->eeprom_sda = m->eeprom_sda_out = true;
     m->dram = dram;
     m->dram_size = dram_size;
     m->dram_size_next = dram_size_next;
@@ -1220,14 +1366,22 @@ void machine_reset(machine_t *m) {
 }
 
 void machine_set_memory(machine_t *m, uint32_t megabytes) {
-    uint32_t bytes = megabytes << 20;
-    if (bytes < DRAM_SIZE || bytes > DRAM_MAX || (bytes & (bytes - 1))) return;
-    m->dram_size_next = bytes;
-    if (m->cpu.cycles == 0 && bytes != m->dram_size) machine_reset(m);
+    uint32_t bank0, card;
+    switch (megabytes) {
+        case 4: bank0 = 4; card = 0; break;
+        case 8: bank0 = 8; card = 0; break;
+        case 16: bank0 = 16; card = 0; break;
+        case 20: bank0 = 4; card = 16; break;
+        case 32: bank0 = 16; card = 16; break;
+        default: return;
+    }
+    m->dram_size_next = bank0 << 20;
+    m->card_dram_size_next = card << 20;
+    if (m->cpu.cycles == 0 && (m->dram_size_next != m->dram_size || m->card_dram_size_next != m->card_dram_size)) machine_reset(m);
 }
 
-uint32_t machine_memory(machine_t *m) { return m->dram_size >> 20; }
-uint32_t machine_memory_next(machine_t *m) { return m->dram_size_next >> 20; }
+uint32_t machine_memory(machine_t *m) { return (m->dram_size + m->card_dram_size) >> 20; }
+uint32_t machine_memory_next(machine_t *m) { return (m->dram_size_next + m->card_dram_size_next) >> 20; }
 
 void machine_set_speed(machine_t *m, uint32_t multiplier) {
     m->cpu.speed = multiplier < 1 ? 1 : multiplier > 16 ? 16 : multiplier;

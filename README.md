@@ -15,7 +15,7 @@ brew install sdl3 libslirp
 make
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 MB System info; a saved state resuming identically; PPP up; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; backlight key
 ```
 
 ## Use
@@ -47,7 +47,7 @@ Menus:
 | Serial | Disconnect | |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
-| Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB | |
+| Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB, 20 MB (4 MB + 16 MB DRAM card), 32 MB (16 MB + 16 MB DRAM card) | |
 | Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
 
 The backlight is under CE's control: the Backlight key toggles it, and the Backlight control panel's idle timeout turns it off (30 seconds by default, since the Velo reports external power). The checkmark shows its state.
@@ -83,7 +83,7 @@ Without libslirp the build still works, with no Network (PPP) option.
 
 ## Memory and speed
 
-Memory sets the RAM for the next cold boot (Run > Reset, which clears the machine) or `--memory=`. CE sizes RAM at boot and splits it between storage and programs (Control Panel > System > Memory). 16 MB is the most CE 1.0 uses: a larger bank still shows 16 MB. A saved machine keeps the memory it was booted with.
+Memory sets the RAM for the next cold boot (Run > Reset, which clears the machine) or `--memory=`. CE sizes the built-in RAM at boot and uses at most 16 MB of it. Beyond that, 20 MB and 32 MB add a 16 MB DRAM Miniature Card in slot 1, the Velo's own memory expansion: CE reads its ID EEPROM and maps it as a second RAM region, reporting 20,348 KB and 32,636 KB, split between storage and programs in Control Panel > System > Memory. A saved machine keeps the memory it was booted with (a 32 MB save is about 33 MB).
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
 
@@ -104,6 +104,7 @@ Headless options:
 - `--card=IMAGE` inserts a card image, after `--load`.
 - `--net=SECONDS` connects COM1 to the PPP gateway. `--serial=SECONDS` connects a bare cable, and `--serial-send=SECONDS:TEXT` sends bytes. Anything CE transmits is printed.
 - `--type=SECONDS:TEXT` types text (US layout, `\n` for Enter).
+- `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key).
 
 ## What's emulated
 
@@ -122,7 +123,7 @@ Headless options:
   - UCB1100 touch and battery ADC
   - debug module probe
   - M-Module (IT8368) ID
-  - Miniature Card slots reporting empty, and serial DCD off
+  - Miniature Card slot 2 empty; slot 1 empty or a 16 MB DRAM card with its I2C ID EEPROM (MFIO 18/20)
   - LCD panel power on MFIO 17 (active low) and the backlight on MFIO 25
   - M-Module IT8368E PC Card socket (card detect, power, reset, interrupt to the IR block's CARDET) and the PR31500 card windows
   - CompactFlash card in ATA mode (CIS, task file, PIO read and write)

@@ -53,6 +53,8 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_MEMORY_4, "4 MB (original)", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_MEMORY_8, "8 MB", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_MEMORY_16, "16 MB", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_MEMORY_20, "20 MB (4 MB + 16 MB DRAM card)", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_MEMORY_32, "32 MB (16 MB + 16 MB DRAM card)", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
     { MENU_ENTRY_SUBMENU, 0, "CPU Speed", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SPEED_1, "1x (original)", 0, 0 },
