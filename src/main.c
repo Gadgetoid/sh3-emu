@@ -1,0 +1,301 @@
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#include "lcd.h"
+#include "machine.h"
+#include "menu.h"
+
+#define WINDOW_SCALE     2
+#define MAX_FRAME_SLICE  0.1
+#define AUTOSAVE_SECONDS 60
+#define NOTICE_SECONDS   2
+#define POWER_PRESS_SECONDS 0.2
+#define AUDIO_CHUNK 8192
+#define WINDOW_TITLE     "Philips Velo 1"
+
+typedef struct {
+    SDL_Keycode key;
+    uint8_t     scancode;
+} key_binding_t;
+
+static const key_binding_t key_bindings[] = {
+    { SDLK_A, 0x14 }, { SDLK_B, 0x2B }, { SDLK_C, 0x2A }, { SDLK_D, 0x2C }, { SDLK_E, 0x28 },
+    { SDLK_F, 0x34 }, { SDLK_G, 0x38 }, { SDLK_H, 0x40 }, { SDLK_I, 0x45 }, { SDLK_J, 0x3C },
+    { SDLK_K, 0x44 }, { SDLK_L, 0x36 }, { SDLK_M, 0x3B }, { SDLK_N, 0x33 }, { SDLK_O, 0x3E },
+    { SDLK_P, 0x4D }, { SDLK_Q, 0x26 }, { SDLK_R, 0x30 }, { SDLK_S, 0x24 }, { SDLK_T, 0x2D },
+    { SDLK_U, 0x3D }, { SDLK_V, 0x23 }, { SDLK_W, 0x18 }, { SDLK_X, 0x22 }, { SDLK_Y, 0x35 },
+    { SDLK_Z, 0x12 },
+    { SDLK_0, 0x47 }, { SDLK_1, 0x13 }, { SDLK_2, 0x16 }, { SDLK_3, 0x15 }, { SDLK_4, 0x25 },
+    { SDLK_5, 0x17 }, { SDLK_6, 0x27 }, { SDLK_7, 0x2F }, { SDLK_8, 0x37 }, { SDLK_9, 0x3F },
+    { SDLK_SPACE, 0x21 }, { SDLK_TAB, 0x11 }, { SDLK_BACKSPACE, 0x39 }, { SDLK_RETURN, 0x4B },
+    { SDLK_ESCAPE, 0x29 }, { SDLK_LSHIFT, 0x51 }, { SDLK_RSHIFT, 0x51 }, { SDLK_LCTRL, 0x01 },
+    { SDLK_RCTRL, 0x01 }, { SDLK_LALT, 0x19 }, { SDLK_RALT, 0x09 },
+    { SDLK_LEFT, 0x41 }, { SDLK_UP, 0x4A }, { SDLK_RIGHT, 0x32 }, { SDLK_DOWN, 0x49 },
+    { SDLK_SEMICOLON, 0x4C }, { SDLK_EQUALS, 0x4F }, { SDLK_COMMA, 0x43 }, { SDLK_MINUS, 0x4E },
+    { SDLK_PERIOD, 0x3A }, { SDLK_SLASH, 0x42 }, { SDLK_GRAVE, 0x31 }, { SDLK_LEFTBRACKET, 0x48 },
+    { SDLK_BACKSLASH, 0x50 }, { SDLK_RIGHTBRACKET, 0x46 }, { SDLK_APOSTROPHE, 0x2E },
+};
+
+static bool find_scancode(SDL_Keycode key, uint8_t *scancode) {
+    for (size_t i = 0; i < sizeof key_bindings / sizeof key_bindings[0]; i++) {
+        if (key_bindings[i].key == key) { *scancode = key_bindings[i].scancode; return true; }
+    }
+    return false;
+}
+
+static uint8_t *read_file(const char *path, size_t *size) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return NULL;
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    uint8_t *data = malloc((size_t)length);
+    if (fread(data, 1, (size_t)length, file) != (size_t)length) { free(data); fclose(file); return NULL; }
+    fclose(file);
+    *size = (size_t)length;
+    return data;
+}
+
+static bool verbose = false;
+
+static void log_message(const char *message) {
+    if (verbose) fputs(message, stderr);
+}
+
+static void state_path(char *path, size_t size) {
+    const char *data_home = getenv("XDG_DATA_HOME");
+    char base[1024];
+    if (data_home && data_home[0] == '/') snprintf(base, sizeof base, "%s/velo-emu", data_home);
+    else snprintf(base, sizeof base, "%s/.local/share/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
+    SDL_CreateDirectory(base);
+    snprintf(path, size, "%s/state.bin", base);
+}
+
+static void set_title(SDL_Window *window, const char *notice, bool paused, bool suspended) {
+    char title[128];
+    if (notice) snprintf(title, sizeof title, "%s: %s", WINDOW_TITLE, notice);
+    else if (paused) snprintf(title, sizeof title, "%s (paused)", WINDOW_TITLE);
+    else if (suspended) snprintf(title, sizeof title, "%s (suspended)", WINDOW_TITLE);
+    else snprintf(title, sizeof title, "%s", WINDOW_TITLE);
+    SDL_SetWindowTitle(window, title);
+}
+
+static bool screen_position(SDL_Window *window, float window_x, float window_y, int *x, int *y) {
+    int width, height;
+    SDL_GetWindowSize(window, &width, &height);
+    float grid_x = window_x / width * (LCD_WIDTH + 2 * LCD_MARGIN_X) - LCD_MARGIN_X;
+    float grid_y = window_y / height * (LCD_HEIGHT + 2 * LCD_MARGIN_Y) - LCD_MARGIN_Y;
+    *x = (int)grid_x;
+    *y = (int)grid_y;
+    if (*x < 0) *x = 0;
+    if (*y < 0) *y = 0;
+    if (*x >= LCD_WIDTH) *x = LCD_WIDTH - 1;
+    if (*y >= LCD_HEIGHT) *y = LCD_HEIGHT - 1;
+    return grid_x >= 0 && grid_y >= 0 && grid_x < LCD_WIDTH && grid_y < LCD_HEIGHT;
+}
+
+int main(int argc, char **argv) {
+    const char *rom_path = NULL, *screenshot = NULL;
+    double screenshot_seconds = 12;
+    bool fresh = false;
+    for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--verbose")) verbose = true;
+        else if (!strcmp(argv[i], "--fresh")) fresh = true;
+        else if (!strncmp(argv[i], "--screenshot=", 13)) screenshot = argv[i] + 13;
+        else if (!strncmp(argv[i], "--seconds=", 10)) screenshot_seconds = atof(argv[i] + 10);
+        else rom_path = argv[i];
+    }
+    if (!rom_path) {
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        return 2;
+    }
+    size_t rom_size;
+    uint8_t *rom = read_file(rom_path, &rom_size);
+    if (!rom) { fprintf(stderr, "cannot read %s\n", rom_path); return 1; }
+    char error[256];
+    machine_t *machine = machine_create(rom, rom_size, error, sizeof error);
+    free(rom);
+    if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
+    machine_set_log(machine, log_message);
+
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    int grid_width = LCD_WIDTH + 2 * LCD_MARGIN_X, grid_height = LCD_HEIGHT + 2 * LCD_MARGIN_Y;
+    SDL_Window *window = SDL_CreateWindow("Philips Velo 1", grid_width * WINDOW_SCALE, grid_height * WINDOW_SCALE,
+                                          SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, NULL) : NULL;
+    if (!renderer) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
+    SDL_SetRenderVSync(renderer, 1);
+
+    int cell = (int)(WINDOW_SCALE * SDL_GetWindowPixelDensity(window) + 0.5f);
+    lcd_compose_setup(cell);
+    SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
+                                             lcd_compose_width(), lcd_compose_height());
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+
+    if (screenshot) {
+        machine_run(machine, (uint64_t)(screenshot_seconds * MACHINE_CLOCK_HZ));
+        lcd_set_power(machine_lcd_enabled(machine));
+        lcd_set_backlight(machine_backlight(machine));
+        machine_screen(machine, lcd_framebuffer);
+        lcd_compose(10.0f);
+        SDL_Surface *surface = SDL_CreateSurfaceFrom(lcd_compose_width(), lcd_compose_height(), SDL_PIXELFORMAT_RGBA32,
+                                                     lcd_compose_pixels(), lcd_compose_width() * 4);
+        bool saved = surface && SDL_SaveBMP(surface, screenshot);
+        if (!saved) fprintf(stderr, "screenshot: %s\n", SDL_GetError());
+        SDL_DestroySurface(surface);
+        SDL_Quit();
+        machine_destroy(machine);
+        return saved ? 0 : 1;
+    }
+
+    char state[1100];
+    state_path(state, sizeof state);
+    int64_t saved_at;
+    if (!fresh && machine_load(machine, state, &saved_at)) machine_advance_clock(machine, (int64_t)time(NULL) - saved_at);
+
+    menu_install();
+
+    SDL_AudioSpec audio_spec = { SDL_AUDIO_S16, 1, 11025 };
+    SDL_AudioStream *audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, NULL, NULL);
+    if (audio) SDL_ResumeAudioStreamDevice(audio);
+    else if (verbose) fprintf(stderr, "audio: %s\n", SDL_GetError());
+    bool sound = true;
+    static int16_t samples[AUDIO_CHUNK];
+
+    bool running = true, pen_down = false, paused = false;
+    uint64_t last = SDL_GetPerformanceCounter();
+    double frequency = (double)SDL_GetPerformanceFrequency();
+    double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0;
+    const char *notice = NULL;
+
+    while (running) {
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            switch (event.type) {
+            case SDL_EVENT_QUIT:
+                running = false;
+                break;
+            case SDL_EVENT_KEY_DOWN:
+            case SDL_EVENT_KEY_UP: {
+                bool down = event.type == SDL_EVENT_KEY_DOWN;
+                if (event.key.mod & SDL_KMOD_GUI) break;
+                if (event.key.repeat) break;
+                uint8_t scancode;
+                if (find_scancode(event.key.key, &scancode)) machine_key(machine, scancode, !down);
+                break;
+            }
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    int x, y;
+                    if (screen_position(window, event.button.x, event.button.y, &x, &y)) {
+                        pen_down = true;
+                        machine_touch(machine, true, x, y);
+                    }
+                }
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                if (pen_down) {
+                    int x, y;
+                    screen_position(window, event.motion.x, event.motion.y, &x, &y);
+                    machine_touch(machine, true, x, y);
+                }
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_UP:
+                if (event.button.button == SDL_BUTTON_LEFT && pen_down) {
+                    int x, y;
+                    screen_position(window, event.button.x, event.button.y, &x, &y);
+                    pen_down = false;
+                    machine_touch(machine, false, x, y);
+                }
+                break;
+            default:
+                break;
+            }
+        }
+
+        for (int item = menu_poll(); item >= 0; item = menu_poll()) {
+            switch (item) {
+            case MENU_POWER:
+                machine_power_button(machine, true);
+                power_left = POWER_PRESS_SECONDS;
+                break;
+            case MENU_PAUSE: paused = !paused; break;
+            case MENU_RESET: machine_reset(machine); break;
+            case MENU_SAVE_STATE:
+                notice = machine_save(machine, state, (int64_t)time(NULL)) ? "state saved" : "could not save state";
+                notice_left = NOTICE_SECONDS;
+                break;
+            case MENU_LOAD_STATE:
+                notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
+                notice_left = NOTICE_SECONDS;
+                break;
+            case MENU_BACKLIGHT: machine_backlight_button(machine); break;
+            case MENU_SOUND: sound = !sound; break;
+            default: break;
+            }
+        }
+        menu_ensure();
+        menu_set_checked(MENU_PAUSE, paused);
+        menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
+        menu_set_checked(MENU_SOUND, sound);
+
+        uint64_t now = SDL_GetPerformanceCounter();
+        double elapsed = (double)(now - last) / frequency;
+        last = now;
+        if (elapsed > MAX_FRAME_SLICE) elapsed = MAX_FRAME_SLICE;
+        if (power_left > 0) {
+            power_left -= elapsed;
+            if (power_left <= 0) machine_power_button(machine, false);
+        }
+        if (notice_left > 0) {
+            notice_left -= elapsed;
+            if (notice_left <= 0) notice = NULL;
+        }
+        set_title(window, notice, paused, machine_suspended(machine));
+        since_autosave += elapsed;
+        if (since_autosave >= AUTOSAVE_SECONDS) {
+            since_autosave = 0;
+            machine_save(machine, state, (int64_t)time(NULL));
+        }
+        if (!paused && !machine_halted(machine)) {
+            owed += elapsed * MACHINE_CLOCK_HZ;
+            uint64_t cycles = (uint64_t)owed;
+            owed -= (double)cycles;
+            machine_run(machine, cycles);
+        }
+        uint32_t rate;
+        for (size_t count; (count = machine_audio(machine, samples, AUDIO_CHUNK, &rate)) > 0;) {
+            if (!audio || !sound) continue;
+            if ((int)rate != audio_spec.freq) {
+                audio_spec.freq = (int)rate;
+                SDL_SetAudioStreamFormat(audio, &audio_spec, NULL);
+            }
+            SDL_PutAudioStreamData(audio, samples, (int)(count * sizeof samples[0]));
+        }
+
+        lcd_set_power(machine_lcd_enabled(machine));
+        lcd_set_backlight(machine_backlight(machine));
+        machine_screen(machine, lcd_framebuffer);
+        if (lcd_compose((float)elapsed)) {
+            SDL_UpdateTexture(texture, NULL, lcd_compose_pixels(), lcd_compose_width() * 4);
+        }
+        SDL_RenderClear(renderer);
+        SDL_RenderTexture(renderer, texture, NULL, NULL);
+        SDL_RenderPresent(renderer);
+    }
+
+    machine_save(machine, state, (int64_t)time(NULL));
+    if (verbose) machine_dump_state(machine);
+    SDL_DestroyAudioStream(audio);
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+    machine_destroy(machine);
+    return 0;
+}

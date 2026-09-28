@@ -1,0 +1,5 @@
+build/
+velo
+headless
+rom/
+*.pgm

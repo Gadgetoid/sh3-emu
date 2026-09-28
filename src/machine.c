@@ -1,0 +1,987 @@
+#include "machine.h"
+
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "mips.h"
+
+#define DRAM_SIZE        0x00400000u
+#define DRAM_DECODE_END  0x02000000u
+#define BANK1_DECODE_END 0x04000000u
+#define ROM_PA           0x1F400000u
+#define ROM_WINDOW_PA    0x1F000000u
+#define ROM_WINDOW_END   0x20000000u
+#define REGS_PA          0x10C00000u
+#define REGS_END         0x10E00000u
+#define CS2_PA           0x10400000u
+#define CS2_END          0x10800000u
+#define DEBUG_PROBE_PA   0x10401024u
+#define IT8368_SIZE      0x24u
+#define MMODULE_ID_OFFSET 0x22u
+#define MMODULE_ID       0x4900u
+#define ENTRY_VA         0x9F400000u
+
+static const char STATE_MAGIC[16] = "VELO1 STATE v1";
+
+#define REG_COUNT 128
+
+#define INTC_SETS 5
+
+#define IODIN_MMODULE_ATTACHED (1u << 0)
+#define IODIN_SERIAL_DCD_OFF   (1u << 4)
+#define IODIN_MINICARD1_ABSENT (1u << 5)
+#define IODIN_MINICARD2_ABSENT (1u << 6)
+
+#define POWER_ONBUTN   (1u << 31)
+#define POWER_PWRINT   (1u << 30)
+#define POWER_PWROK    (1u << 29)
+#define POWER_STPTIMERVAL_SHIFT 12
+#define POWER_ENSTPTIMER (1u << 11)
+#define POWER_FORCESHUTDWN (1u << 9)
+#define POWER_STOPCPU  (1u << 4)
+#define POWER_COLDSTART (1u << 2)
+#define POWER_PWRCS    (1u << 1)
+#define POWER_VCCON    (1u << 0)
+#define POWER_WRITABLE 0x1E00FFBFu
+
+#define STATUS5_SET        4
+#define STATUS5_STPTIMER   (1u << 28)
+#define STATUS5_PERINT     (1u << 29)
+#define STATUS5_ALARMINT   (1u << 30)
+#define STATUS5_SPIBUFAVAIL (1u << 21)
+#define STATUS5_POSONBUTN  (1u << 23)
+#define STATUS5_NEGONBUTN  (1u << 22)
+#define STATUS5_SPIRCV     (1u << 19)
+#define STATUS1_LCDINT     (1u << 31)
+#define STATUS1_SIBSF0     (1u << 8)
+#define STATUS1_SIBSF1     (1u << 7)
+#define STATUS1_SIBIRQPOS  (1u << 6)
+
+#define ENABLE6_GLOBALEN   (1u << 18)
+
+#define TIMER_RTCCLR       (1u << 3)
+#define TIMER_ENPERTIMER   (1u << 4)
+
+#define LCD_ENVID  (1u << 0)
+#define LCD_DISPON (1u << 1)
+#define LCD_INVVID (1u << 2)
+#define LCD_DISP8  (1u << 4)
+
+#define MFIO_LCD_POWER_OFF (1u << 17)
+#define MFIO_BACKLIGHT     (1u << 25)
+#define SCANCODE_BACKLIGHT 0x5E
+
+#define SPI_ENSPI  (1u << 0)
+#define SPI_EMPTY  (1u << 16)
+#define SPI_SPION  (1u << 17)
+
+#define SIB_ENSIB  (1u << 0)
+#define SIB_ENSF0  (1u << 1)
+#define SIB_IRQ    (1u << 31)
+#define SIB_ENSND  (1u << 4)
+#define SIB_DMA_ENTXSND (1u << 16)
+#define SIB_SCLK_HZ 9216000u
+#define STATUS1_SND0_5 (1u << 22)
+#define STATUS1_SND1_0 (1u << 21)
+#define SOUND_MAX_BYTES 0x4000u
+#define AUDIO_RING 65536
+
+#define UCB_IO_DATA   0x00
+#define UCB_IE_FAL    0x03
+#define UCB_IE_STATUS 0x04
+#define UCB_TS_CR     0x09
+#define UCB_ADC_CR    0x0A
+#define UCB_ADC_DATA  0x0B
+#define UCB_ID        0x0C
+#define UCB_NULL      0x0F
+#define UCB_ID_1100   0x1003u
+#define UCB_PEN_BITS  ((1u << 12) | (1u << 13))
+
+#define IRQ_LOW_IP  (1u << 12)
+#define IRQ_HIGH_IP (1u << 14)
+
+#define STOP_TIMER_TICK_CYCLES (MACHINE_CLOCK_HZ / 125u)
+#define NO_EVENT UINT64_MAX
+
+#define KEY_QUEUE_SIZE 64
+#define LOGGED_ADDRESSES 512
+
+typedef struct { uint32_t set; uint32_t mask; } high_priority_term_t;
+
+static const high_priority_term_t high_priority[16][2] = {
+    { { 0, 0 }, { 0, 0 } },
+    { { 4, (1u << 7) | (1u << 0) }, { 0, 0 } },
+    { { 0, 1u << 27 }, { 0, 0 } },
+    { { 0, 1u << 17 }, { 0, 0 } },
+    { { 0, 1u << 18 }, { 0, 0 } },
+    { { 1, 1u << 5 }, { 0, 0 } },
+    { { 3, (1u << 1) | (1u << 0) }, { 4, (1u << 6) | (1u << 5) } },
+    { { 3, 0xFu << 16 }, { 0, 0 } },
+    { { 2, (1u << 1) | (1u << 0) }, { 4, (1u << 13) | (1u << 12) } },
+    { { 2, 0xFu << 16 }, { 0, 0 } },
+    { { 1, 1u << 21 }, { 0, 0 } },
+    { { 1, 1u << 31 }, { 0, 0 } },
+    { { 1, (1u << 3) | (1u << 2) }, { 0, 0 } },
+    { { 4, 1u << 29 }, { 0, 0 } },
+    { { 4, 1u << 30 }, { 0, 0 } },
+    { { 4, (1u << 25) | (1u << 24) }, { 0, 0 } },
+};
+
+struct machine {
+    mips_cpu_t cpu;
+    uint8_t *dram;
+    uint8_t *rom;
+    uint32_t rom_size;
+    uint64_t rom_hash;
+    machine_log_fn log;
+    bool halted;
+    char halt_reason[256];
+
+    uint32_t regs[REG_COUNT];
+    uint16_t it8368[IT8368_SIZE / 2];
+
+    uint32_t intc_status[INTC_SETS];
+    uint32_t intc_enable[INTC_SETS];
+    uint32_t intc_free_running[INTC_SETS];
+    uint32_t intc_enable6;
+
+    uint32_t timer_ctl;
+    uint32_t perval;
+    uint64_t periodic_next;
+    uint64_t rtc_base;
+    uint64_t rtc_anchor;
+    uint64_t alarm;
+    bool     alarm_armed;
+    uint64_t alarm_next;
+
+    uint32_t power_ctl;
+    bool     cpu_stopped;
+    bool     suspended;
+    bool     power_button;
+    uint64_t suspended_at;
+    uint64_t suspended_cycles;
+    uint64_t stopped_cycles;
+    uint64_t stop_timer_next;
+
+    uint64_t lcd_next;
+
+    uint32_t io_ctl;
+    uint32_t mfio_dout, mfio_direc, mfio_sel;
+
+    uint32_t spi_ctl;
+    uint8_t  key_queue[KEY_QUEUE_SIZE];
+    int      key_head, key_count;
+    bool     keyboard_enabled;
+
+    uint32_t sib_ctl;
+    uint32_t sib_sf0_aux;
+    uint32_t sib_sf0_stat;
+    uint32_t sib_dma_ctl;
+    uint32_t snd_size;
+    uint32_t snd_tx_start;
+    bool     sound_active;
+    uint32_t sound_half;
+    uint64_t sound_next;
+    int16_t  audio[AUDIO_RING];
+    uint32_t audio_head, audio_count;
+    uint32_t audio_rate;
+    uint16_t ucb_regs[16];
+    uint16_t ucb_adc_data;
+    uint16_t pen_irq_armed;
+    uint16_t pen_irq_status;
+    bool     pen_down;
+    int      pen_x, pen_y;
+
+    uint32_t logged[LOGGED_ADDRESSES];
+    int      logged_count;
+};
+
+static void machine_logf(machine_t *m, const char *format, ...) {
+    char message[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(message, sizeof message, format, args);
+    va_end(args);
+    if (m->log) m->log(message);
+}
+
+static void note_access(machine_t *m, const char *what, uint32_t pa, int size, uint32_t value) {
+    for (int i = 0; i < m->logged_count; i++) if (m->logged[i] == pa) return;
+    if (m->logged_count < LOGGED_ADDRESSES) m->logged[m->logged_count++] = pa;
+    machine_logf(m, "%s pa=%08X size=%d value=%08X pc=%08X\n", what, pa, size, value, m->cpu.pc);
+}
+
+static uint32_t high_priority_level(const machine_t *m) {
+    for (uint32_t level = 15; level >= 1; level--) {
+        if (!(m->intc_enable6 & (1u << level))) continue;
+        for (int term = 0; term < 2; term++) {
+            const high_priority_term_t *t = &high_priority[level][term];
+            if (t->mask && (m->intc_status[t->set] & t->mask)) return level;
+        }
+    }
+    return 0;
+}
+
+static bool irq_low(const machine_t *m) {
+    if (!(m->intc_enable6 & ENABLE6_GLOBALEN)) return false;
+    for (int i = 0; i < INTC_SETS; i++) if (m->intc_status[i] & m->intc_enable[i]) return true;
+    return false;
+}
+
+static bool irq_high(const machine_t *m) {
+    return (m->intc_enable6 & ENABLE6_GLOBALEN) && high_priority_level(m) != 0;
+}
+
+static void intc_update(machine_t *m) {
+    uint32_t ip = 0;
+    if (irq_low(m)) ip |= IRQ_LOW_IP;
+    if (irq_high(m)) ip |= IRQ_HIGH_IP;
+    mips_set_external_ip(&m->cpu, ip);
+}
+
+static void intc_set_pending(machine_t *m, int set, uint32_t bits) {
+    m->intc_status[set] |= bits;
+    intc_update(m);
+}
+
+static void intc_free_running(machine_t *m, int set, uint32_t bits, bool active) {
+    if (active) {
+        m->intc_free_running[set] |= bits;
+        m->intc_status[set] |= bits;
+    } else {
+        m->intc_free_running[set] &= ~bits;
+    }
+    intc_update(m);
+}
+
+static uint8_t keyboard_checksum(uint8_t byte) {
+    uint8_t value = 0x80 ^ 0xA8 ^ 0x00 ^ byte;
+    return (value & 0x80) ? (uint8_t)(value ^ 0xC0) : value;
+}
+
+static void key_push(machine_t *m, uint8_t byte) {
+    if (m->key_count == KEY_QUEUE_SIZE) return;
+    m->key_queue[(m->key_head + m->key_count) % KEY_QUEUE_SIZE] = byte;
+    m->key_count++;
+}
+
+static void keyboard_stage_enable(machine_t *m) {
+    if (m->keyboard_enabled) return;
+    key_push(m, 0x80);
+    key_push(m, 0xA8);
+    key_push(m, 0x00);
+    key_push(m, 0x00);
+    key_push(m, keyboard_checksum(0x00));
+    m->keyboard_enabled = true;
+}
+
+static void intc_enable_written(machine_t *m, int set, uint32_t value) {
+    if (set == STATUS5_SET && (value & STATUS5_SPIRCV)) {
+        keyboard_stage_enable(m);
+        if (m->key_count) intc_set_pending(m, STATUS5_SET, STATUS5_SPIRCV);
+    }
+}
+
+static uint64_t periodic_period(const machine_t *m) {
+    return ((uint64_t)m->perval + 1) * 32;
+}
+
+static uint64_t rtc_count(const machine_t *m) {
+    if (m->timer_ctl & TIMER_RTCCLR) return 0;
+    uint64_t elapsed = m->cpu.cycles - m->rtc_anchor;
+    return (m->rtc_base + elapsed * 32768u / MACHINE_CLOCK_HZ) & 0xFFFFFFFFFFull;
+}
+
+static void alarm_schedule(machine_t *m) {
+    m->alarm_next = NO_EVENT;
+    if (!m->alarm_armed || (m->timer_ctl & TIMER_RTCCLR)) return;
+    uint64_t now = rtc_count(m);
+    if (m->alarm <= now) { m->alarm_next = m->cpu.cycles; return; }
+    m->alarm_next = m->cpu.cycles + (m->alarm - now) * MACHINE_CLOCK_HZ / 32768u + 1;
+}
+
+static uint64_t lcd_frame_cycles(const machine_t *m) {
+    uint32_t ctl1 = m->regs[0x28 / 4], ctl2 = m->regs[0x2C / 4];
+    uint64_t baudval = (ctl1 >> 16) & 0x1Fu;
+    uint64_t vidrate = (ctl2 >> 22) & 0x3FFu;
+    uint64_t lineval = ctl2 & 0x3FFu;
+    return (baudval * 2 + 2) * (vidrate + 1) * (lineval + 1);
+}
+
+static void lcd_schedule(machine_t *m) {
+    if (!(m->regs[0x28 / 4] & LCD_ENVID) || lcd_frame_cycles(m) == 0) { m->lcd_next = NO_EVENT; return; }
+    if (m->lcd_next == NO_EVENT) m->lcd_next = m->cpu.cycles + lcd_frame_cycles(m);
+}
+
+static uint16_t touch_adc(int pixel) {
+    int value = 64 + (pixel < 0 ? 0 : pixel) * 2;
+    return (uint16_t)(value > 1023 ? 1023 : value);
+}
+
+static uint16_t ucb_read(machine_t *m, uint8_t reg) {
+    switch (reg & 0xF) {
+        case UCB_IE_STATUS: return m->pen_irq_status;
+        case UCB_TS_CR: {
+            uint16_t value = m->ucb_regs[UCB_TS_CR];
+            if (m->pen_down) value |= UCB_PEN_BITS;
+            else value &= (uint16_t)~UCB_PEN_BITS;
+            return value;
+        }
+        case UCB_ADC_DATA: return m->ucb_adc_data;
+        case UCB_ID: return UCB_ID_1100;
+        case UCB_NULL: return 0xFFFF;
+        case UCB_IO_DATA: return m->ucb_regs[UCB_IO_DATA];
+        default: return m->ucb_regs[reg & 0xF];
+    }
+}
+
+static void ucb_convert(machine_t *m, uint16_t adc_cr) {
+    uint16_t mode = m->ucb_regs[UCB_TS_CR] & (3u << 8);
+    uint16_t channel = adc_cr & (7u << 2);
+    uint16_t sample;
+    if (channel >= (4u << 2)) {
+        int aux = (channel >> 2) - 4;
+        sample = aux == 2 ? 0x1F0 : aux == 3 ? 0x200 : 0;
+    } else if (mode == (1u << 8)) {
+        sample = m->pen_down ? 0x3FF : 0;
+    } else if (channel == (2u << 2) || channel == (3u << 2)) {
+        sample = touch_adc(m->pen_x);
+    } else {
+        sample = touch_adc(m->pen_y);
+    }
+    m->ucb_adc_data = (uint16_t)((1u << 15) | ((sample & 0x3FFu) << 5));
+}
+
+static void ucb_write(machine_t *m, uint8_t reg, uint16_t value) {
+    m->ucb_regs[reg & 0xF] = value;
+    switch (reg & 0xF) {
+        case UCB_ADC_CR: if (value & (1u << 7)) ucb_convert(m, value); break;
+        case UCB_IE_FAL: m->pen_irq_armed = value & UCB_PEN_BITS; break;
+        case UCB_IE_STATUS: m->pen_irq_status &= (uint16_t)~value; break;
+        default: break;
+    }
+}
+
+static uint32_t sound_rate(const machine_t *m) {
+    uint32_t fsdiv = (m->sib_ctl >> 8) & 0x7F;
+    return SIB_SCLK_HZ * 2 / ((fsdiv + 1) * 64);
+}
+
+static uint32_t sound_bytes(const machine_t *m) {
+    uint32_t bytes = (m->snd_size + 1) << 2;
+    return bytes > SOUND_MAX_BYTES ? SOUND_MAX_BYTES : bytes;
+}
+
+static void sound_capture_half(machine_t *m) {
+    uint32_t bytes = sound_bytes(m) & ~1u;
+    uint32_t half = (bytes / 2) & ~1u;
+    uint32_t offset = m->sound_half ? half : 0;
+    uint32_t length = m->sound_half ? ((bytes - half) & ~1u) : half;
+    for (uint32_t i = 0; i + 1 < length; i += 2) {
+        uint32_t pa = m->snd_tx_start + offset + i;
+        int16_t sample = (int16_t)(m->dram[pa & (DRAM_SIZE - 1)] << 8 | m->dram[(pa + 1) & (DRAM_SIZE - 1)]);
+        if (m->audio_count == AUDIO_RING) {
+            m->audio_head = (m->audio_head + 1) % AUDIO_RING;
+            m->audio_count--;
+        }
+        m->audio[(m->audio_head + m->audio_count) % AUDIO_RING] = sample;
+        m->audio_count++;
+    }
+    uint64_t samples = length / 2;
+    m->sound_next = m->cpu.cycles + (samples * MACHINE_CLOCK_HZ + sound_rate(m) - 1) / sound_rate(m);
+}
+
+static void sound_update(machine_t *m) {
+    bool armed = (m->sib_ctl & SIB_ENSIB) && (m->sib_ctl & SIB_ENSND) && (m->sib_dma_ctl & SIB_DMA_ENTXSND)
+              && sound_bytes(m) >= 4;
+    if (armed && !m->sound_active) {
+        m->sound_active = true;
+        m->sound_half = 0;
+        m->audio_rate = sound_rate(m);
+        sound_capture_half(m);
+    } else if (!armed && m->sound_active) {
+        m->sound_active = false;
+        m->sound_next = NO_EVENT;
+    }
+}
+
+static void sound_event(machine_t *m) {
+    intc_set_pending(m, 0, m->sound_half ? STATUS1_SND1_0 : STATUS1_SND0_5);
+    m->sound_half ^= 1;
+    sound_capture_half(m);
+}
+
+static uint32_t soc_read(machine_t *m, uint32_t offset, int size) {
+    uint32_t index = offset / 4;
+    switch (offset & ~3u) {
+        case 0x074: return m->sib_ctl | (m->pen_irq_status ? SIB_IRQ : 0);
+        case 0x080: return m->sib_sf0_aux;
+        case 0x088: return m->sib_sf0_stat;
+        case 0x090: return m->sib_dma_ctl;
+        case 0x100: case 0x104: case 0x108: case 0x10C: case 0x110:
+            return m->intc_status[(offset - 0x100) / 4];
+        case 0x114: {
+            uint32_t value = (high_priority_level(m) & 0xFu) << 2;
+            if (irq_high(m)) value |= 1u << 31;
+            if (irq_low(m)) value |= 1u << 30;
+            return value;
+        }
+        case 0x118: case 0x11C: case 0x120: case 0x124: case 0x128:
+            return m->intc_enable[(offset - 0x118) / 4];
+        case 0x12C: return m->intc_enable6;
+        case 0x140: return (uint32_t)(rtc_count(m) >> 32);
+        case 0x144: return (uint32_t)rtc_count(m);
+        case 0x148: return (uint32_t)(m->alarm >> 32);
+        case 0x14C: return (uint32_t)m->alarm;
+        case 0x150: return m->timer_ctl;
+        case 0x154: {
+            uint32_t count = m->perval;
+            if ((m->timer_ctl & TIMER_ENPERTIMER) && m->periodic_next != NO_EVENT) {
+                uint64_t remaining = m->periodic_next > m->cpu.cycles ? (m->periodic_next - m->cpu.cycles) / 32 : 0;
+                count = remaining > m->perval ? m->perval : (uint32_t)remaining;
+            }
+            return (count << 16) | m->perval;
+        }
+        case 0x160: return m->spi_ctl | SPI_EMPTY | ((m->spi_ctl & SPI_ENSPI) ? SPI_SPION : 0);
+        case 0x164: {
+            if (!m->key_count) return 0;
+            uint8_t byte = m->key_queue[m->key_head];
+            m->key_head = (m->key_head + 1) % KEY_QUEUE_SIZE;
+            m->key_count--;
+            if (m->key_count) intc_set_pending(m, STATUS5_SET, STATUS5_SPIRCV);
+            return byte;
+        }
+        case 0x180: {
+            uint32_t direction = (m->io_ctl >> 16) & 0x7F;
+            uint32_t board = IODIN_MMODULE_ATTACHED | IODIN_SERIAL_DCD_OFF | IODIN_MINICARD1_ABSENT | IODIN_MINICARD2_ABSENT;
+            uint32_t din = ((m->io_ctl >> 8) & direction) | (board & ~direction & 0x7F);
+            return m->io_ctl | din;
+        }
+        case 0x184: return m->mfio_dout;
+        case 0x188: return m->mfio_direc;
+        case 0x18C: return m->mfio_dout & m->mfio_direc & m->mfio_sel;
+        case 0x190: return m->mfio_sel;
+        case 0x1C4: return m->power_ctl | POWER_PWROK | (m->power_button ? POWER_ONBUTN : 0);
+        default:
+            if (index < REG_COUNT) {
+                note_access(m, "soc read", REGS_PA + offset, size, m->regs[index]);
+                return m->regs[index];
+            }
+            note_access(m, "soc read (out of range)", REGS_PA + offset, size, 0);
+            return 0;
+    }
+}
+
+static void power_write(machine_t *m, uint32_t value) {
+    uint32_t previous = m->power_ctl;
+    m->power_ctl = value & POWER_WRITABLE;
+    if ((previous & (POWER_VCCON | POWER_PWRCS)) && !(m->power_ctl & (POWER_VCCON | POWER_PWRCS))) {
+        machine_logf(m, "suspend pc=%08X\n", m->cpu.pc);
+        m->suspended = true;
+        m->suspended_at = m->cpu.cycles;
+        m->cpu.yield = true;
+    }
+    bool was_stop = (previous & POWER_ENSTPTIMER) != 0, now_stop = (m->power_ctl & POWER_ENSTPTIMER) != 0;
+    if (now_stop && !was_stop) {
+        uint32_t ticks = (m->power_ctl >> POWER_STPTIMERVAL_SHIFT) & 0xF;
+        m->stop_timer_next = m->cpu.cycles + (uint64_t)ticks * STOP_TIMER_TICK_CYCLES;
+    } else if (was_stop && !now_stop) {
+        m->stop_timer_next = NO_EVENT;
+    }
+    if (m->power_ctl & POWER_STOPCPU) {
+        m->cpu_stopped = true;
+        m->cpu.yield = true;
+    }
+    if ((m->power_ctl ^ previous) & ~(POWER_STOPCPU | POWER_ENSTPTIMER | (0xFu << POWER_STPTIMERVAL_SHIFT))) {
+        machine_logf(m, "power ctl %08X -> %08X pc=%08X\n", previous, m->power_ctl, m->cpu.pc);
+    }
+}
+
+static void soc_write(machine_t *m, uint32_t offset, int size, uint32_t value) {
+    uint32_t index = offset / 4;
+    if (size != 4) note_access(m, "soc narrow write", REGS_PA + offset, size, value);
+    switch (offset & ~3u) {
+        case 0x028:
+            m->regs[index] = value & 0x003FFFFFu;
+            lcd_schedule(m);
+            if (!(value & LCD_ENVID)) m->lcd_next = NO_EVENT;
+            return;
+        case 0x02C:
+            m->regs[index] = value;
+            m->lcd_next = NO_EVENT;
+            lcd_schedule(m);
+            return;
+        case 0x074: {
+            m->sib_ctl = value & 0x7FFFFFFFu;
+            bool active = (m->sib_ctl & (SIB_ENSIB | SIB_ENSF0)) == (SIB_ENSIB | SIB_ENSF0);
+            intc_free_running(m, 0, STATUS1_SIBSF0 | STATUS1_SIBSF1, active);
+            if (value & 0x6000002Cu) note_access(m, "sib ctl unmodelled bits", REGS_PA + offset, size, value);
+            sound_update(m);
+            return;
+        }
+        case 0x060:
+            m->snd_size = (value >> 18) & 0xFFF;
+            return;
+        case 0x068:
+            m->snd_tx_start = value & ~3u;
+            return;
+        case 0x090: {
+            m->sib_dma_ctl = value;
+            if (value & 0x8002C003u) note_access(m, "sib dma ctl unmodelled channel", REGS_PA + offset, size, value);
+            sound_update(m);
+            return;
+        }
+        case 0x080: {
+            m->sib_sf0_aux = value;
+            uint8_t reg = (uint8_t)((value >> 27) & 0xF);
+            uint16_t data = (uint16_t)(value & 0xFFFF);
+            if (value & (1u << 26)) ucb_write(m, reg, data);
+            else m->sib_sf0_stat = ucb_read(m, reg);
+            return;
+        }
+        case 0x100: case 0x104: case 0x108: case 0x10C: case 0x110: {
+            int set = (int)((offset - 0x100) / 4);
+            m->intc_status[set] &= ~value;
+            m->intc_status[set] |= m->intc_free_running[set];
+            intc_update(m);
+            return;
+        }
+        case 0x118: case 0x11C: case 0x120: case 0x124: case 0x128: {
+            int set = (int)((offset - 0x118) / 4);
+            m->intc_enable[set] = value;
+            intc_update(m);
+            intc_enable_written(m, set, value);
+            return;
+        }
+        case 0x12C:
+            m->intc_enable6 = value & (ENABLE6_GLOBALEN | 0xFFFFu);
+            intc_update(m);
+            return;
+        case 0x148:
+            m->alarm = ((uint64_t)(value & 0xFF) << 32) | (m->alarm & 0xFFFFFFFFull);
+            m->alarm_armed = true;
+            alarm_schedule(m);
+            return;
+        case 0x14C:
+            m->alarm = (m->alarm & ~0xFFFFFFFFull) | value;
+            m->alarm_armed = true;
+            alarm_schedule(m);
+            return;
+        case 0x150: {
+            bool was_clear = (m->timer_ctl & TIMER_RTCCLR) != 0;
+            bool was_periodic = (m->timer_ctl & TIMER_ENPERTIMER) != 0;
+            if (value & 0xE7u) note_access(m, "timer ctl unmodelled bits", REGS_PA + offset, size, value);
+            m->timer_ctl = value & 0xFFu;
+            if (was_clear && !(value & TIMER_RTCCLR)) {
+                m->rtc_base = 0;
+                m->rtc_anchor = m->cpu.cycles;
+            }
+            if ((value & TIMER_ENPERTIMER) && !was_periodic) m->periodic_next = m->cpu.cycles + periodic_period(m);
+            if (!(value & TIMER_ENPERTIMER)) m->periodic_next = NO_EVENT;
+            alarm_schedule(m);
+            return;
+        }
+        case 0x154: m->perval = value & 0xFFFF; return;
+        case 0x160:
+            m->spi_ctl = value & 0x0000FF37u;
+            intc_free_running(m, STATUS5_SET, STATUS5_SPIBUFAVAIL, (m->spi_ctl & SPI_ENSPI) != 0);
+            return;
+        case 0x164: return;
+        case 0x180: m->io_ctl = value & 0x7F7F7F00u; return;
+        case 0x184: m->mfio_dout = value; return;
+        case 0x188: m->mfio_direc = value; return;
+        case 0x190: m->mfio_sel = value; return;
+        case 0x1C4: power_write(m, value); return;
+        default:
+            if (index < REG_COUNT) {
+                m->regs[index] = value;
+                note_access(m, "soc write", REGS_PA + offset, size, value);
+                return;
+            }
+            note_access(m, "soc write (out of range)", REGS_PA + offset, size, value);
+            return;
+    }
+}
+
+static inline uint32_t read_host(const uint8_t *base, int size) {
+    switch (size) {
+        case 1: return base[0];
+        case 2: return (uint32_t)base[0] | (uint32_t)base[1] << 8;
+        default: return (uint32_t)base[0] | (uint32_t)base[1] << 8 | (uint32_t)base[2] << 16 | (uint32_t)base[3] << 24;
+    }
+}
+
+static inline void write_host(uint8_t *base, int size, uint32_t value) {
+    base[0] = (uint8_t)value;
+    if (size >= 2) base[1] = (uint8_t)(value >> 8);
+    if (size == 4) { base[2] = (uint8_t)(value >> 16); base[3] = (uint8_t)(value >> 24); }
+}
+
+static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
+    machine_t *m = context;
+    if (pa < DRAM_DECODE_END) { *value = read_host(m->dram + (pa & (DRAM_SIZE - 1)), size); return true; }
+    if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) {
+        if (pa >= ROM_PA && pa - ROM_PA + (uint32_t)size <= m->rom_size) { *value = read_host(m->rom + (pa - ROM_PA), size); return true; }
+        *value = size == 4 ? 0xFFFFFFFFu : size == 2 ? 0xFFFFu : 0xFFu;
+        return true;
+    }
+    if (pa >= REGS_PA && pa < REGS_END) { *value = soc_read(m, pa - REGS_PA, size); return true; }
+    if (pa == DEBUG_PROBE_PA) { *value = 0xFFFF; return true; }
+    if (pa >= CS2_PA && pa < CS2_PA + IT8368_SIZE) {
+        uint32_t offset = pa - CS2_PA;
+        *value = offset == MMODULE_ID_OFFSET ? MMODULE_ID : m->it8368[offset / 2];
+        if (size == 4) *value |= (uint32_t)m->it8368[offset / 2 + 1] << 16;
+        return true;
+    }
+    if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END) {
+        note_access(m, "bank1 read", pa, size, 0);
+        *value = 0xFFFFFFFFu >> (32 - size * 8);
+        return true;
+    }
+    note_access(m, "unmapped read", pa, size, 0);
+    *value = 0;
+    return true;
+}
+
+static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
+    machine_t *m = context;
+    if (pa < DRAM_DECODE_END) { write_host(m->dram + (pa & (DRAM_SIZE - 1)), size, value); return true; }
+    if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) { note_access(m, "rom write", pa, size, value); return true; }
+    if (pa >= REGS_PA && pa < REGS_END) { soc_write(m, pa - REGS_PA, size, value); return true; }
+    if (pa >= CS2_PA && pa < CS2_PA + IT8368_SIZE) {
+        uint32_t offset = pa - CS2_PA;
+        m->it8368[offset / 2] = (uint16_t)value;
+        if (size == 4) m->it8368[offset / 2 + 1] = (uint16_t)(value >> 16);
+        note_access(m, "it8368 write", pa, size, value);
+        return true;
+    }
+    note_access(m, "unmapped write", pa, size, value);
+    return true;
+}
+
+static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
+    machine_t *m = context;
+    if (pa < DRAM_DECODE_END) return m->dram + (pa & (DRAM_SIZE - 1));
+    if (pa >= ROM_PA && pa - ROM_PA + 4096 <= m->rom_size) return m->rom + (pa - ROM_PA);
+    return NULL;
+}
+
+static void machine_power_on(machine_t *m) {
+    mips_reset(&m->cpu, ENTRY_VA);
+    m->power_ctl = POWER_COLDSTART | POWER_PWRCS | POWER_VCCON;
+    m->periodic_next = NO_EVENT;
+    m->alarm_next = NO_EVENT;
+    m->stop_timer_next = NO_EVENT;
+    m->lcd_next = NO_EVENT;
+    m->sound_next = NO_EVENT;
+    m->regs[0x1C0 / 4] = 1u << 7;
+}
+
+machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
+    if (rom_size < 16 || rom_size > ROM_WINDOW_END - ROM_PA) {
+        snprintf(error, error_size, "ROM size %zu is not a Velo 1 nk.bin", rom_size);
+        return NULL;
+    }
+    machine_t *m = calloc(1, sizeof *m);
+    m->dram = calloc(1, DRAM_SIZE);
+    m->rom_size = (uint32_t)((rom_size + 4095) & ~(size_t)4095);
+    m->rom = malloc(m->rom_size);
+    memset(m->rom, 0xFF, m->rom_size);
+    memcpy(m->rom, rom, rom_size);
+    m->rom_hash = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < rom_size; i++) m->rom_hash = (m->rom_hash ^ rom[i]) * 0x100000001B3ull;
+    m->cpu.bus.context = m;
+    m->cpu.bus.read = bus_read;
+    m->cpu.bus.write = bus_write;
+    m->cpu.bus.fetch_page = bus_fetch_page;
+    machine_power_on(m);
+    return m;
+}
+
+void machine_destroy(machine_t *m) {
+    if (!m) return;
+    free(m->dram);
+    free(m->rom);
+    free(m);
+}
+
+void machine_set_log(machine_t *m, machine_log_fn log) { m->log = log; }
+
+static uint64_t next_event(const machine_t *m) {
+    uint64_t next = m->periodic_next;
+    if (m->alarm_next < next) next = m->alarm_next;
+    if (m->stop_timer_next < next) next = m->stop_timer_next;
+    if (m->lcd_next < next) next = m->lcd_next;
+    if (m->sound_active && m->sound_next < next) next = m->sound_next;
+    return next;
+}
+
+static void process_events(machine_t *m) {
+    uint64_t now = m->cpu.cycles;
+    if (m->periodic_next <= now) {
+        intc_set_pending(m, STATUS5_SET, STATUS5_PERINT);
+        uint64_t period = periodic_period(m);
+        while (m->periodic_next <= now) m->periodic_next += period;
+    }
+    if (m->alarm_next <= now) {
+        m->alarm_next = NO_EVENT;
+        m->alarm_armed = false;
+        intc_set_pending(m, STATUS5_SET, STATUS5_ALARMINT);
+    }
+    if (m->stop_timer_next <= now) {
+        m->stop_timer_next = NO_EVENT;
+        intc_set_pending(m, STATUS5_SET, STATUS5_STPTIMER);
+    }
+    if (m->sound_active && m->sound_next <= now) sound_event(m);
+    if (m->lcd_next <= now) {
+        intc_set_pending(m, 0, STATUS1_LCDINT);
+        uint64_t period = lcd_frame_cycles(m);
+        while (m->lcd_next <= now) m->lcd_next += period;
+    }
+}
+
+static void shift_deadline(uint64_t *deadline, uint64_t by) {
+    if (*deadline != NO_EVENT) *deadline += by;
+}
+
+static void wake_from_suspend(machine_t *m) {
+    uint64_t asleep = m->cpu.cycles - m->suspended_at;
+    m->suspended = false;
+    m->suspended_cycles += asleep;
+    shift_deadline(&m->periodic_next, asleep);
+    shift_deadline(&m->stop_timer_next, asleep);
+    shift_deadline(&m->lcd_next, asleep);
+    shift_deadline(&m->sound_next, asleep);
+    m->power_ctl |= POWER_PWRCS | POWER_VCCON | POWER_FORCESHUTDWN;
+    m->keyboard_enabled = false;
+    m->key_count = 0;
+    m->intc_status[STATUS5_SET] &= ~STATUS5_SPIRCV;
+    intc_update(m);
+    machine_logf(m, "resume after %.1fs pc=%08X\n", (double)asleep / MACHINE_CLOCK_HZ, m->cpu.pc);
+}
+
+static void run_suspended(machine_t *m, uint64_t target) {
+    uint64_t until = m->alarm_next < target ? m->alarm_next : target;
+    if (until > m->cpu.cycles) m->cpu.cycles = until;
+    if (m->alarm_next <= m->cpu.cycles) {
+        m->alarm_next = NO_EVENT;
+        m->alarm_armed = false;
+        intc_set_pending(m, STATUS5_SET, STATUS5_ALARMINT);
+    }
+    if (irq_low(m) || irq_high(m)) wake_from_suspend(m);
+}
+
+void machine_run(machine_t *m, uint64_t cycles) {
+    uint64_t target = m->cpu.cycles + cycles;
+    while (!m->halted && m->cpu.cycles < target) {
+        if (m->suspended) {
+            run_suspended(m, target);
+            continue;
+        }
+        if (m->cpu_stopped && m->cpu.external_ip) {
+            m->cpu_stopped = false;
+            m->power_ctl &= ~POWER_STOPCPU;
+        }
+        uint64_t until = next_event(m);
+        if (until > target) until = target;
+        if (m->cpu_stopped) {
+            if (until > m->cpu.cycles) {
+                m->stopped_cycles += until - m->cpu.cycles;
+                m->cpu.cycles = until;
+            }
+        } else if (until > m->cpu.cycles) {
+            mips_run(&m->cpu, until);
+        }
+        process_events(m);
+    }
+}
+
+uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
+uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
+bool machine_halted(machine_t *m) { return m->halted; }
+const char *machine_halt_reason(machine_t *m) { return m->halt_reason; }
+
+static uint32_t mfio_driven(const machine_t *m) {
+    return m->mfio_dout & m->mfio_direc & m->mfio_sel;
+}
+
+bool machine_lcd_enabled(machine_t *m) {
+    uint32_t ctl1 = m->regs[0x28 / 4];
+    return (ctl1 & LCD_ENVID) && (ctl1 & LCD_DISPON) && !(mfio_driven(m) & MFIO_LCD_POWER_OFF);
+}
+
+bool machine_backlight(machine_t *m) {
+    return machine_lcd_enabled(m) && (mfio_driven(m) & MFIO_BACKLIGHT);
+}
+
+void machine_backlight_button(machine_t *m) {
+    machine_key(m, SCANCODE_BACKLIGHT, false);
+    machine_key(m, SCANCODE_BACKLIGHT, true);
+}
+
+static uint32_t lcd_shade(const machine_t *m, uint32_t raw, uint32_t bpp) {
+    uint32_t vdat;
+    if (bpp == 2) vdat = (m->regs[0x40 / 4] >> (4 * raw)) & 0xF;
+    else if (bpp == 1) vdat = raw ? 0xF : 0;
+    else vdat = raw;
+    uint32_t on_duty = (m->regs[0x28 / 4] & LCD_INVVID) ? 0xF - vdat : vdat;
+    return on_duty;
+}
+
+bool machine_screen(machine_t *m, uint8_t *levels) {
+    uint32_t ctl1 = m->regs[0x28 / 4], ctl2 = m->regs[0x2C / 4];
+    if (!(ctl1 & LCD_ENVID)) {
+        memset(levels, 0, MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT);
+        return false;
+    }
+    uint32_t bpp = 1u << ((ctl1 >> 6) & 3);
+    uint32_t width = (((ctl2 >> 12) & 0x1FF) + 1) * ((ctl1 & LCD_DISP8) ? 8 : 4);
+    uint32_t height = (ctl2 & 0x3FF) + 1;
+    uint32_t base = m->regs[0x30 / 4] & 0xFFFFFFF0u;
+    uint32_t stride = width * bpp / 8;
+    for (int y = 0; y < MACHINE_SCREEN_HEIGHT; y++) {
+        for (int x = 0; x < MACHINE_SCREEN_WIDTH; x++) {
+            uint8_t level = 0;
+            if ((uint32_t)x < width && (uint32_t)y < height) {
+                uint32_t bit = (uint32_t)x * bpp;
+                uint32_t pa = base + (uint32_t)y * stride + bit / 8;
+                uint32_t byte = pa < DRAM_DECODE_END ? m->dram[pa & (DRAM_SIZE - 1)] : 0;
+                uint32_t raw = (byte >> (8 - bpp - bit % 8)) & ((1u << bpp) - 1);
+                uint32_t on_duty = lcd_shade(m, raw, bpp);
+                level = (uint8_t)((on_duty * 3 + 7) / 15);
+            }
+            levels[y * MACHINE_SCREEN_WIDTH + x] = level;
+        }
+    }
+    return true;
+}
+
+void machine_key(machine_t *m, uint8_t scancode, bool up) {
+    keyboard_stage_enable(m);
+    key_push(m, up ? (uint8_t)(scancode | 0x80) : scancode);
+    intc_set_pending(m, STATUS5_SET, STATUS5_SPIRCV);
+}
+
+void machine_power_button(machine_t *m, bool down) {
+    if (down == m->power_button) return;
+    m->power_button = down;
+    intc_set_pending(m, STATUS5_SET, down ? STATUS5_POSONBUTN : STATUS5_NEGONBUTN);
+    if (down && m->suspended) wake_from_suspend(m);
+}
+
+bool machine_suspended(machine_t *m) { return m->suspended; }
+
+void machine_touch(machine_t *m, bool down, int x, int y) {
+    m->pen_x = x;
+    m->pen_y = y;
+    bool was_down = m->pen_down;
+    m->pen_down = down;
+    if (down && !was_down && m->pen_irq_armed) {
+        m->pen_irq_status |= m->pen_irq_armed;
+        intc_set_pending(m, 0, STATUS1_SIBIRQPOS);
+    }
+}
+
+void machine_dump_state(machine_t *m) {
+    mips_cpu_t *cpu = &m->cpu;
+    machine_logf(m, "pc=%08X cycles=%llu status=%08X cause=%08X epc=%08X badvaddr=%08X ip=%08X\n",
+                 cpu->pc, (unsigned long long)cpu->cycles, cpu->cp0[CP0_STATUS], cpu->cp0[CP0_CAUSE],
+                 cpu->cp0[CP0_EPC], cpu->cp0[CP0_BADVADDR], cpu->external_ip);
+    for (int i = 0; i < 32; i += 4) {
+        machine_logf(m, "r%-2d %08X %08X %08X %08X\n", i, cpu->gpr[i], cpu->gpr[i + 1], cpu->gpr[i + 2], cpu->gpr[i + 3]);
+    }
+    machine_logf(m, "intc status %08X %08X %08X %08X %08X enable %08X %08X %08X %08X %08X enable6 %08X\n",
+                 m->intc_status[0], m->intc_status[1], m->intc_status[2], m->intc_status[3], m->intc_status[4],
+                 m->intc_enable[0], m->intc_enable[1], m->intc_enable[2], m->intc_enable[3], m->intc_enable[4],
+                 m->intc_enable6);
+    machine_logf(m, "stopped %.1f%% suspended %.1fs%s\n", cpu->cycles ? 100.0 * (double)m->stopped_cycles / (double)cpu->cycles : 0.0,
+                 (double)m->suspended_cycles / MACHINE_CLOCK_HZ, m->suspended ? " (now)" : "");
+    machine_logf(m, "exceptions:");
+    for (int i = 0; i < 16; i++) if (cpu->exceptions[i]) machine_logf(m, " %d=%llu", i, (unsigned long long)cpu->exceptions[i]);
+    machine_logf(m, "\n");
+}
+
+bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
+    return mips_read_virtual(&m->cpu, va, 4, value);
+}
+
+bool machine_save(machine_t *m, const char *path, int64_t host_time) {
+    FILE *file = fopen(path, "wb");
+    if (!file) return false;
+    uint32_t sizes[2] = { (uint32_t)sizeof *m, DRAM_SIZE };
+    bool ok = fwrite(STATE_MAGIC, sizeof STATE_MAGIC, 1, file) == 1 &&
+              fwrite(sizes, sizeof sizes, 1, file) == 1 &&
+              fwrite(&m->rom_hash, sizeof m->rom_hash, 1, file) == 1 &&
+              fwrite(&host_time, sizeof host_time, 1, file) == 1 &&
+              fwrite(m, sizeof *m, 1, file) == 1 &&
+              fwrite(m->dram, DRAM_SIZE, 1, file) == 1;
+    ok = fclose(file) == 0 && ok;
+    return ok;
+}
+
+bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    char magic[sizeof STATE_MAGIC];
+    uint32_t sizes[2];
+    uint64_t rom_hash;
+    int64_t saved_at;
+    machine_t *saved = malloc(sizeof *saved);
+    uint8_t *dram = malloc(DRAM_SIZE);
+    bool ok = fread(magic, sizeof magic, 1, file) == 1 && memcmp(magic, STATE_MAGIC, sizeof magic) == 0 &&
+              fread(sizes, sizeof sizes, 1, file) == 1 && sizes[0] == sizeof *m && sizes[1] == DRAM_SIZE &&
+              fread(&rom_hash, sizeof rom_hash, 1, file) == 1 && rom_hash == m->rom_hash &&
+              fread(&saved_at, sizeof saved_at, 1, file) == 1 &&
+              fread(saved, sizeof *saved, 1, file) == 1 &&
+              fread(dram, DRAM_SIZE, 1, file) == 1;
+    fclose(file);
+    if (ok) {
+        saved->dram = m->dram;
+        saved->rom = m->rom;
+        saved->rom_size = m->rom_size;
+        saved->log = m->log;
+        saved->cpu.bus = m->cpu.bus;
+        saved->cpu.last_fetch_valid = false;
+        saved->cpu.last_fetch_page = NULL;
+        memcpy(m, saved, sizeof *m);
+        memcpy(m->dram, dram, DRAM_SIZE);
+        if (host_time) *host_time = saved_at;
+    }
+    free(saved);
+    free(dram);
+    return ok;
+}
+
+void machine_advance_clock(machine_t *m, int64_t seconds) {
+    if (seconds <= 0) return;
+    m->rtc_base = (m->rtc_base + (uint64_t)seconds * 32768u) & 0xFFFFFFFFFFull;
+    alarm_schedule(m);
+}
+
+void machine_reset(machine_t *m) {
+    mips_bus_t bus = m->cpu.bus;
+    uint8_t *dram = m->dram, *rom = m->rom;
+    uint32_t rom_size = m->rom_size;
+    uint64_t rom_hash = m->rom_hash;
+    machine_log_fn log = m->log;
+    memset(m, 0, sizeof *m);
+    memset(dram, 0, DRAM_SIZE);
+    m->dram = dram;
+    m->rom = rom;
+    m->rom_size = rom_size;
+    m->rom_hash = rom_hash;
+    m->log = log;
+    m->cpu.bus = bus;
+    machine_power_on(m);
+}
+
+size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate) {
+    size_t count = m->audio_count < max ? m->audio_count : max;
+    for (size_t i = 0; i < count; i++) samples[i] = m->audio[(m->audio_head + i) % AUDIO_RING];
+    m->audio_head = (uint32_t)((m->audio_head + count) % AUDIO_RING);
+    m->audio_count -= (uint32_t)count;
+    *rate = m->audio_rate;
+    return count;
+}
