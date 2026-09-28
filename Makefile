@@ -17,17 +17,26 @@ else
 SRC_MENU  = src/menu_none.c
 endif
 
-SRC_MACHINE = src/mips.c src/machine.c src/pccard.c
-SRC_APP     = $(SRC_MACHINE) src/lcd.c src/main.c $(SRC_MENU)
+ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
+SRC_NET  = src/netgw.c
+CFLAGS  += $(shell pkg-config --cflags slirp)
+LDFLAGS += $(shell pkg-config --libs slirp)
+NET_LIBS = $(shell pkg-config --libs slirp)
+else
+SRC_NET  = src/netgw_none.c
+endif
+
+SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) src/lcd.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
-OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(BUILD)/tools/headless.o
+OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/headless.o
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 $(HEADLESS): $(OBJ_HEADLESS)
-	$(CC) -o $@ $^ -lm
+	$(CC) -o $@ $^ -lm $(NET_LIBS)
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)

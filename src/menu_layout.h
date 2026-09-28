@@ -37,6 +37,12 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_EJECT_CARD, "Eject Card", 'e', MENU_KEY_PRIMARY },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
+    { MENU_ENTRY_MENU, 0, "Serial", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SERIAL_NETWORK, "Network (PPP)", 'n', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
+    { MENU_ENTRY_ITEM, MENU_SERIAL_PTY, "Pseudo-terminal", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SERIAL_OFF, "Disconnect", 0, 0 },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+
     { MENU_ENTRY_MENU, 0, "Emulation", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_BACKLIGHT, "Backlight", 'b', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_SOUND, "Sound", 0, 0 },

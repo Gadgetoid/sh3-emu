@@ -7,6 +7,7 @@
 
 #include "mips.h"
 #include "pccard.h"
+#include "uart.h"
 
 #define DRAM_SIZE        0x00400000u
 #define DRAM_DECODE_END  0x02000000u
@@ -28,7 +29,10 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 #define INTC_SETS 5
 
 #define IODIN_MMODULE_ATTACHED (1u << 0)
-#define IODIN_SERIAL_DCD_OFF   (1u << 4)
+#define IODIN_SERIAL_DCD       (1u << 4)
+#define MFIO_SERIAL_CTS        (1u << 30)
+#define STATUS5_IOPOS_DCD      (1u << 11)
+#define STATUS5_IONEG_DCD      (1u << 4)
 #define IODIN_MINICARD1_ABSENT (1u << 5)
 #define IODIN_MINICARD2_ABSENT (1u << 6)
 
@@ -145,6 +149,9 @@ struct machine {
     pccard_socket_t card_socket;
     char     card_path[1024];
     bool     ir_cardet;
+    uart_t   uart_a;
+    uart_port_t uart_port;
+    bool     serial_connected;
 
     uint32_t intc_status[INTC_SETS];
     uint32_t intc_enable[INTC_SETS];
@@ -460,13 +467,19 @@ static uint32_t soc_read(machine_t *m, uint32_t offset, int size) {
         }
         case 0x180: {
             uint32_t direction = (m->io_ctl >> 16) & 0x7F;
-            uint32_t board = IODIN_MMODULE_ATTACHED | IODIN_SERIAL_DCD_OFF | IODIN_MINICARD1_ABSENT | IODIN_MINICARD2_ABSENT;
+            uint32_t board = IODIN_MMODULE_ATTACHED | (m->serial_connected ? 0 : IODIN_SERIAL_DCD) | IODIN_MINICARD1_ABSENT | IODIN_MINICARD2_ABSENT;
             uint32_t din = ((m->io_ctl >> 8) & direction) | (board & ~direction & 0x7F);
             return m->io_ctl | din;
         }
         case 0x184: return m->mfio_dout;
         case 0x188: return m->mfio_direc;
-        case 0x18C: return m->mfio_dout & m->mfio_direc & m->mfio_sel;
+        case 0x18C: {
+            uint32_t outputs = m->mfio_direc & m->mfio_sel;
+            uint32_t inputs = m->serial_connected ? 0 : MFIO_SERIAL_CTS;
+            return (m->mfio_dout & outputs) | (inputs & ~outputs);
+        }
+        case 0x0B0: case 0x0B4: case 0x0B8: case 0x0BC: case 0x0C0: case 0x0C4:
+            return uart_read(&m->uart_port, offset - 0x0B0);
         case 0x190: return m->mfio_sel;
         case 0x1C4: return m->power_ctl | POWER_PWROK | (m->power_button ? POWER_ONBUTN : 0);
         default:
@@ -589,6 +602,10 @@ static void soc_write(machine_t *m, uint32_t offset, int size, uint32_t value) {
             return;
         }
         case 0x154: m->perval = value & 0xFFFF; return;
+        case 0x0B0: case 0x0B4: case 0x0B8: case 0x0BC: case 0x0C0: case 0x0C4:
+            uart_write(&m->uart_port, offset - 0x0B0, value, m->cpu.cycles);
+            m->cpu.yield = true;
+            return;
         case 0x0A0: m->regs[0x0A0 / 4] = value & 0x00FF000Cu; return;
         case 0x160:
             m->spi_ctl = value & 0x0000FF37u;
@@ -688,6 +705,18 @@ static void card_int_changed(void *context, bool asserted) {
     intc_set_pending(m, STATUS5_SET, asserted ? STATUS5_POSCARINT : STATUS5_NEGCARINT);
 }
 
+static void uart_raise(void *context, uint32_t bits) {
+    intc_set_pending(context, 1, bits);
+}
+
+static void bind_uart(machine_t *m) {
+    m->uart_port.state = &m->uart_a;
+    m->uart_port.dram = m->dram;
+    m->uart_port.dram_mask = DRAM_SIZE - 1;
+    m->uart_port.context = m;
+    m->uart_port.raise = uart_raise;
+}
+
 static void bind_card_socket(machine_t *m, FILE *image) {
     m->card_socket.state = &m->pccard;
     m->card_socket.image = image;
@@ -697,6 +726,7 @@ static void bind_card_socket(machine_t *m, FILE *image) {
 
 static void machine_power_on(machine_t *m) {
     pccard_reset(&m->card_socket);
+    m->uart_a.rx_next = NO_EVENT;
     mips_reset(&m->cpu, ENTRY_VA);
     m->power_ctl = POWER_COLDSTART | POWER_PWRCS | POWER_VCCON;
     m->periodic_next = NO_EVENT;
@@ -725,6 +755,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->cpu.bus.write = bus_write;
     m->cpu.bus.fetch_page = bus_fetch_page;
     bind_card_socket(m, NULL);
+    bind_uart(m);
     machine_power_on(m);
     return m;
 }
@@ -745,6 +776,7 @@ static uint64_t next_event(const machine_t *m) {
     if (m->stop_timer_next < next) next = m->stop_timer_next;
     if (m->lcd_next < next) next = m->lcd_next;
     if (m->sound_active && m->sound_next < next) next = m->sound_next;
+    if (uart_next_event(&m->uart_port) < next) next = uart_next_event(&m->uart_port);
     return next;
 }
 
@@ -765,6 +797,7 @@ static void process_events(machine_t *m) {
         intc_set_pending(m, STATUS5_SET, STATUS5_STPTIMER);
     }
     if (m->sound_active && m->sound_next <= now) sound_event(m);
+    uart_event(&m->uart_port, now);
     if (m->lcd_next <= now) {
         intc_set_pending(m, 0, STATUS1_LCDINT);
         uint64_t period = lcd_frame_cycles(m);
@@ -784,6 +817,7 @@ static void wake_from_suspend(machine_t *m) {
     shift_deadline(&m->stop_timer_next, asleep);
     shift_deadline(&m->lcd_next, asleep);
     shift_deadline(&m->sound_next, asleep);
+    shift_deadline(&m->uart_a.rx_next, asleep);
     m->power_ctl |= POWER_PWRCS | POWER_VCCON | POWER_FORCESHUTDWN;
     m->keyboard_enabled = false;
     m->key_count = 0;
@@ -973,7 +1007,10 @@ bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
     X(snd_tx_start, m->snd_tx_start) X(sound_active, m->sound_active) X(sound_half, m->sound_half) \
     X(sound_next, m->sound_next) X(audio_rate, m->audio_rate) X(ucb_regs, m->ucb_regs) \
     X(ucb_adc_data, m->ucb_adc_data) X(pen_irq_armed, m->pen_irq_armed) X(pen_irq_status, m->pen_irq_status) \
-    X(pen_down, m->pen_down) X(pen_x, m->pen_x) X(pen_y, m->pen_y)
+    X(pen_down, m->pen_down) X(pen_x, m->pen_x) X(pen_y, m->pen_y) \
+    X(uart_a_ctl1, m->uart_a.ctl1) X(uart_a_baud_divisor, m->uart_a.baud_divisor) \
+    X(uart_a_dma_buffer, m->uart_a.dma_buffer) X(uart_a_dma_length, m->uart_a.dma_length) \
+    X(uart_a_dma_count, m->uart_a.dma_count) X(uart_a_dma_armed, m->uart_a.dma_armed)
 
 static bool write_record(FILE *file, const char *name, const void *data, uint32_t size) {
     uint8_t length = (uint8_t)strlen(name);
@@ -1069,6 +1106,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         char current_path[sizeof m->card_path];
         memcpy(current_path, m->card_path, sizeof current_path);
         m->card_socket.image = NULL;
+        bool serial_connected = m->serial_connected;
         machine_reset(m);
         m->pccard.inserted = false;
         const uint8_t *cursor = contents + header, *end = contents + length;
@@ -1086,6 +1124,9 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         }
         pccard_rebind(&m->card_socket, image);
         if (!image) m->card_path[0] = 0;
+        bind_uart(m);
+        m->uart_a.rx_next = NO_EVENT;
+        m->serial_connected = serial_connected;
         intc_update(m);
         if (host_time) *host_time = saved_at;
     }
@@ -1111,6 +1152,7 @@ void machine_reset(machine_t *m) {
     memcpy(card_path, m->card_path, sizeof card_path);
     memset(m, 0, sizeof *m);
     memcpy(m->card_path, card_path, sizeof card_path);
+    bind_uart(m);
     m->pccard.inserted = card.inserted;
     m->pccard.total_sectors = card.total_sectors;
     bind_card_socket(m, image);
@@ -1152,3 +1194,22 @@ const char *machine_card_path(machine_t *m) {
 bool machine_card_inserted(machine_t *m) {
     return m->pccard.inserted;
 }
+
+void machine_serial_connect(machine_t *m, bool connected) {
+    if (m->serial_connected == connected) return;
+    m->serial_connected = connected;
+    intc_set_pending(m, STATUS5_SET, connected ? STATUS5_IONEG_DCD : STATUS5_IOPOS_DCD);
+    intc_set_pending(m, connected ? 3 : 2, MFIO_SERIAL_CTS);
+}
+
+bool machine_serial_connected(machine_t *m) { return m->serial_connected; }
+
+void machine_serial_send(machine_t *m, const uint8_t *data, size_t length) {
+    uart_receive(&m->uart_port, data, (uint32_t)length, m->cpu.cycles);
+}
+
+size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) {
+    return uart_take_tx(&m->uart_port, out, (uint32_t)max);
+}
+
+uint32_t machine_serial_baud(machine_t *m) { return uart_baud(&m->uart_port); }

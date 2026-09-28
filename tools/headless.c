@@ -3,8 +3,45 @@
 #include <string.h>
 
 #include "machine.h"
+#include "netgw.h"
 
 static void log_stderr(const char *message) { fputs(message, stderr); }
+
+#define SCANCODE_SHIFT 0x51
+
+typedef struct { char plain, shifted; uint8_t scancode; } key_char_t;
+
+static const key_char_t key_chars[] = {
+    { 'a', 'A', 0x14 }, { 'b', 'B', 0x2B }, { 'c', 'C', 0x2A }, { 'd', 'D', 0x2C }, { 'e', 'E', 0x28 },
+    { 'f', 'F', 0x34 }, { 'g', 'G', 0x38 }, { 'h', 'H', 0x40 }, { 'i', 'I', 0x45 }, { 'j', 'J', 0x3C },
+    { 'k', 'K', 0x44 }, { 'l', 'L', 0x36 }, { 'm', 'M', 0x3B }, { 'n', 'N', 0x33 }, { 'o', 'O', 0x3E },
+    { 'p', 'P', 0x4D }, { 'q', 'Q', 0x26 }, { 'r', 'R', 0x30 }, { 's', 'S', 0x24 }, { 't', 'T', 0x2D },
+    { 'u', 'U', 0x3D }, { 'v', 'V', 0x23 }, { 'w', 'W', 0x18 }, { 'x', 'X', 0x22 }, { 'y', 'Y', 0x35 },
+    { 'z', 'Z', 0x12 },
+    { '0', ')', 0x47 }, { '1', '!', 0x13 }, { '2', '@', 0x16 }, { '3', '#', 0x15 }, { '4', '$', 0x25 },
+    { '5', '%', 0x17 }, { '6', '^', 0x27 }, { '7', '&', 0x2F }, { '8', '*', 0x37 }, { '9', '(', 0x3F },
+    { ' ', 0, 0x21 }, { ';', ':', 0x4C }, { '=', '+', 0x4F }, { ',', '<', 0x43 }, { '-', '_', 0x4E },
+    { '.', '>', 0x3A }, { '/', '?', 0x42 }, { '`', '~', 0x31 }, { '[', '{', 0x48 }, { '\\', '|', 0x50 },
+    { ']', '}', 0x46 }, { '\'', '"', 0x2E }, { '\n', 0, 0x4B },
+};
+
+static void type_text(machine_t *machine, const char *text) {
+    for (const char *c = text; *c; c++) {
+        char ch = *c;
+        if (ch == '\\' && c[1] == 'n') { ch = '\n'; c++; }
+        for (size_t i = 0; i < sizeof key_chars / sizeof key_chars[0]; i++) {
+            bool shifted = key_chars[i].shifted && key_chars[i].shifted == ch;
+            if (key_chars[i].plain != ch && !shifted) continue;
+            if (shifted) machine_key(machine, SCANCODE_SHIFT, false);
+            machine_key(machine, key_chars[i].scancode, false);
+            machine_run(machine, MACHINE_CLOCK_HZ / 50);
+            machine_key(machine, key_chars[i].scancode, true);
+            if (shifted) machine_key(machine, SCANCODE_SHIFT, true);
+            machine_run(machine, MACHINE_CLOCK_HZ / 50);
+            break;
+        }
+    }
+}
 
 static uint8_t *read_file(const char *path, size_t *size) {
     FILE *file = fopen(path, "rb");
@@ -29,7 +66,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--card=IMAGE]\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -44,10 +81,28 @@ int main(int argc, char **argv) {
     int tap_count = 0;
     double power_times[8];
     int power_count = 0;
+    double serial_at = -1, net_at = -1;
+    netgw_t *gateway = NULL;
+    double send_times[8];
+    const char *send_text[8];
+    int send_count = 0;
+    double type_times[16];
+    const char *type_strings[16];
+    int type_count = 0;
     for (int i = 2; i < argc; i++) {
         if (!strncmp(argv[i], "--seconds=", 10)) seconds = atof(argv[i] + 10);
         else if (!strncmp(argv[i], "--pgm=", 6)) pgm = argv[i] + 6;
         else if (!strcmp(argv[i], "--trace-pc")) trace_pc = true;
+        else if (!strncmp(argv[i], "--serial=", 9)) serial_at = atof(argv[i] + 9);
+        else if (!strncmp(argv[i], "--net=", 6)) net_at = atof(argv[i] + 6);
+        else if (!strncmp(argv[i], "--type=", 7) && type_count < 16) {
+            char *colon = strchr(argv[i] + 7, ':');
+            if (colon) { type_times[type_count] = atof(argv[i] + 7); type_strings[type_count++] = colon + 1; }
+        }
+        else if (!strncmp(argv[i], "--serial-send=", 14) && send_count < 8) {
+            char *colon = strchr(argv[i] + 14, ':');
+            if (colon) { send_times[send_count] = atof(argv[i] + 14); send_text[send_count++] = colon + 1; }
+        }
         else if (!strncmp(argv[i], "--power=", 8) && power_count < 8) power_times[power_count++] = atof(argv[i] + 8);
         else if (!strncmp(argv[i], "--wav=", 6)) wav = argv[i] + 6;
         else if (!strncmp(argv[i], "--card=", 7)) card = argv[i] + 7;
@@ -96,6 +151,28 @@ int main(int argc, char **argv) {
                 machine_touch(machine, false, tap_x[t], tap_y[t]);
             }
         }
+        if (net_at >= 0 && !gateway && (uint64_t)(net_at * MACHINE_CLOCK_HZ) < done + slice) {
+            gateway = netgw_create(log_stderr);
+            machine_serial_connect(machine, true);
+        }
+        if (serial_at >= 0 && (uint64_t)(serial_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(serial_at * MACHINE_CLOCK_HZ) < done + slice) machine_serial_connect(machine, true);
+        for (int k = 0; k < send_count; k++) {
+            uint64_t at = (uint64_t)(send_times[k] * MACHINE_CLOCK_HZ);
+            if (at >= done && at < done + slice) {
+                char text[512];
+                size_t length = 0;
+                for (const char *c = send_text[k]; *c && length < sizeof text - 1; c++) {
+                    if (c[0] == '\\' && c[1] == 'r') { text[length++] = '\r'; c++; }
+                    else if (c[0] == '\\' && c[1] == 'n') { text[length++] = '\n'; c++; }
+                    else text[length++] = *c;
+                }
+                machine_serial_send(machine, (const uint8_t *)text, length);
+            }
+        }
+        for (int k = 0; k < type_count; k++) {
+            uint64_t at = (uint64_t)(type_times[k] * MACHINE_CLOCK_HZ);
+            if (at >= done && at < done + slice) type_text(machine, type_strings[k]);
+        }
         for (int b = 0; b < power_count; b++) {
             uint64_t at = (uint64_t)(power_times[b] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
@@ -104,7 +181,28 @@ int main(int argc, char **argv) {
                 machine_power_button(machine, false);
             }
         }
-        machine_run(machine, slice);
+        if (gateway) {
+            uint64_t step = MACHINE_CLOCK_HZ / 100;
+            for (uint64_t ran = 0; ran < slice; ran += step) {
+                machine_run(machine, step);
+                uint8_t buffer[4096];
+                size_t count;
+                while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) netgw_from_guest(gateway, buffer, count);
+                netgw_poll(gateway);
+                while ((count = netgw_to_guest(gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
+            }
+        } else {
+            machine_run(machine, slice);
+        }
+        {
+            uint8_t tx[4096];
+            size_t count = machine_serial_take(machine, tx, sizeof tx);
+            if (count) {
+                fprintf(stderr, "SERIAL TX %zu bytes at %u baud t=%.1f:", count, machine_serial_baud(machine), (double)machine_cycles(machine) / MACHINE_CLOCK_HZ);
+                for (size_t i = 0; i < count && i < 64; i++) fprintf(stderr, " %02X", tx[i]);
+                fprintf(stderr, "\n");
+            }
+        }
         if (wav_file) {
             uint32_t rate;
             size_t count = machine_audio(machine, audio, sizeof audio / sizeof audio[0], &rate);
@@ -132,6 +230,7 @@ int main(int argc, char **argv) {
         machine_screen(machine, levels);
         write_pgm(pgm, levels);
     }
+    netgw_destroy(gateway);
     machine_destroy(machine);
     free(rom);
     return 0;

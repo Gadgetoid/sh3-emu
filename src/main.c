@@ -9,6 +9,11 @@
 #include "lcd.h"
 #include "machine.h"
 #include "menu.h"
+#include "netgw.h"
+
+#include <fcntl.h>
+#include <termios.h>
+#include <unistd.h>
 
 #define WINDOW_SCALE     2
 #define MAX_FRAME_SLICE  0.1
@@ -62,6 +67,74 @@ static uint8_t *read_file(const char *path, size_t *size) {
 }
 
 static bool verbose = false;
+
+typedef enum { SERIAL_OFF, SERIAL_NETWORK, SERIAL_PTY } serial_mode_t;
+
+typedef struct {
+    serial_mode_t mode;
+    netgw_t *gateway;
+    int      pty;
+    int      pty_slave;
+    char     pty_name[128];
+} serial_t;
+
+static void serial_log(const char *message) {
+    if (verbose) fputs(message, stderr);
+}
+
+static void serial_close(serial_t *serial, machine_t *machine) {
+    if (serial->gateway) netgw_destroy(serial->gateway);
+    if (serial->pty >= 0) close(serial->pty);
+    if (serial->pty_slave >= 0) close(serial->pty_slave);
+    serial->gateway = NULL;
+    serial->pty = -1;
+    serial->pty_slave = -1;
+    serial->mode = SERIAL_OFF;
+    machine_serial_connect(machine, false);
+}
+
+static const char *serial_open(serial_t *serial, machine_t *machine, serial_mode_t mode) {
+    serial_close(serial, machine);
+    if (mode == SERIAL_NETWORK) {
+        serial->gateway = netgw_create(serial_log);
+        if (!serial->gateway) return "built without libslirp";
+    } else if (mode == SERIAL_PTY) {
+        int fd = posix_openpt(O_RDWR | O_NOCTTY);
+        if (fd < 0 || grantpt(fd) != 0 || unlockpt(fd) != 0) {
+            if (fd >= 0) close(fd);
+            return "could not open a pseudo-terminal";
+        }
+        snprintf(serial->pty_name, sizeof serial->pty_name, "%s", ptsname(fd));
+        int slave = open(serial->pty_name, O_RDWR | O_NOCTTY);
+        struct termios settings;
+        tcgetattr(slave, &settings);
+        cfmakeraw(&settings);
+        tcsetattr(slave, TCSANOW, &settings);
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+        serial->pty = fd;
+        serial->pty_slave = slave;
+        fprintf(stderr, "serial: COM1 on %s\n", serial->pty_name);
+    }
+    serial->mode = mode;
+    if (mode != SERIAL_OFF) machine_serial_connect(machine, true);
+    return mode == SERIAL_NETWORK ? "network cable connected" : mode == SERIAL_PTY ? serial->pty_name : "serial disconnected";
+}
+
+static void serial_pump(serial_t *serial, machine_t *machine) {
+    uint8_t buffer[4096];
+    size_t count;
+    while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) {
+        if (serial->gateway) netgw_from_guest(serial->gateway, buffer, count);
+        else if (serial->pty >= 0 && write(serial->pty, buffer, count) < 0) break;
+    }
+    if (serial->gateway) {
+        netgw_poll(serial->gateway);
+        while ((count = netgw_to_guest(serial->gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
+    } else if (serial->pty >= 0) {
+        ssize_t got;
+        while ((got = read(serial->pty, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, (size_t)got);
+    }
+}
 static char chosen_card[1024];
 static bool card_chosen = false;
 
@@ -114,7 +187,10 @@ int main(int argc, char **argv) {
     double screenshot_seconds = 12;
     bool fresh = false;
     const char *card = NULL;
+    serial_mode_t serial_mode = SERIAL_OFF;
     for (int i = 1; i < argc; i++) {
+        if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
+        if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
         if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
         if (!strcmp(argv[i], "--verbose")) verbose = true;
         else if (!strcmp(argv[i], "--fresh")) fresh = true;
@@ -123,7 +199,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -200,6 +276,11 @@ int main(int argc, char **argv) {
     double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
+    serial_t serial = { SERIAL_OFF, NULL, -1, -1, "" };
+    if (serial_mode != SERIAL_OFF) {
+        const char *result = serial_open(&serial, machine, serial_mode);
+        if (!notice) { notice = result; notice_left = NOTICE_SECONDS * 2; }
+    }
 
     while (running) {
         SDL_Event event;
@@ -269,6 +350,12 @@ int main(int argc, char **argv) {
                 SDL_ShowOpenFileDialog(card_dialog_done, NULL, window, filters, 2, NULL, false);
                 break;
             }
+            case MENU_SERIAL_NETWORK:
+            case MENU_SERIAL_PTY:
+            case MENU_SERIAL_OFF:
+                notice = serial_open(&serial, machine, item == MENU_SERIAL_NETWORK ? SERIAL_NETWORK : item == MENU_SERIAL_PTY ? SERIAL_PTY : SERIAL_OFF);
+                notice_left = NOTICE_SECONDS * 3;
+                break;
             case MENU_EJECT_CARD:
                 machine_eject_card(machine);
                 notice = "card ejected";
@@ -284,6 +371,9 @@ int main(int argc, char **argv) {
         }
         menu_ensure();
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
+        menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
+        menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
+        menu_set_enabled(MENU_SERIAL_OFF, serial.mode != SERIAL_OFF);
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_checked(MENU_SOUND, sound);
@@ -312,6 +402,7 @@ int main(int argc, char **argv) {
             owed -= (double)cycles;
             machine_run(machine, cycles);
         }
+        serial_pump(&serial, machine);
         uint32_t rate;
         for (size_t count; (count = machine_audio(machine, samples, AUDIO_CHUNK, &rate)) > 0;) {
             if (!audio || !sound) continue;
@@ -334,6 +425,7 @@ int main(int argc, char **argv) {
     }
 
     machine_save(machine, state, (int64_t)time(NULL));
+    serial_close(&serial, machine);
     if (verbose) machine_dump_state(machine);
     SDL_DestroyAudioStream(audio);
     SDL_DestroyTexture(texture);
