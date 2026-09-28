@@ -66,7 +66,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -126,6 +126,10 @@ int main(int argc, char **argv) {
     machine_t *machine = machine_create(rom, rom_size, error, sizeof error);
     if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
     machine_set_log(machine, log_stderr);
+    for (int i = 2; i < argc; i++) {
+        if (!strncmp(argv[i], "--memory=", 9)) machine_set_memory(machine, (uint32_t)atoi(argv[i] + 9));
+        else if (!strncmp(argv[i], "--speed=", 8)) machine_set_speed(machine, (uint32_t)atoi(argv[i] + 8));
+    }
     if (load && !machine_load(machine, load, NULL)) { fprintf(stderr, "cannot load state %s\n", load); return 1; }
     if (card && !machine_insert_card(machine, card)) { fprintf(stderr, "cannot open card image %s\n", card); return 1; }
 

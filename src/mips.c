@@ -36,8 +36,10 @@
 
 void mips_reset(mips_cpu_t *cpu, uint32_t entry) {
     mips_bus_t bus = cpu->bus;
+    uint32_t speed = cpu->speed;
     memset(cpu, 0, sizeof *cpu);
     cpu->bus = bus;
+    cpu->speed = speed ? speed : 1;
     cpu->pc = entry;
     cpu->next_pc = entry + 4;
     cpu->cp0[CP0_STATUS] = STATUS_BEV;
@@ -462,8 +464,12 @@ static void execute(mips_cpu_t *cpu, uint32_t op) {
 
 void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
     cpu->yield = false;
+    uint32_t speed = cpu->speed ? cpu->speed : 1;
     while (cpu->cycles < until_cycle && !cpu->yield) {
-        cpu->cycles++;
+        if (++cpu->speed_count >= speed) {
+            cpu->speed_count = 0;
+            cpu->cycles++;
+        }
         cpu->fault = false;
         current_pc = cpu->pc;
         current_in_delay_slot = cpu->next_in_delay_slot;

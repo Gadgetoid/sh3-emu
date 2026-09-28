@@ -63,13 +63,23 @@ static NSEventModifierFlags cocoa_modifiers(int modifiers) {
 
 void menu_install(void) {
     target = [[VeloMenuTarget alloc] init];
-    NSMenu *menu = nil;
+    NSMenu *stack[4];
+    int depth = 0;
     for (int i = 0; i < MENU_ENTRY_COUNT; i++) {
         const menu_entry_t *entry = &MENU_ENTRIES[i];
         NSString *title = entry->title ? [NSString stringWithUTF8String:entry->title] : nil;
+        NSMenu *menu = depth ? stack[depth - 1] : nil;
         switch (entry->kind) {
-            case MENU_ENTRY_MENU: menu = add_menu(title); break;
-            case MENU_ENTRY_END: menu = nil; break;
+            case MENU_ENTRY_MENU: stack[depth++] = add_menu(title); break;
+            case MENU_ENTRY_SUBMENU: {
+                NSMenu *submenu = [[NSMenu alloc] initWithTitle:title];
+                NSMenuItem *holder = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+                holder.submenu = submenu;
+                [menu addItem:holder];
+                stack[depth++] = submenu;
+                break;
+            }
+            case MENU_ENTRY_END: depth--; break;
             case MENU_ENTRY_SEPARATOR: [menu addItem:[NSMenuItem separatorItem]]; break;
             case MENU_ENTRY_ITEM: {
                 NSString *key = entry->key ? [NSString stringWithFormat:@"%c", entry->key] : @"";

@@ -15,7 +15,7 @@ brew install sdl3 libslirp
 make
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume and a card listing; a saved state resuming identically; PPP coming up
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 MB System info; a saved state resuming identically; PPP up; backlight key
 ```
 
 ## Use
@@ -39,6 +39,7 @@ Menus:
 | Run | Reset (cold boot, clears RAM) | Cmd-R |
 | Run | Save State | Cmd-S |
 | Run | Load State | Cmd-L |
+| Run | Show Saved State in Finder | |
 | Card | Insert Card Image… | Cmd-O |
 | Card | Eject Card | Cmd-E |
 | Serial | Network (PPP) | Cmd-Shift-N |
@@ -46,6 +47,8 @@ Menus:
 | Serial | Disconnect | |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
+| Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB | |
+| Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
 
 The backlight is under CE's control: the Backlight key toggles it, and the Backlight control panel's idle timeout turns it off (30 seconds by default, since the Velo reports external power). The checkmark shows its state.
 
@@ -78,9 +81,17 @@ Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its p
 
 Without libslirp the build still works, with no Network (PPP) option.
 
+## Memory and speed
+
+Memory sets the RAM for the next cold boot (Run > Reset, which clears the machine) or `--memory=`. CE sizes RAM at boot and splits it between storage and programs (Control Panel > System > Memory). 16 MB is the most CE 1.0 uses: a larger bank still shows 16 MB. A saved machine keeps the memory it was booted with.
+
+CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
+
+Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/velo-emu/emu.ini`).
+
 ## Saved state
 
-The machine is saved to `$XDG_DATA_HOME/velo-emu/state.bin` (default `~/.local/share/velo-emu`) on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to `state.bin.old`.
+The machine is saved to `$XDG_DATA_HOME/velo-emu/state.bin` (default `~/.local/share/velo-emu`) on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to `state.bin.old`. If a serial cable was connected when the state was saved, the restored machine sees it unplugged and, two seconds later, plugged back in (same mode), so CE redials rather than trusting a PPP session the Mac side no longer has.
 
 The menus are native on macOS; other platforms build without them.
 

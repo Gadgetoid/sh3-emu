@@ -27,3 +27,5 @@ if pkg-config --exists slirp; then
     if ./headless "$ROM" --seconds=6 --load="$OUT/desktop.state" --net=1 2>&1 | grep -q "IPCP up"; then echo "ok   ppp_online"; else echo "FAIL ppp_online"; exit 1; fi
 fi
 if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   backlight_button"; else echo "FAIL backlight_button"; exit 1; fi
+SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
+check memory_16mb 151d7d109bd5e68c370edf0069c58225c69d0f9bbd9c97016820b08c64ebdea5 --memory=16 --seconds=56 $CALIBRATE $WIZARD $SYSINFO

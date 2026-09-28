@@ -3,6 +3,7 @@
 
 typedef enum {
     MENU_ENTRY_MENU,
+    MENU_ENTRY_SUBMENU,
     MENU_ENTRY_END,
     MENU_ENTRY_ITEM,
     MENU_ENTRY_SEPARATOR,
@@ -30,6 +31,7 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SAVE_STATE, "Save State", 's', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_LOAD_STATE, "Load State", 'l', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_ITEM, MENU_SHOW_STATE, "Show Saved State in Finder", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "Card", 0, 0 },
@@ -46,6 +48,18 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_MENU, 0, "Emulation", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_BACKLIGHT, "Backlight", 'b', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_SOUND, "Sound", 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_SUBMENU, 0, "Memory (after Reset)", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_MEMORY_4, "4 MB (original)", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_MEMORY_8, "8 MB", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_MEMORY_16, "16 MB", 0, 0 },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+    { MENU_ENTRY_SUBMENU, 0, "CPU Speed", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SPEED_1, "1x (original)", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SPEED_2, "2x", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SPEED_4, "4x", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SPEED_8, "8x", 0, 0 },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 };
 

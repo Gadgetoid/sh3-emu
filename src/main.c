@@ -12,6 +12,7 @@
 #include "netgw.h"
 
 #include <fcntl.h>
+#include <spawn.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -139,8 +140,20 @@ static const char *serial_open(serial_t *serial, machine_t *machine, serial_mode
         fprintf(stderr, "serial: COM1 on %s\n", serial->pty_name);
     }
     serial->mode = mode;
+    machine_set_serial_tag(machine, (uint32_t)mode);
     if (mode != SERIAL_OFF) machine_serial_connect(machine, true);
     return mode == SERIAL_NETWORK ? "network cable connected" : mode == SERIAL_PTY ? serial->pty_name : "serial disconnected";
+}
+
+static void serial_restored(serial_t *serial, machine_t *machine, uint64_t *reconnect_at, serial_mode_t *reconnect_mode) {
+    bool was_connected = machine_serial_connected(machine);
+    serial_mode_t mode = (serial_mode_t)machine_serial_tag(machine);
+    serial_close(serial, machine);
+    *reconnect_at = 0;
+    if (was_connected && (mode == SERIAL_NETWORK || mode == SERIAL_PTY)) {
+        *reconnect_mode = mode;
+        *reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
+    }
 }
 
 static void serial_pump(serial_t *serial, machine_t *machine) {
@@ -182,6 +195,52 @@ static void state_path(char *path, size_t size) {
     snprintf(path, size, "%s/state.bin", base);
 }
 
+typedef struct {
+    uint32_t memory;
+    uint32_t speed;
+} settings_t;
+
+static void settings_path(char *path, size_t size) {
+    const char *config_home = getenv("XDG_CONFIG_HOME");
+    char base[1024];
+    if (config_home && config_home[0] == '/') snprintf(base, sizeof base, "%s/velo-emu", config_home);
+    else snprintf(base, sizeof base, "%s/.config/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
+    SDL_CreateDirectory(base);
+    snprintf(path, size, "%s/emu.ini", base);
+}
+
+static settings_t settings_load(void) {
+    settings_t settings = { 4, 1 };
+    char path[1100];
+    settings_path(path, sizeof path);
+    FILE *file = fopen(path, "r");
+    if (!file) return settings;
+    char line[256];
+    unsigned value;
+    while (fgets(line, sizeof line, file)) {
+        if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
+        else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
+    }
+    fclose(file);
+    return settings;
+}
+
+static void settings_save(const settings_t *settings) {
+    char path[1100];
+    settings_path(path, sizeof path);
+    FILE *file = fopen(path, "w");
+    if (!file) return;
+    fprintf(file, "memory=%u\nspeed=%u\n", settings->memory, settings->speed);
+    fclose(file);
+}
+
+static void reveal_in_finder(const char *path) {
+    extern char **environ;
+    char *arguments[] = { "open", "-R", (char *)path, NULL };
+    pid_t pid;
+    posix_spawnp(&pid, "open", NULL, NULL, arguments, environ);
+}
+
 static void set_title(SDL_Window *window, const char *notice, bool paused, bool suspended) {
     char title[128];
     if (notice) snprintf(title, sizeof title, "%s: %s", WINDOW_TITLE, notice);
@@ -211,7 +270,10 @@ int main(int argc, char **argv) {
     bool fresh = false;
     const char *card = NULL;
     serial_mode_t serial_mode = SERIAL_OFF;
+    settings_t settings = settings_load();
     for (int i = 1; i < argc; i++) {
+        if (!strncmp(argv[i], "--memory=", 9)) { settings.memory = (uint32_t)atoi(argv[i] + 9); continue; }
+        if (!strncmp(argv[i], "--speed=", 8)) { settings.speed = (uint32_t)atoi(argv[i] + 8); continue; }
         if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
         if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
         if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
@@ -222,7 +284,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16] [--speed=1|2|4|8] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -233,6 +295,8 @@ int main(int argc, char **argv) {
     free(rom);
     if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
     machine_set_log(machine, log_message);
+    machine_set_memory(machine, settings.memory);
+    machine_set_speed(machine, settings.speed);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     int grid_width = LCD_WIDTH + 2 * LCD_MARGIN_X, grid_height = LCD_HEIGHT + 2 * LCD_MARGIN_Y;
@@ -302,6 +366,10 @@ int main(int argc, char **argv) {
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
     serial_t serial = { SERIAL_OFF, NULL, -1, -1, "" };
+    uint64_t serial_reconnect_at = 0;
+    serial_mode_t serial_reconnect_mode = SERIAL_OFF;
+    serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
+    if (serial_mode != SERIAL_OFF) serial_reconnect_at = 0;
     if (serial_mode != SERIAL_OFF) {
         const char *result = serial_open(&serial, machine, serial_mode);
         if (!notice) { notice = result; notice_left = NOTICE_SECONDS * 2; }
@@ -376,7 +444,12 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_LOAD_STATE:
-                notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
+                if (machine_load(machine, state, NULL)) {
+                    serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
+                    notice = "state loaded";
+                } else {
+                    notice = "no saved state";
+                }
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_BACKLIGHT:
@@ -384,6 +457,24 @@ int main(int argc, char **argv) {
                 backlight_release_at = machine_cycles(machine) + (uint64_t)(BACKLIGHT_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_SOUND: sound = !sound; break;
+            case MENU_SHOW_STATE: reveal_in_finder(state); break;
+            case MENU_MEMORY_4:
+            case MENU_MEMORY_8:
+            case MENU_MEMORY_16:
+                settings.memory = item == MENU_MEMORY_4 ? 4 : item == MENU_MEMORY_8 ? 8 : 16;
+                machine_set_memory(machine, settings.memory);
+                settings_save(&settings);
+                notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Run > Reset (clears the machine)";
+                notice_left = NOTICE_SECONDS * 3;
+                break;
+            case MENU_SPEED_1:
+            case MENU_SPEED_2:
+            case MENU_SPEED_4:
+            case MENU_SPEED_8:
+                settings.speed = item == MENU_SPEED_1 ? 1 : item == MENU_SPEED_2 ? 2 : item == MENU_SPEED_4 ? 4 : 8;
+                machine_set_speed(machine, settings.speed);
+                settings_save(&settings);
+                break;
             case MENU_INSERT_CARD: {
                 static const SDL_DialogFileFilter filters[] = { { "Card images", "img;bin;raw" }, { "All files", "*" } };
                 SDL_ShowOpenFileDialog(card_dialog_done, NULL, window, filters, 2, NULL, false);
@@ -392,6 +483,7 @@ int main(int argc, char **argv) {
             case MENU_SERIAL_NETWORK:
             case MENU_SERIAL_PTY:
             case MENU_SERIAL_OFF:
+                serial_reconnect_at = 0;
                 notice = serial_open(&serial, machine, item == MENU_SERIAL_NETWORK ? SERIAL_NETWORK : item == MENU_SERIAL_PTY ? SERIAL_PTY : SERIAL_OFF);
                 notice_left = NOTICE_SECONDS * 3;
                 break;
@@ -416,6 +508,13 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_checked(MENU_SOUND, sound);
+        menu_set_checked(MENU_MEMORY_4, machine_memory_next(machine) == 4);
+        menu_set_checked(MENU_MEMORY_8, machine_memory_next(machine) == 8);
+        menu_set_checked(MENU_MEMORY_16, machine_memory_next(machine) == 16);
+        menu_set_checked(MENU_SPEED_1, machine_speed(machine) == 1);
+        menu_set_checked(MENU_SPEED_2, machine_speed(machine) == 2);
+        menu_set_checked(MENU_SPEED_4, machine_speed(machine) == 4);
+        menu_set_checked(MENU_SPEED_8, machine_speed(machine) == 8);
 
         uint64_t now = SDL_GetPerformanceCounter();
         double elapsed = (double)(now - last) / frequency;
@@ -438,6 +537,11 @@ int main(int argc, char **argv) {
             machine_run(machine, cycles);
         }
         serial_pump(&serial, machine);
+        if (serial_reconnect_at && machine_cycles(machine) >= serial_reconnect_at) {
+            serial_reconnect_at = 0;
+            notice = serial_open(&serial, machine, serial_reconnect_mode);
+            notice_left = NOTICE_SECONDS * 2;
+        }
         if (backlight_release_at && machine_cycles(machine) >= backlight_release_at) {
             backlight_release_at = 0;
             machine_backlight_button(machine, false);

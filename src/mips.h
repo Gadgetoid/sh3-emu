@@ -65,6 +65,8 @@ struct mips_cpu {
     mips_tlb_entry_t tlb[MIPS_TLB_ENTRIES];
     uint32_t random_state;
     uint64_t cycles;
+    uint32_t speed;
+    uint32_t speed_count;
     uint64_t exceptions[16];
     bool     fault;
     bool     yield;

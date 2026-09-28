@@ -10,6 +10,7 @@
 #include "uart.h"
 
 #define DRAM_SIZE        0x00400000u
+#define DRAM_MAX         0x01000000u
 #define DRAM_DECODE_END  0x02000000u
 #define BANK1_DECODE_END 0x04000000u
 #define ROM_PA           0x1F400000u
@@ -137,6 +138,8 @@ static const high_priority_term_t high_priority[16][2] = {
 struct machine {
     mips_cpu_t cpu;
     uint8_t *dram;
+    uint32_t dram_size;
+    uint32_t dram_size_next;
     uint8_t *rom;
     uint32_t rom_size;
     uint64_t rom_hash;
@@ -152,6 +155,7 @@ struct machine {
     uart_t   uart_a;
     uart_port_t uart_port;
     bool     serial_connected;
+    uint32_t serial_tag;
 
     uint32_t intc_status[INTC_SETS];
     uint32_t intc_enable[INTC_SETS];
@@ -392,7 +396,7 @@ static void sound_capture_half(machine_t *m) {
     uint32_t length = m->sound_half ? ((bytes - half) & ~1u) : half;
     for (uint32_t i = 0; i + 1 < length; i += 2) {
         uint32_t pa = m->snd_tx_start + offset + i;
-        int16_t sample = (int16_t)(m->dram[pa & (DRAM_SIZE - 1)] << 8 | m->dram[(pa + 1) & (DRAM_SIZE - 1)]);
+        int16_t sample = (int16_t)(m->dram[pa & (m->dram_size - 1)] << 8 | m->dram[(pa + 1) & (m->dram_size - 1)]);
         if (m->audio_count == AUDIO_RING) {
             m->audio_head = (m->audio_head + 1) % AUDIO_RING;
             m->audio_count--;
@@ -644,7 +648,7 @@ static inline void write_host(uint8_t *base, int size, uint32_t value) {
 
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
-    if (pa < DRAM_DECODE_END) { *value = read_host(m->dram + (pa & (DRAM_SIZE - 1)), size); return true; }
+    if (pa < DRAM_DECODE_END) { *value = read_host(m->dram + (pa & (m->dram_size - 1)), size); return true; }
     if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) {
         if (pa >= ROM_PA && pa - ROM_PA + (uint32_t)size <= m->rom_size) { *value = read_host(m->rom + (pa - ROM_PA), size); return true; }
         *value = size == 4 ? 0xFFFFFFFFu : size == 2 ? 0xFFFFu : 0xFFu;
@@ -674,7 +678,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
 
 static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     machine_t *m = context;
-    if (pa < DRAM_DECODE_END) { write_host(m->dram + (pa & (DRAM_SIZE - 1)), size, value); return true; }
+    if (pa < DRAM_DECODE_END) { write_host(m->dram + (pa & (m->dram_size - 1)), size, value); return true; }
     if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) { note_access(m, "rom write", pa, size, value); return true; }
     if (pa >= REGS_PA && pa < REGS_END) { soc_write(m, pa - REGS_PA, size, value); return true; }
     if (pa >= CS2_PA && pa < CS2_PA + PCCARD_IT8368_SIZE) {
@@ -693,7 +697,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
 
 static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     machine_t *m = context;
-    if (pa < DRAM_DECODE_END) return m->dram + (pa & (DRAM_SIZE - 1));
+    if (pa < DRAM_DECODE_END) return m->dram + (pa & (m->dram_size - 1));
     if (pa >= ROM_PA && pa - ROM_PA + 4096 <= m->rom_size) return m->rom + (pa - ROM_PA);
     return NULL;
 }
@@ -712,7 +716,7 @@ static void uart_raise(void *context, uint32_t bits) {
 static void bind_uart(machine_t *m) {
     m->uart_port.state = &m->uart_a;
     m->uart_port.dram = m->dram;
-    m->uart_port.dram_mask = DRAM_SIZE - 1;
+    m->uart_port.dram_mask = m->dram_size - 1;
     m->uart_port.context = m;
     m->uart_port.raise = uart_raise;
 }
@@ -743,7 +747,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
         return NULL;
     }
     machine_t *m = calloc(1, sizeof *m);
-    m->dram = calloc(1, DRAM_SIZE);
+    m->dram_size = m->dram_size_next = DRAM_SIZE;
+    m->dram = calloc(1, m->dram_size);
     m->rom_size = (uint32_t)((rom_size + 4095) & ~(size_t)4095);
     m->rom = malloc(m->rom_size);
     memset(m->rom, 0xFF, m->rom_size);
@@ -910,7 +915,7 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
             if ((uint32_t)x < width && (uint32_t)y < height) {
                 uint32_t bit = (uint32_t)x * bpp;
                 uint32_t pa = base + (uint32_t)y * stride + bit / 8;
-                uint32_t byte = pa < DRAM_DECODE_END ? m->dram[pa & (DRAM_SIZE - 1)] : 0;
+                uint32_t byte = pa < DRAM_DECODE_END ? m->dram[pa & (m->dram_size - 1)] : 0;
                 uint32_t raw = (byte >> (8 - bpp - bit % 8)) & ((1u << bpp) - 1);
                 uint32_t on_duty = lcd_shade(m, raw, bpp);
                 level = (uint8_t)((on_duty * 3 + 7) / 15);
@@ -1009,7 +1014,8 @@ bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
     X(pen_down, m->pen_down) X(pen_x, m->pen_x) X(pen_y, m->pen_y) \
     X(uart_a_ctl1, m->uart_a.ctl1) X(uart_a_baud_divisor, m->uart_a.baud_divisor) \
     X(uart_a_dma_buffer, m->uart_a.dma_buffer) X(uart_a_dma_length, m->uart_a.dma_length) \
-    X(uart_a_dma_count, m->uart_a.dma_count) X(uart_a_dma_armed, m->uart_a.dma_armed)
+    X(uart_a_dma_count, m->uart_a.dma_count) X(uart_a_dma_armed, m->uart_a.dma_armed) \
+    X(serial_connected, m->serial_connected) X(serial_tag, m->serial_tag)
 
 static bool write_record(FILE *file, const char *name, const void *data, uint32_t size) {
     uint8_t length = (uint8_t)strlen(name);
@@ -1028,7 +1034,7 @@ bool machine_save(machine_t *m, const char *path, int64_t host_time) {
 #define SAVE_FIELD(key, field) ok = ok && write_record(file, #key, &(field), (uint32_t)sizeof(field));
     STATE_FIELDS(SAVE_FIELD)
 #undef SAVE_FIELD
-    ok = ok && write_record(file, "dram", m->dram, DRAM_SIZE);
+    ok = ok && write_record(file, "dram", m->dram, m->dram_size);
     uint8_t end = 0;
     ok = ok && fwrite(&end, 1, 1, file) == 1;
     ok = fclose(file) == 0 && ok;
@@ -1069,7 +1075,7 @@ static void apply_record(machine_t *m, const state_record_t *record) {
     STATE_FIELDS(LOAD_FIELD)
 #undef LOAD_FIELD
     if (!strcmp(record->name, "dram")) {
-        if (record->size == DRAM_SIZE) memcpy(m->dram, record->data, DRAM_SIZE);
+        if (record->size == m->dram_size) memcpy(m->dram, record->data, m->dram_size);
         return;
     }
     machine_logf(m, "state: ignoring unknown record %s\n", record->name);
@@ -1097,16 +1103,33 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     if (ok) {
         const uint8_t *cursor = contents + header, *end = contents + length;
         state_record_t record;
-        while (next_record(&cursor, end, &record)) if (!strcmp(record.name, "dram") && record.size == DRAM_SIZE) has_dram = true;
+        uint32_t saved_dram = 0;
+        while (next_record(&cursor, end, &record)) {
+            if (!strcmp(record.name, "dram") && record.size >= DRAM_SIZE && record.size <= DRAM_MAX && !(record.size & (record.size - 1))) {
+                has_dram = true;
+                saved_dram = record.size;
+            }
+        }
         ok = has_dram;
+        if (ok && saved_dram != m->dram_size) {
+            uint8_t *dram = calloc(1, saved_dram);
+            if (!dram) ok = false;
+            else {
+                free(m->dram);
+                m->dram = dram;
+                m->dram_size = saved_dram;
+            }
+        }
     }
     if (ok) {
         FILE *image = m->card_socket.image;
         char current_path[sizeof m->card_path];
         memcpy(current_path, m->card_path, sizeof current_path);
         m->card_socket.image = NULL;
-        bool serial_connected = m->serial_connected;
+        uint32_t dram_next = m->dram_size_next;
+        m->dram_size_next = m->dram_size;
         machine_reset(m);
+        m->dram_size_next = dram_next;
         m->pccard.inserted = false;
         const uint8_t *cursor = contents + header, *end = contents + length;
         state_record_t record;
@@ -1144,7 +1167,6 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         if (!image) m->card_path[0] = 0;
         bind_uart(m);
         m->uart_a.rx_next = NO_EVENT;
-        m->serial_connected = serial_connected;
         intc_update(m);
         if (host_time) *host_time = saved_at;
     }
@@ -1160,7 +1182,9 @@ void machine_advance_clock(machine_t *m, int64_t seconds) {
 
 void machine_reset(machine_t *m) {
     mips_bus_t bus = m->cpu.bus;
+    uint32_t speed = m->cpu.speed;
     uint8_t *dram = m->dram, *rom = m->rom;
+    uint32_t dram_size = m->dram_size, dram_size_next = m->dram_size_next;
     uint32_t rom_size = m->rom_size;
     uint64_t rom_hash = m->rom_hash;
     machine_log_fn log = m->log;
@@ -1168,21 +1192,48 @@ void machine_reset(machine_t *m) {
     FILE *image = m->card_socket.image;
     char card_path[sizeof m->card_path];
     memcpy(card_path, m->card_path, sizeof card_path);
+    if (dram_size_next != dram_size) {
+        uint8_t *resized = calloc(1, dram_size_next);
+        if (resized) {
+            free(dram);
+            dram = resized;
+            dram_size = dram_size_next;
+        }
+    }
     memset(m, 0, sizeof *m);
-    memcpy(m->card_path, card_path, sizeof card_path);
-    bind_uart(m);
-    m->pccard.inserted = card.inserted;
-    m->pccard.total_sectors = card.total_sectors;
-    bind_card_socket(m, image);
-    memset(dram, 0, DRAM_SIZE);
+    memset(dram, 0, dram_size);
     m->dram = dram;
+    m->dram_size = dram_size;
+    m->dram_size_next = dram_size_next;
     m->rom = rom;
     m->rom_size = rom_size;
     m->rom_hash = rom_hash;
     m->log = log;
     m->cpu.bus = bus;
+    memcpy(m->card_path, card_path, sizeof card_path);
+    m->pccard.inserted = card.inserted;
+    m->pccard.total_sectors = card.total_sectors;
+    bind_card_socket(m, image);
+    bind_uart(m);
     machine_power_on(m);
+    m->cpu.speed = speed;
 }
+
+void machine_set_memory(machine_t *m, uint32_t megabytes) {
+    uint32_t bytes = megabytes << 20;
+    if (bytes < DRAM_SIZE || bytes > DRAM_MAX || (bytes & (bytes - 1))) return;
+    m->dram_size_next = bytes;
+    if (m->cpu.cycles == 0 && bytes != m->dram_size) machine_reset(m);
+}
+
+uint32_t machine_memory(machine_t *m) { return m->dram_size >> 20; }
+uint32_t machine_memory_next(machine_t *m) { return m->dram_size_next >> 20; }
+
+void machine_set_speed(machine_t *m, uint32_t multiplier) {
+    m->cpu.speed = multiplier < 1 ? 1 : multiplier > 16 ? 16 : multiplier;
+}
+
+uint32_t machine_speed(machine_t *m) { return m->cpu.speed ? m->cpu.speed : 1; }
 
 size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate) {
     size_t count = m->audio_count < max ? m->audio_count : max;
@@ -1221,6 +1272,9 @@ void machine_serial_connect(machine_t *m, bool connected) {
 }
 
 bool machine_serial_connected(machine_t *m) { return m->serial_connected; }
+
+void machine_set_serial_tag(machine_t *m, uint32_t tag) { m->serial_tag = tag; }
+uint32_t machine_serial_tag(machine_t *m) { return m->serial_tag; }
 
 void machine_serial_send(machine_t *m, const uint8_t *data, size_t length) {
     uart_receive(&m->uart_port, data, (uint32_t)length, m->cpu.cycles);

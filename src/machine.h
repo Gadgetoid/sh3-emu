@@ -39,11 +39,18 @@ const char *machine_card_path(machine_t *machine);
 
 void   machine_serial_connect(machine_t *machine, bool connected);
 bool   machine_serial_connected(machine_t *machine);
+void   machine_set_serial_tag(machine_t *machine, uint32_t tag);
+uint32_t machine_serial_tag(machine_t *machine);
 void   machine_serial_send(machine_t *machine, const uint8_t *data, size_t length);
 size_t machine_serial_take(machine_t *machine, uint8_t *out, size_t max);
 uint32_t machine_serial_baud(machine_t *machine);
 
 void machine_reset(machine_t *machine);
+void     machine_set_memory(machine_t *machine, uint32_t megabytes);
+uint32_t machine_memory(machine_t *machine);
+uint32_t machine_memory_next(machine_t *machine);
+void     machine_set_speed(machine_t *machine, uint32_t multiplier);
+uint32_t machine_speed(machine_t *machine);
 bool machine_save(machine_t *machine, const char *path, int64_t host_time);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);
 void machine_advance_clock(machine_t *machine, int64_t seconds);
