@@ -297,7 +297,8 @@ int main(int argc, char **argv) {
     bool held[256] = { false };
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
-    double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0, backlight_left = 0;
+    double owed = 0, since_autosave = 0, notice_left = 0;
+    uint64_t power_release_at = 0, backlight_release_at = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
     serial_t serial = { SERIAL_OFF, NULL, -1, -1, "" };
@@ -366,7 +367,7 @@ int main(int argc, char **argv) {
             switch (item) {
             case MENU_POWER:
                 machine_power_button(machine, true);
-                power_left = POWER_PRESS_SECONDS;
+                power_release_at = machine_cycles(machine) + (uint64_t)(POWER_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_RESET: machine_reset(machine); break;
@@ -380,7 +381,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_BACKLIGHT:
                 machine_backlight_button(machine, true);
-                backlight_left = BACKLIGHT_PRESS_SECONDS;
+                backlight_release_at = machine_cycles(machine) + (uint64_t)(BACKLIGHT_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_SOUND: sound = !sound; break;
             case MENU_INSERT_CARD: {
@@ -420,14 +421,6 @@ int main(int argc, char **argv) {
         double elapsed = (double)(now - last) / frequency;
         last = now;
         if (elapsed > MAX_FRAME_SLICE) elapsed = MAX_FRAME_SLICE;
-        if (backlight_left > 0) {
-            backlight_left -= elapsed;
-            if (backlight_left <= 0) machine_backlight_button(machine, false);
-        }
-        if (power_left > 0) {
-            power_left -= elapsed;
-            if (power_left <= 0) machine_power_button(machine, false);
-        }
         if (notice_left > 0) {
             notice_left -= elapsed;
             if (notice_left <= 0) notice = NULL;
@@ -445,6 +438,14 @@ int main(int argc, char **argv) {
             machine_run(machine, cycles);
         }
         serial_pump(&serial, machine);
+        if (backlight_release_at && machine_cycles(machine) >= backlight_release_at) {
+            backlight_release_at = 0;
+            machine_backlight_button(machine, false);
+        }
+        if (power_release_at && machine_cycles(machine) >= power_release_at) {
+            power_release_at = 0;
+            machine_power_button(machine, false);
+        }
         uint32_t rate;
         for (size_t count; (count = machine_audio(machine, samples, AUDIO_CHUNK, &rate)) > 0;) {
             if (!audio || !sound) continue;
