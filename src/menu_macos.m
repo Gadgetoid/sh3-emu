@@ -104,3 +104,12 @@ void menu_set_checked(int item, bool checked) {
     NSControlStateValue state = checked ? NSControlStateValueOn : NSControlStateValueOff;
     if (items[item].state != state) items[item].state = state;
 }
+
+int menu_modifiers(void) {
+    NSEventModifierFlags flags = [NSEvent modifierFlags];
+    int modifiers = MENU_MOD_KNOWN;
+    if (flags & NSEventModifierFlagShift) modifiers |= MENU_MOD_SHIFT;
+    if (flags & NSEventModifierFlagControl) modifiers |= MENU_MOD_CONTROL;
+    if (flags & NSEventModifierFlagOption) modifiers |= MENU_MOD_ALT;
+    return modifiers;
+}

@@ -69,6 +69,28 @@ static uint8_t *read_file(const char *path, size_t *size) {
 
 static bool verbose = false;
 
+static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) {
+    static const struct { uint8_t scancode; int modifier; } modifiers[] = {
+        { 0x51, MENU_MOD_SHIFT }, { 0x01, MENU_MOD_CONTROL }, { 0x19, MENU_MOD_ALT }, { 0x09, MENU_MOD_ALT },
+    };
+    if (only_modifiers_up < 0) {
+        for (int i = 0; i < 256; i++) {
+            if (!held[i]) continue;
+            held[i] = false;
+            machine_key(machine, (uint8_t)i, true);
+        }
+        return;
+    }
+    if (!(only_modifiers_up & MENU_MOD_KNOWN)) return;
+    for (size_t i = 0; i < sizeof modifiers / sizeof modifiers[0]; i++) {
+        uint8_t scancode = modifiers[i].scancode;
+        if (held[scancode] && !(only_modifiers_up & modifiers[i].modifier)) {
+            held[scancode] = false;
+            machine_key(machine, scancode, true);
+        }
+    }
+}
+
 typedef enum { SERIAL_OFF, SERIAL_NETWORK, SERIAL_PTY } serial_mode_t;
 
 typedef struct {
@@ -272,6 +294,7 @@ int main(int argc, char **argv) {
     static int16_t samples[AUDIO_CHUNK];
 
     bool running = true, pen_down = false, paused = false;
+    bool held[256] = { false };
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
     double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0, backlight_left = 0;
@@ -293,12 +316,21 @@ int main(int argc, char **argv) {
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP: {
                 bool down = event.type == SDL_EVENT_KEY_DOWN;
-                if (event.key.mod & SDL_KMOD_GUI) break;
-                if (event.key.repeat) break;
                 uint8_t scancode;
-                if (find_scancode(event.key.key, &scancode)) machine_key(machine, scancode, !down);
+                if (!find_scancode(event.key.key, &scancode)) break;
+                if (down) {
+                    if (event.key.repeat || (event.key.mod & SDL_KMOD_GUI) || held[scancode]) break;
+                    held[scancode] = true;
+                    machine_key(machine, scancode, false);
+                } else if (held[scancode]) {
+                    held[scancode] = false;
+                    machine_key(machine, scancode, true);
+                }
                 break;
             }
+            case SDL_EVENT_WINDOW_FOCUS_LOST:
+                release_keys(machine, held, -1);
+                break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     int x, y;
@@ -328,7 +360,9 @@ int main(int argc, char **argv) {
             }
         }
 
+        release_keys(machine, held, menu_modifiers());
         for (int item = menu_poll(); item >= 0; item = menu_poll()) {
+            release_keys(machine, held, -1);
             switch (item) {
             case MENU_POWER:
                 machine_power_button(machine, true);

@@ -22,3 +22,6 @@ void menu_ensure(void);
 int  menu_poll(void);
 void menu_set_checked(int item, bool checked);
 void menu_set_enabled(int item, bool enabled);
+
+enum { MENU_MOD_SHIFT = 1, MENU_MOD_CONTROL = 2, MENU_MOD_ALT = 4, MENU_MOD_KNOWN = 8 };
+int  menu_modifiers(void);
