@@ -17,7 +17,7 @@ else
 SRC_MENU  = src/menu_none.c
 endif
 
-SRC_MACHINE = src/mips.c src/machine.c
+SRC_MACHINE = src/mips.c src/machine.c src/pccard.c
 SRC_APP     = $(SRC_MACHINE) src/lcd.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))

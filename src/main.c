@@ -62,6 +62,16 @@ static uint8_t *read_file(const char *path, size_t *size) {
 }
 
 static bool verbose = false;
+static char chosen_card[1024];
+static bool card_chosen = false;
+
+static void card_dialog_done(void *userdata, const char *const *files, int filter) {
+    (void)userdata;
+    (void)filter;
+    if (!files || !files[0]) return;
+    snprintf(chosen_card, sizeof chosen_card, "%s", files[0]);
+    card_chosen = true;
+}
 
 static void log_message(const char *message) {
     if (verbose) fputs(message, stderr);
@@ -103,7 +113,9 @@ int main(int argc, char **argv) {
     const char *rom_path = NULL, *screenshot = NULL;
     double screenshot_seconds = 12;
     bool fresh = false;
+    const char *card = NULL;
     for (int i = 1; i < argc; i++) {
+        if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
         if (!strcmp(argv[i], "--verbose")) verbose = true;
         else if (!strcmp(argv[i], "--fresh")) fresh = true;
         else if (!strncmp(argv[i], "--screenshot=", 13)) screenshot = argv[i] + 13;
@@ -111,7 +123,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -156,7 +168,22 @@ int main(int argc, char **argv) {
     char state[1100];
     state_path(state, sizeof state);
     int64_t saved_at;
-    if (!fresh && machine_load(machine, state, &saved_at)) machine_advance_clock(machine, (int64_t)time(NULL) - saved_at);
+    const char *startup_notice = NULL;
+    if (!fresh) {
+        if (machine_load(machine, state, &saved_at)) {
+            machine_advance_clock(machine, (int64_t)time(NULL) - saved_at);
+        } else {
+            FILE *existing = fopen(state, "rb");
+            if (existing) {
+                fclose(existing);
+                char backup[sizeof state + 8];
+                snprintf(backup, sizeof backup, "%s.old", state);
+                rename(state, backup);
+                startup_notice = "saved state unreadable, moved to state.bin.old";
+            }
+        }
+    }
+    if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
 
     menu_install();
 
@@ -171,7 +198,8 @@ int main(int argc, char **argv) {
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
     double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0;
-    const char *notice = NULL;
+    const char *notice = startup_notice;
+    if (notice) notice_left = 6;
 
     while (running) {
         SDL_Event event;
@@ -236,10 +264,26 @@ int main(int argc, char **argv) {
                 break;
             case MENU_BACKLIGHT: machine_backlight_button(machine); break;
             case MENU_SOUND: sound = !sound; break;
+            case MENU_INSERT_CARD: {
+                static const SDL_DialogFileFilter filters[] = { { "Card images", "img;bin;raw" }, { "All files", "*" } };
+                SDL_ShowOpenFileDialog(card_dialog_done, NULL, window, filters, 2, NULL, false);
+                break;
+            }
+            case MENU_EJECT_CARD:
+                machine_eject_card(machine);
+                notice = "card ejected";
+                notice_left = NOTICE_SECONDS;
+                break;
             default: break;
             }
         }
+        if (card_chosen) {
+            card_chosen = false;
+            notice = machine_insert_card(machine, chosen_card) ? "card inserted" : "could not open card image";
+            notice_left = NOTICE_SECONDS;
+        }
         menu_ensure();
+        menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_checked(MENU_SOUND, sound);

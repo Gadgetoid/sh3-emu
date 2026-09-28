@@ -29,11 +29,11 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE]\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--card=IMAGE]\n");
         return 2;
     }
     double seconds = 5;
-    const char *pgm = NULL, *load = NULL, *save = NULL, *wav = NULL;
+    const char *pgm = NULL, *load = NULL, *save = NULL, *wav = NULL, *card = NULL;
     bool trace_pc = false;
     double key_times[32];
     unsigned key_codes[32];
@@ -50,6 +50,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--trace-pc")) trace_pc = true;
         else if (!strncmp(argv[i], "--power=", 8) && power_count < 8) power_times[power_count++] = atof(argv[i] + 8);
         else if (!strncmp(argv[i], "--wav=", 6)) wav = argv[i] + 6;
+        else if (!strncmp(argv[i], "--card=", 7)) card = argv[i] + 7;
         else if (!strncmp(argv[i], "--load=", 7)) load = argv[i] + 7;
         else if (!strncmp(argv[i], "--save=", 7)) save = argv[i] + 7;
         else if (!strncmp(argv[i], "--tap=", 6) && tap_count < 32) {
@@ -68,6 +69,7 @@ int main(int argc, char **argv) {
     if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
     machine_set_log(machine, log_stderr);
     if (load && !machine_load(machine, load, NULL)) { fprintf(stderr, "cannot load state %s\n", load); return 1; }
+    if (card && !machine_insert_card(machine, card)) { fprintf(stderr, "cannot open card image %s\n", card); return 1; }
 
     FILE *wav_file = wav ? fopen(wav, "wb") : NULL;
     uint32_t wav_rate = 0;

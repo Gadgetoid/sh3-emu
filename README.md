@@ -15,7 +15,7 @@ brew install sdl3
 make
 make run
 make headless
-make test    # framebuffer hashes at the wizard and the desktop, and a saved state resuming identically
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume and a card listing; a saved state resuming identically
 ```
 
 ## Use
@@ -39,12 +39,29 @@ Menus:
 | Run | Reset (cold boot, clears RAM) | Cmd-R |
 | Run | Save State | Cmd-S |
 | Run | Load State | Cmd-L |
+| Card | Insert Card Image… | Cmd-O |
+| Card | Eject Card | Cmd-E |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
 
 The backlight is under CE's control: the Backlight key toggles it, and the Backlight control panel's idle timeout turns it off (30 seconds by default, since the Velo reports external power). The checkmark shows its state.
 
-The machine is saved to `$XDG_DATA_HOME/velo-emu/state.bin` (default `~/.local/share/velo-emu`) on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with.
+## PC Card storage
+
+The PC Card slot takes a CompactFlash (ATA) card backed by a raw disk image. CE mounts it as `\PC Card`. Make one, optionally copying folders onto it:
+
+```
+tools/mkcard.sh card.img 32 ~/Downloads/PYTHON
+./velo --card=card.img rom/nk.bin
+```
+
+Insert it with Card > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. To change its contents on the Mac, eject it first, then `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img`.
+
+To install Python CE 1.0b1, copy `Python.exe` and `PYTHON15.DLL` from the card to `\Windows` in Explorer (View > Options > Show all files to see the DLL), then run `python` from Start > Run.
+
+## Saved state
+
+The machine is saved to `$XDG_DATA_HOME/velo-emu/state.bin` (default `~/.local/share/velo-emu`) on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to `state.bin.old`.
 
 The menus are native on macOS; other platforms build without them.
 
@@ -54,6 +71,7 @@ Headless options:
 - `--tap=SECONDS:X:Y[:HOLD]` holds the pen at a screen position, for 500 ms by default. Use 0.08 for double taps.
 - `--power=SECONDS` presses the power button for 200 ms.
 - `--wav=FILE` writes the sound output, with the silences between sounds removed.
+- `--card=IMAGE` inserts a card image, after `--load`.
 
 ## What's emulated
 
@@ -74,10 +92,12 @@ Headless options:
   - M-Module (IT8368) ID
   - Miniature Card slots reporting empty, and serial DCD off
   - LCD panel power on MFIO 17 (active low) and the backlight on MFIO 25
+  - M-Module IT8368E PC Card socket (card detect, power, reset, interrupt to the IR block's CARDET) and the PR31500 card windows
+  - CompactFlash card in ATA mode (CIS, task file, PIO read and write)
 
 Guest time is the instruction count at 36.864 MHz, so headless runs are deterministic. Registers that aren't modelled read back the last value written.
 
-Not emulated: sound input, serial, IrDA, and PC Card and Miniature Cards.
+Not emulated: sound input, serial, IrDA, other PC Cards, and Miniature Cards.
 
 ## Credits
 

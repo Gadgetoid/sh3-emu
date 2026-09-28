@@ -93,6 +93,12 @@ int menu_poll(void) {
     return item;
 }
 
+void menu_set_enabled(int item, bool enabled) {
+    if (item < 0 || item >= MENU_COUNT || !items[item]) return;
+    items[item].target = enabled ? target : nil;
+    items[item].action = enabled ? @selector(fire:) : nil;
+}
+
 void menu_set_checked(int item, bool checked) {
     if (item < 0 || item >= MENU_COUNT || !items[item]) return;
     NSControlStateValue state = checked ? NSControlStateValueOn : NSControlStateValueOff;

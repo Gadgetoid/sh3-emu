@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "mips.h"
+#include "pccard.h"
 
 #define DRAM_SIZE        0x00400000u
 #define DRAM_DECODE_END  0x02000000u
@@ -18,12 +19,9 @@
 #define CS2_PA           0x10400000u
 #define CS2_END          0x10800000u
 #define DEBUG_PROBE_PA   0x10401024u
-#define IT8368_SIZE      0x24u
-#define MMODULE_ID_OFFSET 0x22u
-#define MMODULE_ID       0x4900u
 #define ENTRY_VA         0x9F400000u
 
-static const char STATE_MAGIC[16] = "VELO1 STATE v1";
+static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 
 #define REG_COUNT 128
 
@@ -51,6 +49,9 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v1";
 #define STATUS5_PERINT     (1u << 29)
 #define STATUS5_ALARMINT   (1u << 30)
 #define STATUS5_SPIBUFAVAIL (1u << 21)
+#define STATUS5_POSCARINT  (1u << 15)
+#define STATUS5_NEGCARINT  (1u << 14)
+#define IR_CARDET          (1u << 24)
 #define STATUS5_POSONBUTN  (1u << 23)
 #define STATUS5_NEGONBUTN  (1u << 22)
 #define STATUS5_SPIRCV     (1u << 19)
@@ -140,7 +141,10 @@ struct machine {
     char halt_reason[256];
 
     uint32_t regs[REG_COUNT];
-    uint16_t it8368[IT8368_SIZE / 2];
+    pccard_t pccard;
+    pccard_socket_t card_socket;
+    char     card_path[1024];
+    bool     ir_cardet;
 
     uint32_t intc_status[INTC_SETS];
     uint32_t intc_enable[INTC_SETS];
@@ -416,6 +420,7 @@ static void sound_event(machine_t *m) {
 static uint32_t soc_read(machine_t *m, uint32_t offset, int size) {
     uint32_t index = offset / 4;
     switch (offset & ~3u) {
+        case 0x0A0: return m->regs[0x0A0 / 4] | (m->ir_cardet ? IR_CARDET : 0);
         case 0x074: return m->sib_ctl | (m->pen_irq_status ? SIB_IRQ : 0);
         case 0x080: return m->sib_sf0_aux;
         case 0x088: return m->sib_sf0_stat;
@@ -584,6 +589,7 @@ static void soc_write(machine_t *m, uint32_t offset, int size, uint32_t value) {
             return;
         }
         case 0x154: m->perval = value & 0xFFFF; return;
+        case 0x0A0: m->regs[0x0A0 / 4] = value & 0x00FF000Cu; return;
         case 0x160:
             m->spi_ctl = value & 0x0000FF37u;
             intc_free_running(m, STATUS5_SET, STATUS5_SPIBUFAVAIL, (m->spi_ctl & SPI_ENSPI) != 0);
@@ -629,10 +635,14 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     }
     if (pa >= REGS_PA && pa < REGS_END) { *value = soc_read(m, pa - REGS_PA, size); return true; }
     if (pa == DEBUG_PROBE_PA) { *value = 0xFFFF; return true; }
-    if (pa >= CS2_PA && pa < CS2_PA + IT8368_SIZE) {
-        uint32_t offset = pa - CS2_PA;
-        *value = offset == MMODULE_ID_OFFSET ? MMODULE_ID : m->it8368[offset / 2];
-        if (size == 4) *value |= (uint32_t)m->it8368[offset / 2 + 1] << 16;
+    if (pa >= CS2_PA && pa < CS2_PA + PCCARD_IT8368_SIZE) {
+        uint32_t offset = (pa - CS2_PA) & ~1u;
+        *value = pccard_it8368_read(&m->card_socket, offset);
+        if (size == 4) *value |= (uint32_t)pccard_it8368_read(&m->card_socket, offset + 2) << 16;
+        return true;
+    }
+    if ((pa >= PCCARD_CTRL_WINDOW_PA && pa < PCCARD_CTRL_WINDOW_END) || (pa >= PCCARD_MEM_WINDOW_PA && pa < PCCARD_MEM_WINDOW_END)) {
+        *value = pccard_read(&m->card_socket, pa, size);
         return true;
     }
     if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END) {
@@ -650,11 +660,14 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     if (pa < DRAM_DECODE_END) { write_host(m->dram + (pa & (DRAM_SIZE - 1)), size, value); return true; }
     if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) { note_access(m, "rom write", pa, size, value); return true; }
     if (pa >= REGS_PA && pa < REGS_END) { soc_write(m, pa - REGS_PA, size, value); return true; }
-    if (pa >= CS2_PA && pa < CS2_PA + IT8368_SIZE) {
-        uint32_t offset = pa - CS2_PA;
-        m->it8368[offset / 2] = (uint16_t)value;
-        if (size == 4) m->it8368[offset / 2 + 1] = (uint16_t)(value >> 16);
-        note_access(m, "it8368 write", pa, size, value);
+    if (pa >= CS2_PA && pa < CS2_PA + PCCARD_IT8368_SIZE) {
+        uint32_t offset = (pa - CS2_PA) & ~1u;
+        pccard_it8368_write(&m->card_socket, offset, (uint16_t)value);
+        if (size == 4) pccard_it8368_write(&m->card_socket, offset + 2, (uint16_t)(value >> 16));
+        return true;
+    }
+    if ((pa >= PCCARD_CTRL_WINDOW_PA && pa < PCCARD_CTRL_WINDOW_END) || (pa >= PCCARD_MEM_WINDOW_PA && pa < PCCARD_MEM_WINDOW_END)) {
+        pccard_write(&m->card_socket, pa, size, value);
         return true;
     }
     note_access(m, "unmapped write", pa, size, value);
@@ -668,7 +681,22 @@ static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     return NULL;
 }
 
+static void card_int_changed(void *context, bool asserted) {
+    machine_t *m = context;
+    if (m->ir_cardet == asserted) return;
+    m->ir_cardet = asserted;
+    intc_set_pending(m, STATUS5_SET, asserted ? STATUS5_POSCARINT : STATUS5_NEGCARINT);
+}
+
+static void bind_card_socket(machine_t *m, FILE *image) {
+    m->card_socket.state = &m->pccard;
+    m->card_socket.image = image;
+    m->card_socket.int_changed = card_int_changed;
+    m->card_socket.context = m;
+}
+
 static void machine_power_on(machine_t *m) {
+    pccard_reset(&m->card_socket);
     mips_reset(&m->cpu, ENTRY_VA);
     m->power_ctl = POWER_COLDSTART | POWER_PWRCS | POWER_VCCON;
     m->periodic_next = NO_EVENT;
@@ -696,12 +724,14 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->cpu.bus.read = bus_read;
     m->cpu.bus.write = bus_write;
     m->cpu.bus.fetch_page = bus_fetch_page;
+    bind_card_socket(m, NULL);
     machine_power_on(m);
     return m;
 }
 
 void machine_destroy(machine_t *m) {
     if (!m) return;
+    if (m->card_socket.image) fclose(m->card_socket.image);
     free(m->dram);
     free(m->rom);
     free(m);
@@ -907,50 +937,159 @@ bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
     return mips_read_virtual(&m->cpu, va, 4, value);
 }
 
+#define STATE_FIELDS(X) \
+    X(cpu_gpr, m->cpu.gpr) X(cpu_hi, m->cpu.hi) X(cpu_lo, m->cpu.lo) X(cpu_pc, m->cpu.pc) \
+    X(cpu_next_pc, m->cpu.next_pc) X(cpu_in_delay_slot, m->cpu.in_delay_slot) \
+    X(cpu_next_in_delay_slot, m->cpu.next_in_delay_slot) X(cpu_cp0, m->cpu.cp0) \
+    X(cpu_external_ip, m->cpu.external_ip) X(cpu_tlb, m->cpu.tlb) X(cpu_random_state, m->cpu.random_state) \
+    X(cpu_cycles, m->cpu.cycles) X(cpu_exceptions, m->cpu.exceptions) \
+    X(regs, m->regs) X(card_path, m->card_path) X(ir_cardet, m->ir_cardet) \
+    X(card_gpio_dataout, m->pccard.gpio_dataout) X(card_gpio_dir, m->pccard.gpio_dir) \
+    X(card_gpio_posinten, m->pccard.gpio_posinten) X(card_gpio_neginten, m->pccard.gpio_neginten) \
+    X(card_gpio_posintstat, m->pccard.gpio_posintstat) X(card_gpio_negintstat, m->pccard.gpio_negintstat) \
+    X(card_mfio_posintstat, m->pccard.mfio_posintstat) X(card_mfio_negintstat, m->pccard.mfio_negintstat) \
+    X(card_mfio_dataout, m->pccard.mfio_dataout) X(card_mfio_dir, m->pccard.mfio_dir) \
+    X(card_mfio_sel, m->pccard.mfio_sel) X(card_ctrl, m->pccard.ctrl) X(card_prev_datain, m->pccard.prev_datain) \
+    X(card_int_asserted, m->pccard.int_asserted) X(card_reset_asserted, m->pccard.reset_asserted) \
+    X(card_inserted, m->pccard.inserted) X(card_powered, m->pccard.powered) X(card_irq, m->pccard.card_irq) \
+    X(card_feature, m->pccard.feature) X(card_error, m->pccard.error) X(card_sector_count, m->pccard.sector_count) \
+    X(card_sector_number, m->pccard.sector_number) X(card_cylinder_low, m->pccard.cylinder_low) \
+    X(card_cylinder_high, m->pccard.cylinder_high) X(card_drive_head, m->pccard.drive_head) \
+    X(card_status, m->pccard.status) X(card_device_control, m->pccard.device_control) X(card_cor, m->pccard.cor) \
+    X(card_buffer, m->pccard.buffer) X(card_buffer_position, m->pccard.buffer_position) \
+    X(card_sectors_left, m->pccard.sectors_left) X(card_writing, m->pccard.writing) \
+    X(card_total_sectors, m->pccard.total_sectors) \
+    X(intc_status, m->intc_status) X(intc_enable, m->intc_enable) X(intc_free_running, m->intc_free_running) \
+    X(intc_enable6, m->intc_enable6) X(timer_ctl, m->timer_ctl) X(perval, m->perval) \
+    X(periodic_next, m->periodic_next) X(rtc_base, m->rtc_base) X(rtc_anchor, m->rtc_anchor) X(alarm, m->alarm) \
+    X(alarm_armed, m->alarm_armed) X(alarm_next, m->alarm_next) X(power_ctl, m->power_ctl) \
+    X(cpu_stopped, m->cpu_stopped) X(suspended, m->suspended) X(power_button, m->power_button) \
+    X(suspended_at, m->suspended_at) X(suspended_cycles, m->suspended_cycles) X(stopped_cycles, m->stopped_cycles) \
+    X(stop_timer_next, m->stop_timer_next) X(lcd_next, m->lcd_next) X(io_ctl, m->io_ctl) \
+    X(mfio_dout, m->mfio_dout) X(mfio_direc, m->mfio_direc) X(mfio_sel, m->mfio_sel) X(spi_ctl, m->spi_ctl) \
+    X(key_queue, m->key_queue) X(key_head, m->key_head) X(key_count, m->key_count) \
+    X(keyboard_enabled, m->keyboard_enabled) X(sib_ctl, m->sib_ctl) X(sib_sf0_aux, m->sib_sf0_aux) \
+    X(sib_sf0_stat, m->sib_sf0_stat) X(sib_dma_ctl, m->sib_dma_ctl) X(snd_size, m->snd_size) \
+    X(snd_tx_start, m->snd_tx_start) X(sound_active, m->sound_active) X(sound_half, m->sound_half) \
+    X(sound_next, m->sound_next) X(audio_rate, m->audio_rate) X(ucb_regs, m->ucb_regs) \
+    X(ucb_adc_data, m->ucb_adc_data) X(pen_irq_armed, m->pen_irq_armed) X(pen_irq_status, m->pen_irq_status) \
+    X(pen_down, m->pen_down) X(pen_x, m->pen_x) X(pen_y, m->pen_y)
+
+static bool write_record(FILE *file, const char *name, const void *data, uint32_t size) {
+    uint8_t length = (uint8_t)strlen(name);
+    return fwrite(&length, 1, 1, file) == 1 && fwrite(name, length, 1, file) == 1 &&
+           fwrite(&size, sizeof size, 1, file) == 1 && (size == 0 || fwrite(data, size, 1, file) == 1);
+}
+
 bool machine_save(machine_t *m, const char *path, int64_t host_time) {
-    FILE *file = fopen(path, "wb");
+    char temporary[1100];
+    snprintf(temporary, sizeof temporary, "%s.tmp", path);
+    FILE *file = fopen(temporary, "wb");
     if (!file) return false;
-    uint32_t sizes[2] = { (uint32_t)sizeof *m, DRAM_SIZE };
     bool ok = fwrite(STATE_MAGIC, sizeof STATE_MAGIC, 1, file) == 1 &&
-              fwrite(sizes, sizeof sizes, 1, file) == 1 &&
               fwrite(&m->rom_hash, sizeof m->rom_hash, 1, file) == 1 &&
-              fwrite(&host_time, sizeof host_time, 1, file) == 1 &&
-              fwrite(m, sizeof *m, 1, file) == 1 &&
-              fwrite(m->dram, DRAM_SIZE, 1, file) == 1;
+              fwrite(&host_time, sizeof host_time, 1, file) == 1;
+#define SAVE_FIELD(key, field) ok = ok && write_record(file, #key, &(field), (uint32_t)sizeof(field));
+    STATE_FIELDS(SAVE_FIELD)
+#undef SAVE_FIELD
+    ok = ok && write_record(file, "dram", m->dram, DRAM_SIZE);
+    uint8_t end = 0;
+    ok = ok && fwrite(&end, 1, 1, file) == 1;
     ok = fclose(file) == 0 && ok;
+    if (ok) ok = rename(temporary, path) == 0;
+    else remove(temporary);
     return ok;
+}
+
+typedef struct {
+    char name[256];
+    const uint8_t *data;
+    uint32_t size;
+} state_record_t;
+
+static bool next_record(const uint8_t **cursor, const uint8_t *end, state_record_t *record) {
+    if (*cursor >= end) return false;
+    uint8_t length = *(*cursor)++;
+    if (length == 0) return false;
+    if (end - *cursor < length + 4) return false;
+    memcpy(record->name, *cursor, length);
+    record->name[length] = 0;
+    *cursor += length;
+    memcpy(&record->size, *cursor, 4);
+    *cursor += 4;
+    if ((uint64_t)(end - *cursor) < record->size) return false;
+    record->data = *cursor;
+    *cursor += record->size;
+    return true;
+}
+
+static void apply_record(machine_t *m, const state_record_t *record) {
+#define LOAD_FIELD(key, field) \
+    if (!strcmp(record->name, #key)) { \
+        if (record->size == sizeof(field)) memcpy(&(field), record->data, sizeof(field)); \
+        else machine_logf(m, "state: %s has size %u, expected %zu; using default\n", #key, record->size, sizeof(field)); \
+        return; \
+    }
+    STATE_FIELDS(LOAD_FIELD)
+#undef LOAD_FIELD
+    if (!strcmp(record->name, "dram")) {
+        if (record->size == DRAM_SIZE) memcpy(m->dram, record->data, DRAM_SIZE);
+        return;
+    }
+    machine_logf(m, "state: ignoring unknown record %s\n", record->name);
 }
 
 bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;
-    char magic[sizeof STATE_MAGIC];
-    uint32_t sizes[2];
-    uint64_t rom_hash;
-    int64_t saved_at;
-    machine_t *saved = malloc(sizeof *saved);
-    uint8_t *dram = malloc(DRAM_SIZE);
-    bool ok = fread(magic, sizeof magic, 1, file) == 1 && memcmp(magic, STATE_MAGIC, sizeof magic) == 0 &&
-              fread(sizes, sizeof sizes, 1, file) == 1 && sizes[0] == sizeof *m && sizes[1] == DRAM_SIZE &&
-              fread(&rom_hash, sizeof rom_hash, 1, file) == 1 && rom_hash == m->rom_hash &&
-              fread(&saved_at, sizeof saved_at, 1, file) == 1 &&
-              fread(saved, sizeof *saved, 1, file) == 1 &&
-              fread(dram, DRAM_SIZE, 1, file) == 1;
+    fseek(file, 0, SEEK_END);
+    long length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    uint8_t *contents = length > 0 ? malloc((size_t)length) : NULL;
+    bool ok = contents && fread(contents, (size_t)length, 1, file) == 1;
     fclose(file);
+    size_t header = sizeof STATE_MAGIC + sizeof(uint64_t) + sizeof(int64_t);
+    ok = ok && (size_t)length >= header && memcmp(contents, STATE_MAGIC, sizeof STATE_MAGIC) == 0;
+    uint64_t rom_hash = 0;
+    int64_t saved_at = 0;
     if (ok) {
-        saved->dram = m->dram;
-        saved->rom = m->rom;
-        saved->rom_size = m->rom_size;
-        saved->log = m->log;
-        saved->cpu.bus = m->cpu.bus;
-        saved->cpu.last_fetch_valid = false;
-        saved->cpu.last_fetch_page = NULL;
-        memcpy(m, saved, sizeof *m);
-        memcpy(m->dram, dram, DRAM_SIZE);
+        memcpy(&rom_hash, contents + sizeof STATE_MAGIC, sizeof rom_hash);
+        memcpy(&saved_at, contents + sizeof STATE_MAGIC + sizeof rom_hash, sizeof saved_at);
+        ok = rom_hash == m->rom_hash;
+    }
+    bool has_dram = false;
+    if (ok) {
+        const uint8_t *cursor = contents + header, *end = contents + length;
+        state_record_t record;
+        while (next_record(&cursor, end, &record)) if (!strcmp(record.name, "dram") && record.size == DRAM_SIZE) has_dram = true;
+        ok = has_dram;
+    }
+    if (ok) {
+        FILE *image = m->card_socket.image;
+        char current_path[sizeof m->card_path];
+        memcpy(current_path, m->card_path, sizeof current_path);
+        m->card_socket.image = NULL;
+        machine_reset(m);
+        m->pccard.inserted = false;
+        const uint8_t *cursor = contents + header, *end = contents + length;
+        state_record_t record;
+        while (next_record(&cursor, end, &record)) apply_record(m, &record);
+        m->cpu.last_fetch_valid = false;
+        m->cpu.last_fetch_page = NULL;
+        bind_card_socket(m, NULL);
+        if (m->pccard.inserted && strcmp(current_path, m->card_path) != 0) {
+            if (image) fclose(image);
+            image = fopen(m->card_path, "r+b");
+        } else if (!m->pccard.inserted && image) {
+            fclose(image);
+            image = NULL;
+        }
+        pccard_rebind(&m->card_socket, image);
+        if (!image) m->card_path[0] = 0;
+        intc_update(m);
         if (host_time) *host_time = saved_at;
     }
-    free(saved);
-    free(dram);
+    free(contents);
     return ok;
 }
 
@@ -966,7 +1105,15 @@ void machine_reset(machine_t *m) {
     uint32_t rom_size = m->rom_size;
     uint64_t rom_hash = m->rom_hash;
     machine_log_fn log = m->log;
+    pccard_t card = m->pccard;
+    FILE *image = m->card_socket.image;
+    char card_path[sizeof m->card_path];
+    memcpy(card_path, m->card_path, sizeof card_path);
     memset(m, 0, sizeof *m);
+    memcpy(m->card_path, card_path, sizeof card_path);
+    m->pccard.inserted = card.inserted;
+    m->pccard.total_sectors = card.total_sectors;
+    bind_card_socket(m, image);
     memset(dram, 0, DRAM_SIZE);
     m->dram = dram;
     m->rom = rom;
@@ -984,4 +1131,24 @@ size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate)
     m->audio_count -= (uint32_t)count;
     *rate = m->audio_rate;
     return count;
+}
+
+bool machine_insert_card(machine_t *m, const char *path) {
+    FILE *image = fopen(path, "r+b");
+    if (!image) return false;
+    snprintf(m->card_path, sizeof m->card_path, "%s", path);
+    return pccard_insert(&m->card_socket, image);
+}
+
+void machine_eject_card(machine_t *m) {
+    pccard_eject(&m->card_socket);
+    m->card_path[0] = 0;
+}
+
+const char *machine_card_path(machine_t *m) {
+    return m->pccard.inserted ? m->card_path : NULL;
+}
+
+bool machine_card_inserted(machine_t *m) {
+    return m->pccard.inserted;
 }

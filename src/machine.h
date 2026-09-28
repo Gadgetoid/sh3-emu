@@ -32,6 +32,11 @@ bool machine_suspended(machine_t *machine);
 
 size_t machine_audio(machine_t *machine, int16_t *samples, size_t max, uint32_t *rate);
 
+bool machine_insert_card(machine_t *machine, const char *path);
+void machine_eject_card(machine_t *machine);
+bool machine_card_inserted(machine_t *machine);
+const char *machine_card_path(machine_t *machine);
+
 void machine_reset(machine_t *machine);
 bool machine_save(machine_t *machine, const char *path, int64_t host_time);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);
