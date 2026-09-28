@@ -22,7 +22,7 @@ const char *machine_halt_reason(machine_t *machine);
 
 bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
-void machine_backlight_button(machine_t *machine);
+void machine_backlight_button(machine_t *machine, bool down);
 bool machine_screen(machine_t *machine, uint8_t *levels);
 
 void machine_key(machine_t *machine, uint8_t scancode, bool up);

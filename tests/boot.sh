@@ -26,3 +26,4 @@ check card_listing b92dd3e0c4dbf3472d5ebc40937767f061a626fca3209eed6682393c77530
 if pkg-config --exists slirp; then
     if ./headless "$ROM" --seconds=6 --load="$OUT/desktop.state" --net=1 2>&1 | grep -q "IPCP up"; then echo "ok   ppp_online"; else echo "FAIL ppp_online"; exit 1; fi
 fi
+if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --trace-pc 2>&1 | tail -3 | grep -q "backlight=1"; then echo "ok   backlight_button"; else echo "FAIL backlight_button"; exit 1; fi

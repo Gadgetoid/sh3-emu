@@ -20,6 +20,7 @@
 #define AUTOSAVE_SECONDS 60
 #define NOTICE_SECONDS   2
 #define POWER_PRESS_SECONDS 0.2
+#define BACKLIGHT_PRESS_SECONDS 0.1
 #define AUDIO_CHUNK 8192
 #define WINDOW_TITLE     "Philips Velo 1"
 
@@ -273,7 +274,7 @@ int main(int argc, char **argv) {
     bool running = true, pen_down = false, paused = false;
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
-    double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0;
+    double owed = 0, since_autosave = 0, notice_left = 0, power_left = 0, backlight_left = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
     serial_t serial = { SERIAL_OFF, NULL, -1, -1, "" };
@@ -343,7 +344,10 @@ int main(int argc, char **argv) {
                 notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
                 notice_left = NOTICE_SECONDS;
                 break;
-            case MENU_BACKLIGHT: machine_backlight_button(machine); break;
+            case MENU_BACKLIGHT:
+                machine_backlight_button(machine, true);
+                backlight_left = BACKLIGHT_PRESS_SECONDS;
+                break;
             case MENU_SOUND: sound = !sound; break;
             case MENU_INSERT_CARD: {
                 static const SDL_DialogFileFilter filters[] = { { "Card images", "img;bin;raw" }, { "All files", "*" } };
@@ -382,6 +386,10 @@ int main(int argc, char **argv) {
         double elapsed = (double)(now - last) / frequency;
         last = now;
         if (elapsed > MAX_FRAME_SLICE) elapsed = MAX_FRAME_SLICE;
+        if (backlight_left > 0) {
+            backlight_left -= elapsed;
+            if (backlight_left <= 0) machine_backlight_button(machine, false);
+        }
         if (power_left > 0) {
             power_left -= elapsed;
             if (power_left <= 0) machine_power_button(machine, false);

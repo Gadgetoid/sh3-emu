@@ -66,7 +66,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -81,6 +81,8 @@ int main(int argc, char **argv) {
     int tap_count = 0;
     double power_times[8];
     int power_count = 0;
+    double backlight_times[8];
+    int backlight_count = 0;
     double serial_at = -1, net_at = -1;
     netgw_t *gateway = NULL;
     double send_times[8];
@@ -103,6 +105,7 @@ int main(int argc, char **argv) {
             char *colon = strchr(argv[i] + 14, ':');
             if (colon) { send_times[send_count] = atof(argv[i] + 14); send_text[send_count++] = colon + 1; }
         }
+        else if (!strncmp(argv[i], "--backlight=", 12) && backlight_count < 8) backlight_times[backlight_count++] = atof(argv[i] + 12);
         else if (!strncmp(argv[i], "--power=", 8) && power_count < 8) power_times[power_count++] = atof(argv[i] + 8);
         else if (!strncmp(argv[i], "--wav=", 6)) wav = argv[i] + 6;
         else if (!strncmp(argv[i], "--card=", 7)) card = argv[i] + 7;
@@ -172,6 +175,14 @@ int main(int argc, char **argv) {
         for (int k = 0; k < type_count; k++) {
             uint64_t at = (uint64_t)(type_times[k] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) type_text(machine, type_strings[k]);
+        }
+        for (int b = 0; b < backlight_count; b++) {
+            uint64_t at = (uint64_t)(backlight_times[b] * MACHINE_CLOCK_HZ);
+            if (at >= done && at < done + slice) {
+                machine_backlight_button(machine, true);
+                machine_run(machine, MACHINE_CLOCK_HZ / 10);
+                machine_backlight_button(machine, false);
+            }
         }
         for (int b = 0; b < power_count; b++) {
             uint64_t at = (uint64_t)(power_times[b] * MACHINE_CLOCK_HZ);

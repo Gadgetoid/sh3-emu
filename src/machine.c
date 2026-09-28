@@ -880,9 +880,8 @@ bool machine_backlight(machine_t *m) {
     return machine_lcd_enabled(m) && (mfio_driven(m) & MFIO_BACKLIGHT);
 }
 
-void machine_backlight_button(machine_t *m) {
-    machine_key(m, SCANCODE_BACKLIGHT, false);
-    machine_key(m, SCANCODE_BACKLIGHT, true);
+void machine_backlight_button(machine_t *m, bool down) {
+    machine_key(m, SCANCODE_BACKLIGHT, !down);
 }
 
 static uint32_t lcd_shade(const machine_t *m, uint32_t raw, uint32_t bpp) {
@@ -1111,7 +1110,26 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         m->pccard.inserted = false;
         const uint8_t *cursor = contents + header, *end = contents + length;
         state_record_t record;
-        while (next_record(&cursor, end, &record)) apply_record(m, &record);
+        bool has_uart = false, has_sound = false;
+        while (next_record(&cursor, end, &record)) {
+            apply_record(m, &record);
+            if (!strcmp(record.name, "uart_a_ctl1")) has_uart = true;
+            if (!strcmp(record.name, "snd_size")) has_sound = true;
+        }
+        if (!has_uart || (m->uart_a.dma_length == 0 && m->regs[0x0BC / 4] != 0)) {
+            m->uart_a.ctl1 = m->regs[0x0B0 / 4] & 0x0000FFEFu;
+            m->uart_a.baud_divisor = m->regs[0x0B4 / 4] & 0x7FF;
+            m->uart_a.dma_buffer = m->regs[0x0B8 / 4] & ~3u;
+            m->uart_a.dma_length = m->regs[0x0BC / 4] ? (m->regs[0x0BC / 4] & 0xFFFF) + 1 : 0;
+            m->uart_a.dma_armed = (m->uart_a.ctl1 & (1u << 15)) != 0;
+            machine_logf(m, "state: serial port rebuilt from registers\n");
+        }
+        if (!has_sound || (m->snd_size == 0 && m->snd_tx_start == 0 && m->regs[0x068 / 4] != 0)) {
+            m->snd_size = (m->regs[0x060 / 4] >> 18) & 0xFFF;
+            m->snd_tx_start = m->regs[0x068 / 4] & ~3u;
+            m->sib_dma_ctl = m->regs[0x090 / 4];
+            machine_logf(m, "state: sound DMA rebuilt from registers\n");
+        }
         m->cpu.last_fetch_valid = false;
         m->cpu.last_fetch_page = NULL;
         bind_card_socket(m, NULL);
