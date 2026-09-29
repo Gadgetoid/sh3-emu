@@ -68,7 +68,7 @@ tools/mkcard.sh card.img 32 ~/Downloads/PYTHON
 ./velo --card=card.img rom/nk.bin
 ```
 
-Insert it with Card > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. To change its contents on the Mac, eject it first, then `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img`.
+Insert it with Card > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later, so CE sees the change. To change its contents on the Mac, eject it first, then `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img`.
 
 To install Python CE 1.0b1, copy `Python.exe` and `PYTHON15.DLL` from the card to `\Windows` in Explorer (View > Options > Show all files to see the DLL), then run `python` from Start > Run.
 

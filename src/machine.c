@@ -114,6 +114,7 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 
 #define STOP_TIMER_TICK_CYCLES (MACHINE_CLOCK_HZ / 125u)
 #define NO_EVENT UINT64_MAX
+#define CARD_SWAP_CYCLES MACHINE_CLOCK_HZ
 
 #define KEY_QUEUE_SIZE 64
 #define LOGGED_ADDRESSES 512
@@ -160,6 +161,9 @@ struct machine {
     pccard_t pccard;
     pccard_socket_t card_socket;
     char     card_path[1024];
+    FILE    *pending_card;
+    char     pending_card_path[1024];
+    uint64_t card_insert_at;
     bool     ir_cardet;
     uart_t   uart_a;
     uart_port_t uart_port;
@@ -910,6 +914,7 @@ void machine_destroy(machine_t *m) {
     if (!m) return;
     free(m->card_dram);
     if (m->card_socket.image) fclose(m->card_socket.image);
+    if (m->pending_card) fclose(m->pending_card);
     free(m->dram);
     free(m->rom);
     free(m);
@@ -924,6 +929,7 @@ static uint64_t next_event(const machine_t *m) {
     if (m->lcd_next < next) next = m->lcd_next;
     if (m->sound_active && m->sound_next < next) next = m->sound_next;
     if (uart_next_event(&m->uart_port) < next) next = uart_next_event(&m->uart_port);
+    if (m->pending_card && m->card_insert_at < next) next = m->card_insert_at;
     return next;
 }
 
@@ -945,6 +951,11 @@ static void process_events(machine_t *m) {
     }
     if (m->sound_active && m->sound_next <= now) sound_event(m);
     uart_event(&m->uart_port, now);
+    if (m->pending_card && m->card_insert_at <= now) {
+        memcpy(m->card_path, m->pending_card_path, sizeof m->card_path);
+        pccard_insert(&m->card_socket, m->pending_card);
+        m->pending_card = NULL;
+    }
     if (m->lcd_next <= now) {
         intc_set_pending(m, 0, STATUS1_LCDINT);
         uint64_t period = lcd_frame_cycles(m);
@@ -1232,9 +1243,12 @@ static void apply_record(machine_t *m, const state_record_t *record) {
     machine_logf(m, "state: ignoring unknown record %s\n", record->name);
 }
 
+static void cancel_pending_card(machine_t *m);
+
 bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;
+    cancel_pending_card(m);
     fseek(file, 0, SEEK_END);
     long length = ftell(file);
     fseek(file, 0, SEEK_SET);
@@ -1420,14 +1434,28 @@ size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate)
     return count;
 }
 
+static void cancel_pending_card(machine_t *m) {
+    if (m->pending_card) fclose(m->pending_card);
+    m->pending_card = NULL;
+}
+
 bool machine_insert_card(machine_t *m, const char *path) {
     FILE *image = fopen(path, "r+b");
     if (!image) return false;
+    cancel_pending_card(m);
+    if (m->pccard.inserted) {
+        machine_eject_card(m);
+        m->pending_card = image;
+        snprintf(m->pending_card_path, sizeof m->pending_card_path, "%s", path);
+        m->card_insert_at = m->cpu.cycles + CARD_SWAP_CYCLES;
+        return true;
+    }
     snprintf(m->card_path, sizeof m->card_path, "%s", path);
     return pccard_insert(&m->card_socket, image);
 }
 
 void machine_eject_card(machine_t *m) {
+    cancel_pending_card(m);
     pccard_eject(&m->card_socket);
     m->card_path[0] = 0;
 }
