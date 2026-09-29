@@ -1,4 +1,5 @@
 #include "rapi.h"
+#include "rapiload.h"
 #include "rapisetup.h"
 #include "rapisync.h"
 
@@ -21,6 +22,7 @@ static const char *usage =
     "  mv FROM TO               move or rename\n"
     "  run PROGRAM [ARGUMENTS]  start a program\n"
     "  sync FOLDER              sync a Mac folder with \\My Documents\n"
+    "  load SCRIPT [DEST]       run an H/PC Explorer .load install script (DEST defaults to \\Program Files\\Accessories)\n"
     "  proxy on|off             point Pocket IE at the emulator's web proxy\n"
     "  baud 19200|38400|57600|115200  desktop connection speed, from the next connection\n"
     "  reg ls|dump KEY          list a registry key, or everything under it\n"
@@ -280,6 +282,11 @@ int main(int argc, char **argv) {
     }
     else if (!strcmp(command, "sync") && count == 1) status = sync_folder(rapi, args[0]);
     else if (!strcmp(command, "reg")) status = registry(rapi, count, args);
+    else if (!strcmp(command, "load") && (count == 1 || count == 2)) {
+        char dest[1100] = "";
+        if (count == 2) velo_path(args[1], dest, sizeof dest);
+        status = rapiload_run(rapi, args[0], dest, log_line, NULL) ? 0 : 1;
+    }
     else if (!strcmp(command, "proxy") && count == 1 && (!strcmp(args[0], "on") || !strcmp(args[0], "off"))) {
         status = rapisetup_proxy(rapi, !strcmp(args[0], "on")) ? 0 : fail(rapi);
     }

@@ -17,7 +17,7 @@ brew install sdl3 libslirp
 make         # velo and velo-rapi
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync and the proxy and 115200 setup over RAPI; a large write to a fragmented card; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync, the proxy and 115200 setup and a `.load` script over RAPI; a large write to a fragmented card; backlight key
 ```
 
 ## Use
@@ -109,9 +109,31 @@ The Desktop menu uses it:
 ./velo-rapi sync ~/Velo
 ```
 
-Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. It also has `rm`, `mkdir`, `rmdir`, `mv`, `proxy on|off`, `baud RATE`, and `reg ls|dump|get|set` for the registry (keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`, for example `./velo-rapi reg dump HKCU/Software/Apps/PocketIE`). `--socket=PATH` picks another socket, for headless runs with `--rapi=PATH`.
+Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. It also has `rm`, `mkdir`, `rmdir`, `mv`, `load SCRIPT [DEST]`, `proxy on|off`, `baud RATE`, and `reg ls|dump|get|set` for the registry (keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`, for example `./velo-rapi reg dump HKCU/Software/Apps/PocketIE`). `--socket=PATH` picks another socket, for headless runs with `--rapi=PATH`.
 
 CE's desktop connection runs at 19200 baud, about 1.6 KB/s. Desktop > Desktop Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. 19200 goes back to CE's own. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x (8x is no faster).
+
+### Installing CE 1.0 software
+
+CE 1.0 programs were installed from Windows by H/PC Explorer, which ran a `.load` script for each package over RAPI. `velo-rapi load SCRIPT [DEST]` does the same: it copies files (taking the `.mips` build where there is one), creates folders and shortcuts, writes registry strings and starts programs. `.` in the script is the script's folder as a source, and DEST (default `\Program Files\Accessories`) as a destination.
+
+For example, Microsoft's Power Toys 1.0 for CE 1.0 (Cascading Menus, Mute, Pocket Paint, sound schemes, wallpapers, control panel annunciators and Remote Control). `powtoy.exe` is in archive.org's [Windows CE 1.0 Programs](https://archive.org/details/windowsce1.0) collection. It is an InstallShield 3 package: extract the two embedded archives with [unshieldv3](https://github.com/wfr/unshieldv3), then run each component's script:
+
+```
+python3 -c 'import struct,sys; d=open("powtoy.exe","rb").read(); p=0xcc00
+while True:
+    n=struct.unpack_from("<I",d,p)[0]
+    if not 0<n<260: break
+    size=struct.unpack_from("<I",d,p+8+n)[0]; blob=d[p+12+n:p+12+n+size]; p+=12+n+size
+    if blob[:4]==b"\x13\x5d\x65\x8c": open("part%d.Z" % p,"wb").write(blob)'
+mkdir powertoys
+unshieldv3 extract "$(ls -S part*.Z | head -1)" powertoys
+for s in annun/Annunciator cascade/Cascade mute/Mute ppaint/Ppaint rcontrol/remotecontrol sound1/Analog sound2/Metallic sound3/Organic wall/Wallpaper; do
+    ./velo-rapi load powertoys/$s.load
+done
+```
+
+Cascading Menus and Mute start straight away in the taskbar, Paint is in Programs > Accessories, the schemes are in Volume & Sounds and the wallpapers in Display. Remote Control needs its Windows desktop half.
 
 ### Web proxy
 

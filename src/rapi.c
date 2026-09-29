@@ -572,6 +572,18 @@ static bool close_file(rapi_t *rapi, uint32_t handle) {
            call_result(rapi, &message, &last_error, &result) && result;
 }
 
+bool rapi_put(rapi_t *rapi, const char *remote, const void *data, size_t length) {
+    uint32_t handle, last_error, result, written;
+    if (!open_file(rapi, remote, true, &handle)) return false;
+    message_t message = { 0 };
+    bool success = message_begin(&message, COMMAND_WRITE_FILE) && message_u32(&message, handle) && message_u32(&message, 1) &&
+                   message_u32(&message, (uint32_t)length) && message_bytes(&message, data, length) && message_u32(&message, 0) &&
+                   call_result(rapi, &message, &last_error, &result) && reply_u32(rapi, &written);
+    if (success && (!result || written != length)) success = ce_failed(rapi, "write", remote, last_error);
+    bool closed = close_file(rapi, handle);
+    return success && closed;
+}
+
 bool rapi_upload(rapi_t *rapi, const char *local, const char *remote, rapi_progress_fn progress, void *context) {
     FILE *file = fopen(local, "rb");
     if (!file) {

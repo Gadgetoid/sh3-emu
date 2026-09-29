@@ -58,5 +58,6 @@ bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, 
 bool rapi_reg_set(rapi_t *rapi, uint32_t key, const char *name, uint32_t type, const uint8_t *data, uint32_t length);
 void rapi_reg_text(const uint8_t *data, uint32_t length, char *out, size_t size);
 uint32_t rapi_reg_encode(const char *text, uint8_t *out, size_t size);
+bool rapi_put(rapi_t *rapi, const char *remote, const void *data, size_t length);
 bool rapi_upload(rapi_t *rapi, const char *local, const char *remote, rapi_progress_fn progress, void *context);
 bool rapi_download(rapi_t *rapi, const char *remote, const char *local, rapi_progress_fn progress, void *context);

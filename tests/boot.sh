@@ -78,6 +78,30 @@ if pkg-config --exists slirp; then
     PROXY=$(./velo-rapi --socket="$SOCKET" reg get HKCU/Software/Apps/PocketIE ProxyServer)
     wait $EMULATOR
     if [ "$PROXY" = 'string "10.0.2.4"' ] && ./headless "$ROM" --load="$OUT/setup.state" --serial=2 --seconds=6 2>&1 | grep -q "at 115200 baud"; then echo "ok   rapi_setup"; else echo "FAIL rapi_setup"; exit 1; fi
+    ./headless "$ROM" --seconds=100000 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    EMULATOR=$!
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
+    LOADED=$(./velo-rapi --socket="$SOCKET" load tests/load/Test.load /Windows/LoadTest >/dev/null && {
+        ./velo-rapi --socket="$SOCKET" get /Windows/LoadTest/tool.exe "$OUT/tool.exe" && cat "$OUT/tool.exe"
+        ./velo-rapi --socket="$SOCKET" get "/Windows/Load Test/Read Me.txt" "$OUT/readme.txt" && cat "$OUT/readme.txt"
+        for link in Tool Volume Root; do ./velo-rapi --socket="$SOCKET" get "/Windows/Load Test/$link.lnk" "$OUT/link.lnk" && cat "$OUT/link.lnk" && echo; done
+        ./velo-rapi --socket="$SOCKET" ls "/Windows/Load Test" | grep -c "Empty"
+        ./velo-rapi --socket="$SOCKET" reg get HKLM/Software/LoadTest Name
+        ./velo-rapi --socket="$SOCKET" reg get HKLM/Software/LoadTest List
+        ./velo-rapi --socket="$SOCKET" ls /Windows/LoadTest | grep -c never || true
+    })
+    kill $EMULATOR
+    wait $EMULATOR 2>/dev/null || true
+    EXPECTED='mips build
+plain file
+26#\Windows\LoadTest\tool.exe
+59#"\Windows\ctlpnl.exe" \Windows\sounds.cpl,Volume & Sounds,0
+1#\
+1
+string "Load Test"
+multi "one|two|three"
+0'
+    if [ "$LOADED" = "$EXPECTED" ]; then echo "ok   rapi_load"; else echo "FAIL rapi_load"; echo "$LOADED"; exit 1; fi
     rm -rf "$OUT/FRAG"
     mkdir -p "$OUT/FRAG"
     for i in 1 2 3 4 5 6; do head -c 8000 /dev/urandom > "$OUT/FRAG/gap$i.bin"; head -c 1000 /dev/urandom > "$OUT/FRAG/keep$i.bin"; done
