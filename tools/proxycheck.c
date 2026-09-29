@@ -11,27 +11,17 @@ static void log_stderr(const char *message) {
     fputs(message, stderr);
 }
 
-int main(int argc, char **argv) {
-    if (argc != 2 && argc != 3) {
-        fprintf(stderr, "usage: proxycheck URL [METHOD]\n");
-        return 2;
-    }
-    const char *method = argc == 3 ? argv[2] : "GET";
-    webproxy_t *proxy = webproxy_start(log_stderr, NETGW_DEFAULT_USER_AGENT);
-    if (!proxy) {
-        fprintf(stderr, "proxycheck: built without the web proxy\n");
-        return 1;
-    }
+static bool fetch(webproxy_t *proxy, const char *method, const char *url, bool print) {
     struct sockaddr_un address = { .sun_family = AF_UNIX };
     snprintf(address.sun_path, sizeof address.sun_path, "%s", webproxy_socket_path(proxy));
     int client = socket(AF_UNIX, SOCK_STREAM, 0);
     if (connect(client, (struct sockaddr *)&address, sizeof address) != 0) {
         perror("proxycheck: connect");
-        return 1;
+        return false;
     }
     char request[4096];
-    int length = snprintf(request, sizeof request, "%s %s HTTP/1.0\r\nUser-Agent: proxycheck\r\n\r\n", method, argv[1]);
-    if (write(client, request, (size_t)length) != length) return 1;
+    int length = snprintf(request, sizeof request, "%s %s HTTP/1.0\r\nUser-Agent: proxycheck\r\n\r\n", method, url);
+    if (write(client, request, (size_t)length) != length) return false;
     for (;;) {
         webproxy_poll(proxy);
         struct pollfd entry = { client, POLLIN, 0 };
@@ -39,9 +29,30 @@ int main(int argc, char **argv) {
         char buffer[4096];
         ssize_t got = read(client, buffer, sizeof buffer);
         if (got <= 0) break;
-        fwrite(buffer, 1, (size_t)got, stdout);
+        if (print) fwrite(buffer, 1, (size_t)got, stdout);
     }
     close(client);
+    return true;
+}
+
+int main(int argc, char **argv) {
+    const char *method = "GET";
+    int first = 1;
+    if (argc > 1 && !strncmp(argv[1], "--method=", 9)) {
+        method = argv[1] + 9;
+        first = 2;
+    }
+    if (argc <= first) {
+        fprintf(stderr, "usage: proxycheck [--method=METHOD] URL... (prints the last response)\n");
+        return 2;
+    }
+    webproxy_t *proxy = webproxy_start(log_stderr, NETGW_DEFAULT_USER_AGENT);
+    if (!proxy) {
+        fprintf(stderr, "proxycheck: built without the web proxy\n");
+        return 1;
+    }
+    bool success = true;
+    for (int i = first; i < argc && success; i++) success = fetch(proxy, method, argv[i], i == argc - 1);
     webproxy_stop(proxy);
-    return 0;
+    return success ? 0 : 1;
 }

@@ -15,7 +15,7 @@ brew install sdl3 libslirp
 make         # velo and velo-rapi
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting and a page through it in Pocket IE; a file round trip, a folder sync and the proxy and 115200 setup over RAPI; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync and the proxy and 115200 setup over RAPI; backlight key
 ```
 
 ## Use
@@ -121,6 +121,7 @@ Type addresses as `http://`: Pocket IE makes `https://` connections itself, not 
 - removes `<script>`, `<style>`, `<svg>` and comments, which Pocket IE would show as text
 - converts UTF-8 text to Windows-1252 and drops the charset
 - drops `Secure` from cookies and maps 303, 307 and 308 redirects to 301 and 302
+- turns PNG, JPEG, GIF, BMP and SVG images into four-grey dithered GIFs, drawn at the size the page's `<img width height>` gives (it remembers these from the page) and at most 436 pixels wide, the widest Pocket IE shows unscaled. SVG `<use>` references are expanded. Other formats, such as WebP, pass through unchanged.
 
 It sends a Lynx user agent upstream in place of Pocket IE's `Mozilla/1.1 (compatible; MSPIE 1.1; Windows CE)`, which some sites block (Cloudflare error 1010). Sites generally serve text browsers their simplest pages, such as Google's basic HTML results. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT` (also in headless); an empty value passes Pocket IE's own through.
 
@@ -181,4 +182,4 @@ Not emulated: sound input, UART B, IrDA, other PC Cards, and Miniature Cards.
 
 ## Credits
 
-Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The LCD simulation is from SHAM-7X0.
+Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The LCD simulation is from SHAM-7X0. The web proxy decodes images with [stb_image](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).

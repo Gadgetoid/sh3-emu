@@ -1,4 +1,5 @@
 #include "webproxy.h"
+#include "webimage.h"
 
 #include <ctype.h>
 #include <curl/curl.h>
@@ -24,6 +25,7 @@
 #define SOCKET_TIMEOUT   60
 #define CONNECT_TIMEOUT  15
 #define TRANSFER_TIMEOUT 60
+#define HINT_COUNT       512
 
 #ifdef MSG_NOSIGNAL
 #define SEND_FLAGS MSG_NOSIGNAL
@@ -63,6 +65,15 @@ typedef struct {
     char user_agent[USER_AGENT_MAX];
     int client;
 } connection_t;
+
+typedef struct {
+    char url[URL_MAX];
+    int  width, height;
+} image_hint_t;
+
+static image_hint_t hints[HINT_COUNT];
+static int next_hint = 0;
+static pthread_mutex_t hint_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void proxy_log(netgw_log_fn log, const char *format, ...) {
     if (!log) return;
@@ -398,6 +409,113 @@ static void utf8_to_windows_1252(buffer_t *body) {
     buffer_replace(body, &out);
 }
 
+static bool attribute(const char *tag, const char *tag_end, const char *name, char *out, size_t size) {
+    size_t length = strlen(name);
+    for (const char *p = tag + 1; p + length < tag_end; p++) {
+        if (!isspace((unsigned char)p[-1]) || strncasecmp(p, name, length)) continue;
+        const char *value = p + length;
+        while (value < tag_end && isspace((unsigned char)*value)) value++;
+        if (value >= tag_end || *value != '=') continue;
+        value++;
+        while (value < tag_end && isspace((unsigned char)*value)) value++;
+        char quote = (*value == '"' || *value == '\'') ? *value++ : 0;
+        const char *end = value;
+        while (end < tag_end && (quote ? *end != quote : !isspace((unsigned char)*end) && *end != '>')) end++;
+        size_t copied = 0;
+        for (const char *c = value; c < end && copied + 1 < size; c++) {
+            if (!strncmp(c, "&amp;", 5) && c + 5 <= end) {
+                out[copied++] = '&';
+                c += 4;
+            } else {
+                out[copied++] = *c;
+            }
+        }
+        out[copied] = 0;
+        return true;
+    }
+    return false;
+}
+
+static void resolve_url(const char *base, const char *reference, char *out, size_t size) {
+    if (!strncasecmp(reference, "https://", 8)) {
+        snprintf(out, size, "http://%s", reference + 8);
+    } else if (!strncasecmp(reference, "http://", 7)) {
+        snprintf(out, size, "%s", reference);
+    } else if (!strncmp(reference, "//", 2)) {
+        snprintf(out, size, "http:%s", reference);
+    } else {
+        const char *authority = base + 7;
+        size_t origin = (size_t)(authority - base) + strcspn(authority, "/?#");
+        if (reference[0] == '/') {
+            snprintf(out, size, "%.*s%s", (int)origin, base, reference);
+        } else {
+            size_t directory = origin;
+            for (size_t i = origin; base[i] && base[i] != '?' && base[i] != '#'; i++) {
+                if (base[i] == '/') directory = i + 1;
+            }
+            if (directory == origin) snprintf(out, size, "%.*s/%s", (int)origin, base, reference);
+            else snprintf(out, size, "%.*s%s", (int)directory, base, reference);
+        }
+    }
+    out[strcspn(out, "#")] = 0;
+    char *path = strchr(out + 7, '/');
+    if (!path) return;
+    char *write = path;
+    for (char *read = path; *read;) {
+        if (!strncmp(read, "/./", 3)) {
+            read += 2;
+        } else if (!strncmp(read, "/../", 4)) {
+            read += 3;
+            while (write > path && *--write != '/') continue;
+        } else if (*read == '?') {
+            memmove(write, read, strlen(read) + 1);
+            return;
+        } else {
+            *write++ = *read++;
+        }
+    }
+    *write = 0;
+}
+
+static int dimension(const char *text) {
+    char *end;
+    long value = strtol(text, &end, 10);
+    return value > 0 && value < 10000 && *end != '%' ? (int)value : 0;
+}
+
+static void record_image_hints(const char *page_url, const buffer_t *body) {
+    const char *p = body->data, *end = body->data + body->length;
+    while ((p = find_nocase(p, end, "<img")) != NULL) {
+        const char *tag_end = memchr(p, '>', (size_t)(end - p));
+        if (!tag_end) break;
+        char source[URL_MAX], width[32], height[32];
+        int hint_width = attribute(p, tag_end, "width", width, sizeof width) ? dimension(width) : 0;
+        int hint_height = attribute(p, tag_end, "height", height, sizeof height) ? dimension(height) : 0;
+        if (attribute(p, tag_end, "src", source, sizeof source) && *source && strncasecmp(source, "data:", 5) && (hint_width || hint_height)) {
+            pthread_mutex_lock(&hint_lock);
+            image_hint_t *hint = &hints[next_hint];
+            next_hint = (next_hint + 1) % HINT_COUNT;
+            resolve_url(page_url, source, hint->url, sizeof hint->url);
+            hint->width = hint_width;
+            hint->height = hint_height;
+            pthread_mutex_unlock(&hint_lock);
+        }
+        p = tag_end;
+    }
+}
+
+static void find_image_hint(const char *url, int *width, int *height) {
+    *width = *height = 0;
+    pthread_mutex_lock(&hint_lock);
+    for (int i = 0; i < HINT_COUNT; i++) {
+        if (!strcmp(hints[i].url, url)) {
+            *width = hints[i].width;
+            *height = hints[i].height;
+        }
+    }
+    pthread_mutex_unlock(&hint_lock);
+}
+
 static long legacy_status(long status) {
     if (status == 303 || status == 307) return 302;
     if (status == 308) return 301;
@@ -468,8 +586,20 @@ static void send_response(int client, const request_t *request, response_t *resp
     if (!strcmp(mime, "text/html")) {
         strip_markup(&response->body);
         rewrite_secure_links(&response->body);
+        record_image_hints(request->url, &response->body);
     }
     if (text) utf8_to_windows_1252(&response->body);
+    uint8_t *gif;
+    size_t gif_length;
+    int hint_width, hint_height;
+    find_image_hint(request->url, &hint_width, &hint_height);
+    if (!strncmp(mime, "image/", 6) && response->body.length &&
+        webimage_convert((const uint8_t *)response->body.data, response->body.length, !strcmp(mime, "image/svg+xml"),
+                         hint_width, hint_height, &gif, &gif_length)) {
+        free(response->body.data);
+        response->body = (buffer_t){ (char *)gif, gif_length, gif_length };
+        snprintf(content_type, sizeof content_type, "image/gif");
+    }
 
     long status = legacy_status(response->status);
     buffer_t head = { 0 };

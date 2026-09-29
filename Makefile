@@ -25,7 +25,7 @@ SRC_NET  = src/netgw.c
 CFLAGS  += $(shell pkg-config --cflags slirp)
 NET_LIBS = $(shell pkg-config --libs slirp)
 ifeq ($(shell pkg-config --exists libcurl && echo yes),yes)
-SRC_NET  += src/webproxy.c
+SRC_NET  += src/webproxy.c src/webimage.c src/vendor/vendor.c
 CFLAGS   += $(shell pkg-config --cflags libcurl)
 NET_LIBS += $(shell pkg-config --libs libcurl)
 else
@@ -52,10 +52,12 @@ $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm $(NET_LIBS) $(THREAD_LIBS)
 
 $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxycheck.o
-	$(CC) -o $@ $^ $(NET_LIBS) $(THREAD_LIBS)
+	$(CC) -o $@ $^ -lm $(NET_LIBS) $(THREAD_LIBS)
 
 $(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/tools/velorapi.o
 	$(CC) -o $@ $^
+
+$(BUILD)/src/vendor/%.o: CFLAGS += -w
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
