@@ -859,6 +859,27 @@ static void machine_power_on(machine_t *m) {
     m->regs[0x1C0 / 4] = 1u << 7;
 }
 
+typedef struct {
+    uint32_t offset;
+    uint32_t original;
+    uint32_t replacement;
+} rom_patch_t;
+
+static const rom_patch_t rom_patches[] = {
+    { 0x1B4FCCu, 0x03231023u, 0x03251023u },
+};
+
+static void apply_rom_patches(machine_t *m) {
+    for (size_t i = 0; i < sizeof rom_patches / sizeof rom_patches[0]; i++) {
+        const rom_patch_t *patch = &rom_patches[i];
+        if (patch->offset + 4 > m->rom_size) continue;
+        uint8_t *word = m->rom + patch->offset;
+        uint32_t value = (uint32_t)word[0] | (uint32_t)word[1] << 8 | (uint32_t)word[2] << 16 | (uint32_t)word[3] << 24;
+        if (value != patch->original) continue;
+        for (int b = 0; b < 4; b++) word[b] = (uint8_t)(patch->replacement >> (8 * b));
+    }
+}
+
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
     if (rom_size < 16 || rom_size > ROM_WINDOW_END - ROM_PA) {
         snprintf(error, error_size, "ROM size %zu is not a Velo 1 nk.bin", rom_size);
@@ -874,6 +895,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     memcpy(m->rom, rom, rom_size);
     m->rom_hash = 0xCBF29CE484222325ull;
     for (size_t i = 0; i < rom_size; i++) m->rom_hash = (m->rom_hash ^ rom[i]) * 0x100000001B3ull;
+    apply_rom_patches(m);
     m->cpu.bus.context = m;
     m->cpu.bus.read = bus_read;
     m->cpu.bus.write = bus_write;

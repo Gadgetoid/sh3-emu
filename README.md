@@ -8,6 +8,8 @@ It boots the stock CE 1.0 ROM through the setup wizard (touch calibration, time 
 
 Not included. It expects the 7,799,876-byte `nk.bin` from CERF's `philips_velo_1_ce1` bundle (VA 0x9F400000-0x9FB70444). Link or copy it to `rom/nk.bin`.
 
+The emulator patches one instruction in the loaded ROM, not the file. In CE 1.0's `fatfs.dll`, the function that sizes a direct multi-sector write computes the bytes left in a contiguous cluster run as `run_end - (pos - run_start)` instead of `run_end - pos` (`subu $2, $25, $3` at 0x9F5B4FCC). A large write into a fragmented card then runs past the end of the run, over other files' clusters. The patch uses `pos` (`subu $2, $25, $5`), and only applies if the original word is there.
+
 ## Build
 
 ```
@@ -15,7 +17,7 @@ brew install sdl3 libslirp
 make         # velo and velo-rapi
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync and the proxy and 115200 setup over RAPI; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync and the proxy and 115200 setup over RAPI; a large write to a fragmented card; backlight key
 ```
 
 ## Use

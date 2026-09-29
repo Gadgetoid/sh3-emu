@@ -78,6 +78,27 @@ if pkg-config --exists slirp; then
     PROXY=$(./velo-rapi --socket="$SOCKET" reg get HKCU/Software/Apps/PocketIE ProxyServer)
     wait $EMULATOR
     if [ "$PROXY" = 'string "10.0.2.4"' ] && ./headless "$ROM" --load="$OUT/setup.state" --serial=2 --seconds=6 2>&1 | grep -q "at 115200 baud"; then echo "ok   rapi_setup"; else echo "FAIL rapi_setup"; exit 1; fi
+    rm -rf "$OUT/FRAG"
+    mkdir -p "$OUT/FRAG"
+    for i in 1 2 3 4 5 6; do head -c 8000 /dev/urandom > "$OUT/FRAG/gap$i.bin"; head -c 1000 /dev/urandom > "$OUT/FRAG/keep$i.bin"; done
+    head -c 40000 /dev/urandom > "$OUT/large.bin"
+    sh tools/mkcard.sh "$OUT/frag.img" 8 "$OUT/FRAG"
+    mount=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "$OUT/frag.img" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
+    rm "$mount"/FRAG/gap*.bin
+    rm -rf "$mount/.fseventsd" "$mount/.Spotlight-V100" "$mount/.Trashes"
+    hdiutil detach -quiet "$mount"
+    ./headless "$ROM" --seconds=100000 --load="$OUT/desktop.state" --card="$OUT/frag.img" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    EMULATOR=$!
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
+    ./velo-rapi --socket="$SOCKET" put "$OUT/large.bin" "/PC Card/FRAG/large.bin"
+    kill $EMULATOR
+    wait $EMULATOR 2>/dev/null || true
+    mount=$(hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage "$OUT/frag.img" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
+    intact=yes
+    cmp -s "$mount/FRAG/large.bin" "$OUT/large.bin" || intact=no
+    for i in 1 2 3 4 5 6; do cmp -s "$mount/FRAG/keep$i.bin" "$OUT/FRAG/keep$i.bin" || intact=no; done
+    hdiutil detach -quiet "$mount"
+    if [ $intact = yes ]; then echo "ok   card_fragmented_write"; else echo "FAIL card_fragmented_write"; exit 1; fi
 fi
 if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   backlight_button"; else echo "FAIL backlight_button"; exit 1; fi
 SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
