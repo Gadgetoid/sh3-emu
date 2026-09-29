@@ -6,10 +6,12 @@
 #include <string.h>
 #include <time.h>
 
+#include "desktop.h"
 #include "lcd.h"
 #include "machine.h"
 #include "menu.h"
 #include "netgw.h"
+#include "rapi.h"
 
 #include <fcntl.h>
 #include <spawn.h>
@@ -121,7 +123,10 @@ static void serial_close(serial_t *serial, machine_t *machine) {
 static const char *serial_open(serial_t *serial, machine_t *machine, serial_mode_t mode) {
     serial_close(serial, machine);
     if (mode == SERIAL_NETWORK) {
-        serial->gateway = netgw_create(serial_log, serial->user_agent);
+        char rapi_socket[1024];
+        rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
+        netgw_options_t options = { serial->user_agent, rapi_socket };
+        serial->gateway = netgw_create(serial_log, &options);
         if (!serial->gateway) return "built without libslirp";
     } else if (mode == SERIAL_PTY) {
         int fd = posix_openpt(O_RDWR | O_NOCTTY);
@@ -183,6 +188,32 @@ static void card_dialog_done(void *userdata, const char *const *files, int filte
     card_chosen = true;
 }
 
+typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED } pick_kind_t;
+
+#define PICK_MAX 64
+
+static char picked[PICK_MAX][1024];
+static int picked_count = 0;
+static pick_kind_t picked_kind;
+static bool picked_ready = false;
+
+static void pick_done(void *userdata, const char *const *files, int filter) {
+    (void)filter;
+    if (!files || !files[0]) return;
+    picked_count = 0;
+    while (files[picked_count] && picked_count < PICK_MAX) {
+        snprintf(picked[picked_count], sizeof picked[0], "%s", files[picked_count]);
+        picked_count++;
+    }
+    picked_kind = (pick_kind_t)(intptr_t)userdata;
+    picked_ready = true;
+}
+
+static const char *leaf_name(const char *path) {
+    const char *slash = strrchr(path, '/');
+    return slash && slash[1] ? slash + 1 : path;
+}
+
 static void log_message(const char *message) {
     if (verbose) fputs(message, stderr);
 }
@@ -200,6 +231,7 @@ typedef struct {
     uint32_t memory;
     uint32_t speed;
     char     user_agent[256];
+    char     shared_folder[1024];
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -212,12 +244,12 @@ static void settings_path(char *path, size_t size) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1, NETGW_DEFAULT_USER_AGENT };
+    settings_t settings = { 4, 1, NETGW_DEFAULT_USER_AGENT, "" };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
     if (!file) return settings;
-    char line[512];
+    char line[1200];
     unsigned value;
     while (fgets(line, sizeof line, file)) {
         if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
@@ -225,6 +257,9 @@ static settings_t settings_load(void) {
         else if (!strncmp(line, "user_agent=", 11)) {
             line[strcspn(line, "\r\n")] = 0;
             snprintf(settings.user_agent, sizeof settings.user_agent, "%s", line + 11);
+        } else if (!strncmp(line, "shared_folder=", 14)) {
+            line[strcspn(line, "\r\n")] = 0;
+            snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", line + 14);
         }
     }
     fclose(file);
@@ -236,7 +271,7 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nuser_agent=%s\n", settings->memory, settings->speed, settings->user_agent);
+    fprintf(file, "memory=%u\nspeed=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory, settings->speed, settings->user_agent, settings->shared_folder);
     fclose(file);
 }
 
@@ -373,6 +408,10 @@ int main(int argc, char **argv) {
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
     serial_t serial = { SERIAL_OFF, NULL, -1, -1, "", settings.user_agent };
+    char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200];
+    rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
+    rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
+    desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
     uint64_t serial_reconnect_at = 0;
     serial_mode_t serial_reconnect_mode = SERIAL_OFF;
     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
@@ -496,6 +535,25 @@ int main(int argc, char **argv) {
                 notice = serial_open(&serial, machine, item == MENU_SERIAL_NETWORK ? SERIAL_NETWORK : item == MENU_SERIAL_PTY ? SERIAL_PTY : SERIAL_OFF);
                 notice_left = NOTICE_SECONDS * 3;
                 break;
+            case MENU_SEND_FILES:
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
+                break;
+            case MENU_FETCH_DOCUMENTS:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
+                break;
+            case MENU_SHARED_FOLDER:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
+                break;
+            case MENU_SYNC_NOW:
+                desktop_sync(desktop, settings.shared_folder);
+                break;
+            case MENU_STOP_SHARING:
+                snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", leaf_name(settings.shared_folder));
+                settings.shared_folder[0] = 0;
+                settings_save(&settings);
+                notice = shared_notice;
+                notice_left = NOTICE_SECONDS;
+                break;
             case MENU_EJECT_CARD:
                 machine_eject_card(machine);
                 notice = "card ejected";
@@ -509,7 +567,38 @@ int main(int argc, char **argv) {
             notice = machine_insert_card(machine, chosen_card) ? "card inserted" : "could not open card image";
             notice_left = NOTICE_SECONDS;
         }
+        bool velo_online = serial.gateway && netgw_online(serial.gateway);
+        if (picked_ready) {
+            picked_ready = false;
+            if (picked_kind == PICK_SEND) {
+                const char *files[PICK_MAX + 1];
+                for (int i = 0; i < picked_count; i++) files[i] = picked[i];
+                files[picked_count] = NULL;
+                desktop_send(desktop, files);
+            } else if (picked_kind == PICK_FETCH) {
+                desktop_fetch(desktop, picked[0]);
+            } else if (picked_kind == PICK_SHARED) {
+                snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", picked[0]);
+                settings_save(&settings);
+                snprintf(shared_notice, sizeof shared_notice, "sharing %s with \\My Documents", leaf_name(settings.shared_folder));
+                notice = shared_notice;
+                notice_left = NOTICE_SECONDS * 2;
+                if (velo_online) desktop_sync(desktop, settings.shared_folder);
+            }
+        }
+        if (serial.gateway && netgw_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) {
+            desktop_sync(desktop, settings.shared_folder);
+        }
+        if (desktop_take_status(desktop, desktop_notice, sizeof desktop_notice)) {
+            notice = desktop_notice;
+            notice_left = NOTICE_SECONDS * 2;
+        }
+        bool desktop_free = velo_online && !desktop_busy(desktop);
         menu_ensure();
+        menu_set_enabled(MENU_SEND_FILES, desktop_free);
+        menu_set_enabled(MENU_FETCH_DOCUMENTS, desktop_free);
+        menu_set_enabled(MENU_SYNC_NOW, desktop_free && settings.shared_folder[0]);
+        menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
         menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
@@ -584,6 +673,7 @@ int main(int argc, char **argv) {
 
     machine_save(machine, state, (int64_t)time(NULL));
     serial_close(&serial, machine);
+    desktop_destroy(desktop);
     if (verbose) machine_dump_state(machine);
     SDL_DestroyAudioStream(audio);
     SDL_DestroyTexture(texture);

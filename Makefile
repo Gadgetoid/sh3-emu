@@ -1,10 +1,11 @@
 PROG      = velo
 HEADLESS  = headless
 PROXYCHECK = proxycheck
+VELORAPI  = velo-rapi
 BUILD     = build
 ROM      ?= rom/nk.bin
 
-.DEFAULT_GOAL := $(PROG)
+.DEFAULT_GOAL := all
 
 CFLAGS  += -Isrc -Wall -Wextra -O2 -std=c11 -fno-common -MMD -MP
 CFLAGS  += $(shell pkg-config --cflags sdl3)
@@ -36,10 +37,13 @@ SRC_NET  = src/netgw_none.c
 endif
 
 SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) src/lcd.c src/main.c $(SRC_MENU)
+SRC_RAPI    = src/rapi.c src/rapisync.c
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/headless.o
+
+all: $(PROG) $(VELORAPI)
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -49,6 +53,9 @@ $(HEADLESS): $(OBJ_HEADLESS)
 
 $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxycheck.o
 	$(CC) -o $@ $^ $(NET_LIBS) $(THREAD_LIBS)
+
+$(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/tools/velorapi.o
+	$(CC) -o $@ $^
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -62,11 +69,11 @@ run: $(PROG)
 	./$(PROG) $(ROM)
 
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK)
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
 
-.PHONY: run clean test
+.PHONY: all run clean test
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d $(BUILD)/tools/velorapi.d
 
-test: $(HEADLESS) $(PROXYCHECK)
+test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
 	sh tests/boot.sh $(ROM)

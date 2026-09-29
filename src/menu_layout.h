@@ -45,6 +45,15 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SERIAL_OFF, "Disconnect", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
+    { MENU_ENTRY_MENU, 0, "Desktop", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SEND_FILES, "Send Files to Velo\xe2\x80\xa6", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_FETCH_DOCUMENTS, "Copy My Documents to Mac\xe2\x80\xa6", 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SHARED_FOLDER, "Shared Folder\xe2\x80\xa6", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SYNC_NOW, "Sync Shared Folder Now", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_STOP_SHARING, "Stop Sharing Folder", 0, 0 },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+
     { MENU_ENTRY_MENU, 0, "Emulation", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_BACKLIGHT, "Backlight", 'b', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_SOUND, "Sound", 0, 0 },

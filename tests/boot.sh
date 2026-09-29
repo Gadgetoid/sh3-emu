@@ -39,6 +39,35 @@ if pkg-config --exists slirp libcurl; then
     IE="--tap=2:112:20:0.08 --tap=2.12:112:20:0.08 --tap=6:97:14:0.1 --tap=7:110:151:0.1 --tap=8.5:298:43:0.1 --tap=9.5:120:107:0.1 --tap=10.2:210:171:0.1 --type=10.6:10.0.2.4 --tap=11.5:365:171:0.1 --key=12:39 --key=12.2:39 --key=12.4:39 --type=12.8:8080 --key=14:4B --net=15 --tap=22:16:14:0.1 --tap=23:36:49:0.1"
     check proxy_browse 9c5af91bed6b16480a9e586f011716f6c68b3d9163eb8d0e338d10b7d08f1ca7 --seconds=40 --load="$OUT/desktop.state" $IE "--type=24:http://127.0.0.1:$PORT/page.html\\n"
 fi
+if pkg-config --exists slirp; then
+    SOCKET="${TMPDIR:-/tmp}/velo-test-$$.sock"
+    ./headless "$ROM" --seconds=100000 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    EMULATOR=$!
+    trap 'kill $SERVER $EMULATOR 2>/dev/null' EXIT
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
+    head -c 20000 /dev/urandom > "$OUT/blob.bin"
+    rm -f "$OUT/blob.back"
+    if ./velo-rapi --socket="$SOCKET" put "$OUT/blob.bin" && ./velo-rapi --socket="$SOCKET" get blob.bin "$OUT/blob.back" && cmp -s "$OUT/blob.bin" "$OUT/blob.back" && ./velo-rapi --socket="$SOCKET" rm blob.bin; then echo "ok   rapi_roundtrip"; else echo "FAIL rapi_roundtrip"; exit 1; fi
+    SHARED="$OUT/shared"
+    rm -rf "$SHARED"
+    mkdir -p "$SHARED/Notes"
+    echo "from the mac" > "$SHARED/Notes/mac.txt"
+    export XDG_DATA_HOME="$OUT/data"
+    mkdir -p "$XDG_DATA_HOME/velo-emu"
+    rm -f "$XDG_DATA_HOME/velo-emu/sync-manifest.txt"
+    ./velo-rapi --socket="$SOCKET" sync "$SHARED" >/dev/null
+    echo "from the velo" > "$OUT/velo.txt"
+    ./velo-rapi --socket="$SOCKET" put "$OUT/velo.txt" Notes/velo.txt
+    rm "$SHARED/Notes/mac.txt"
+    ./velo-rapi --socket="$SOCKET" sync "$SHARED" >/dev/null
+    LISTING=$(./velo-rapi --socket="$SOCKET" ls Notes)
+    if [ -f "$SHARED/Samples/Memo.pwd" ] && grep -q "from the velo" "$SHARED/Notes/velo.txt" && ! echo "$LISTING" | grep -q mac.txt; then echo "ok   rapi_sync"; else echo "FAIL rapi_sync"; exit 1; fi
+    ./velo-rapi --socket="$SOCKET" rm Notes/velo.txt
+    ./velo-rapi --socket="$SOCKET" rmdir Notes
+    unset XDG_DATA_HOME
+    kill $EMULATOR
+    wait $EMULATOR 2>/dev/null || true
+fi
 if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   backlight_button"; else echo "FAIL backlight_button"; exit 1; fi
 SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
 check memory_16mb 151d7d109bd5e68c370edf0069c58225c69d0f9bbd9c97016820b08c64ebdea5 --memory=16 --seconds=56 $CALIBRATE $WIZARD $SYSINFO

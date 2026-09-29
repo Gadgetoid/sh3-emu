@@ -4,3 +4,4 @@ headless
 rom/
 *.pgm
 proxycheck
+velo-rapi

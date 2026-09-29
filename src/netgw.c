@@ -55,6 +55,7 @@
 #define PROXY_PORT 8080
 #define DESKTOP_PORT 5679
 #define DESKTOP_CLIENTS 4
+#define RAPI_PORT 990
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
 static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
@@ -77,6 +78,8 @@ struct netgw {
     int      desktop_listener;
     int      desktop_clients[DESKTOP_CLIENTS];
     struct sockaddr_un desktop_address;
+    bool     desktop_connected;
+    char     rapi_socket[sizeof ((struct sockaddr_un *)0)->sun_path];
     bool     ppp;
     char     handshake[64];
     size_t   handshake_length;
@@ -503,6 +506,7 @@ static void poll_desktop(netgw_t *gateway) {
             continue;
         }
         gateway->desktop_clients[slot] = client;
+        gateway->desktop_connected = true;
         gateway_log(gateway, "desktop: connection from the Velo\n");
     }
     for (int i = 0; i < DESKTOP_CLIENTS; i++) {
@@ -517,7 +521,31 @@ static void poll_desktop(netgw_t *gateway) {
     }
 }
 
-netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) {
+static void start_rapi(netgw_t *gateway, const char *path) {
+#if SLIRP_CHECK_VERSION(4, 7, 0)
+    if (!path || !*path) return;
+    struct sockaddr_un host = { .sun_family = AF_UNIX };
+    if (strlen(path) >= sizeof host.sun_path) {
+        gateway_log(gateway, "rapi: socket path too long: %s\n", path);
+        return;
+    }
+    snprintf(host.sun_path, sizeof host.sun_path, "%s", path);
+    struct sockaddr_in guest = { .sin_family = AF_INET, .sin_port = htons(RAPI_PORT) };
+    memcpy(&guest.sin_addr, guest_ip, sizeof guest.sin_addr);
+    unlink(path);
+    if (slirp_add_hostxfwd(gateway->slirp, (struct sockaddr *)&host, sizeof host, (struct sockaddr *)&guest, sizeof guest, 0) < 0) {
+        gateway_log(gateway, "rapi: could not listen on %s\n", path);
+        return;
+    }
+    snprintf(gateway->rapi_socket, sizeof gateway->rapi_socket, "%s", path);
+    gateway_log(gateway, "rapi: %s\n", path);
+#else
+    (void)gateway;
+    (void)path;
+#endif
+}
+
+netgw_t *netgw_create(netgw_log_fn log, const netgw_options_t *options) {
     signal(SIGPIPE, SIG_IGN);
     netgw_t *gateway = calloc(1, sizeof *gateway);
     gateway->log = log;
@@ -533,8 +561,9 @@ netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) {
     config.if_mtu = 1500;
     config.if_mru = 1500;
     gateway->slirp = slirp_new(&config, &callbacks, gateway);
-    start_proxy(gateway, user_agent);
+    start_proxy(gateway, options ? options->user_agent : NULL);
     start_desktop(gateway);
+    start_rapi(gateway, options ? options->rapi_socket : NULL);
     netgw_reset(gateway);
     return gateway;
 }
@@ -544,6 +573,7 @@ void netgw_destroy(netgw_t *gateway) {
     slirp_cleanup(gateway->slirp);
     webproxy_stop(gateway->proxy);
     stop_desktop(gateway);
+    if (gateway->rapi_socket[0]) unlink(gateway->rapi_socket);
     free(gateway);
 }
 
@@ -661,4 +691,10 @@ void netgw_poll(netgw_t *gateway) {
 
 bool netgw_online(const netgw_t *gateway) {
     return gateway->ipcp_open;
+}
+
+bool netgw_take_desktop_connected(netgw_t *gateway) {
+    bool connected = gateway->desktop_connected;
+    gateway->desktop_connected = false;
+    return connected;
 }

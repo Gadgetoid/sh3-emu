@@ -19,7 +19,7 @@ static VeloMenuTarget *target = nil;
 }
 @end
 
-static NSMenuItem *holders[4];
+static NSMenuItem *holders[sizeof MENU_ENTRIES / sizeof MENU_ENTRIES[0]];
 static int holder_count = 0;
 
 static void add_item(NSMenu *menu, int tag, NSString *title, NSString *key, NSEventModifierFlags modifiers) {

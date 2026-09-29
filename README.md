@@ -12,10 +12,10 @@ Not included. It expects the 7,799,876-byte `nk.bin` from CERF's `philips_velo_1
 
 ```
 brew install sdl3 libslirp
-make
+make         # velo and velo-rapi
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting and a page through it in Pocket IE; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting and a page through it in Pocket IE; a file round trip and a folder sync over RAPI; backlight key
 ```
 
 ## Use
@@ -45,6 +45,9 @@ Menus:
 | Serial | Network (PPP) | Cmd-Shift-N |
 | Serial | Pseudo-terminal | |
 | Serial | Disconnect | |
+| Desktop | Send Files to Velo… (into \My Documents) | |
+| Desktop | Copy My Documents to Mac… | |
+| Desktop | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
 | Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB, 20 MB (4 MB + 16 MB DRAM card), 32 MB (16 MB + 16 MB DRAM card) | |
@@ -67,7 +70,7 @@ To install Python CE 1.0b1, copy `Python.exe` and `PYTHON15.DLL` from the card t
 
 ## Serial and networking
 
-Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator answers `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the Mac at 10.0.2.2 and DNS at 10.0.2.3. The connection icon appears in the taskbar and CE's sockets reach the Mac and the internet (outgoing only). CE also connects to the desktop sync service at 10.0.2.2 port 5679; the emulator accepts and ignores it, since with the connection refused CE shows "Cannot start communications with the desktop computer" (Error 10061) after about five minutes. For example, in Python CE:
+Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator answers `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the Mac at 10.0.2.2 and DNS at 10.0.2.3. The connection icon appears in the taskbar and CE's sockets reach the Mac and the internet (outgoing only). For example, in Python CE:
 
 ```
 import socket
@@ -80,6 +83,37 @@ connects to port 47123 on the Mac's loopback.
 Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its path (for example `/dev/ttys002`) on stderr and in the title bar, for your own terminal or PPP tools.
 
 Without libslirp the build still works, with no Network (PPP) option.
+
+### Desktop connection
+
+With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, sends four zero bytes and closes the connection, as CE 1.0 does with Handheld PC Explorer. The emulator answers it (with nothing listening, CE shows "Cannot start communications with the desktop computer", Error 10061, after about five minutes). The desktop then reaches the Velo with RAPI, CE's remote API, on its port 990. The emulator makes that port available on the Mac as a Unix socket, `$XDG_DATA_HOME/velo-emu/rapi.sock` (default `~/.local/share/velo-emu`), with no TCP port. The protocol follows [SynCE](https://sourceforge.net/projects/synce/)'s librapi2.
+
+The Desktop menu uses it:
+
+- Send Files to Velo… copies files into `\My Documents`.
+- Copy My Documents to Mac… copies `\My Documents`, with its folders, into a Mac folder.
+- Shared Folder… pairs a Mac folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too: on the Mac it goes to the Trash. When both sides changed a file, the Mac keeps its copy and the Velo's comes over as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped. Empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`, and the last sync's state in `sync-manifest.txt` next to `rapi.sock`.
+
+`velo-rapi` does the same from the command line, while the emulator is running with Network (PPP) connected:
+
+```
+./velo-rapi info
+./velo-rapi ls
+./velo-rapi put notes.txt
+./velo-rapi get Samples/Letter.pwd
+./velo-rapi run /Windows/pword.exe
+./velo-rapi sync ~/Velo
+```
+
+Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. It also has `rm`, `mkdir`, `rmdir` and `mv`. `--socket=PATH` picks another socket, for headless runs with `--rapi=PATH`.
+
+CE's desktop connection runs at 19200 baud, about 1.6 KB/s. For more, make a faster connection on the Velo:
+
+1. In Start > Programs > Communication > Remote Networking, open Make New Connection, name it, choose Direct Connection and Next.
+2. Configure…: Baud Rate 115200, OK, then Finish.
+3. In Control Panel > Communications > PC Connection, Change…, pick the new connection, OK, and OK.
+
+The emulated CPU then sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x (8x is no faster).
 
 ### Web proxy
 
@@ -102,7 +136,7 @@ Memory sets the RAM for the next cold boot (Run > Reset, which clears the machin
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
 
-Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/velo-emu/emu.ini`), with `user_agent=`.
+Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/velo-emu/emu.ini`), with `user_agent=` and `shared_folder=`.
 
 ## Saved state
 
