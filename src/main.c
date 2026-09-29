@@ -310,6 +310,7 @@ int main(int argc, char **argv) {
     double screenshot_seconds = 12;
     bool fresh = false;
     const char *card = NULL;
+    const char *state_file = NULL;
     serial_mode_t serial_mode = SERIAL_OFF;
     settings_t settings = settings_load();
     for (int i = 1; i < argc; i++) {
@@ -319,6 +320,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
         if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
         if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
+        if (!strncmp(argv[i], "--state=", 8)) { state_file = argv[i] + 8; continue; }
         if (!strcmp(argv[i], "--verbose")) verbose = true;
         else if (!strcmp(argv[i], "--fresh")) fresh = true;
         else if (!strncmp(argv[i], "--screenshot=", 13)) screenshot = argv[i] + 13;
@@ -326,7 +328,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--state=FILE] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -371,7 +373,8 @@ int main(int argc, char **argv) {
     }
 
     char state[1100];
-    state_path(state, sizeof state);
+    if (state_file) snprintf(state, sizeof state, "%s", state_file);
+    else state_path(state, sizeof state);
     int64_t saved_at;
     const char *startup_notice = NULL;
     if (!fresh) {
@@ -382,9 +385,11 @@ int main(int argc, char **argv) {
             if (existing) {
                 fclose(existing);
                 char backup[sizeof state + 8];
+                static char moved_notice[sizeof backup + 64];
                 snprintf(backup, sizeof backup, "%s.old", state);
                 rename(state, backup);
-                startup_notice = "saved state unreadable, moved to state.bin.old";
+                snprintf(moved_notice, sizeof moved_notice, "saved state unreadable, moved to %s", leaf_name(backup));
+                startup_notice = moved_notice;
             }
         }
     }

@@ -25,6 +25,7 @@ make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card
 ```
 ./velo rom/nk.bin
 ./velo --screenshot=out.bmp --seconds=8 rom/nk.bin
+./velo --state=powertoys.bin rom/nk.bin
 ./headless rom/nk.bin --seconds=12 --key=8:4B --tap=12:240:120 --pgm=out.pgm
 ./headless rom/nk.bin --seconds=3 --load=state.bin --save=state.bin
 ./headless rom/nk.bin --seconds=10 --load=state.bin --power=2 --power=6 --wav=out.wav
@@ -161,7 +162,7 @@ Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/v
 
 ## Saved state
 
-The machine is saved to `$XDG_DATA_HOME/velo-emu/state.bin` (default `~/.local/share/velo-emu`) on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to `state.bin.old`. If a serial cable was connected when the state was saved, the restored machine sees it unplugged and, two seconds later, plugged back in (same mode), so CE redials rather than trusting a PPP session the Mac side no longer has.
+The machine is saved to `$XDG_DATA_HOME/velo-emu/state.bin` (default `~/.local/share/velo-emu`) on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to `state.bin.old`. If a serial cable was connected when the state was saved, the restored machine sees it unplugged and, two seconds later, plugged back in (same mode), so CE redials rather than trusting a PPP session the Mac side no longer has. `--state=FILE` uses FILE instead, for loading, saving and autosaving.
 
 The menus are native on macOS; other platforms build without them.
 
