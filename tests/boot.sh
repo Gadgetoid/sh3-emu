@@ -45,7 +45,7 @@ if pkg-config --exists slirp libcurl; then
 fi
 if pkg-config --exists slirp; then
     SOCKET="${TMPDIR:-/tmp}/velo-test-$$.sock"
-    ./headless "$ROM" --seconds=100000 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
     trap 'kill $SERVER $EMULATOR 2>/dev/null' EXIT
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
@@ -71,14 +71,15 @@ if pkg-config --exists slirp; then
     unset XDG_DATA_HOME
     kill $EMULATOR
     wait $EMULATOR 2>/dev/null || true
-    ./headless "$ROM" --seconds=1500 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" --save="$OUT/setup.state" >/dev/null 2>&1 &
+    ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" --save="$OUT/setup.state" >/dev/null 2>&1 &
     EMULATOR=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
     ./velo-rapi --socket="$SOCKET" baud 115200 && ./velo-rapi --socket="$SOCKET" proxy on
     PROXY=$(./velo-rapi --socket="$SOCKET" reg get HKCU/Software/Apps/PocketIE ProxyServer)
+    kill -TERM $EMULATOR
     wait $EMULATOR
     if [ "$PROXY" = 'string "10.0.2.4"' ] && ./headless "$ROM" --load="$OUT/setup.state" --serial=2 --seconds=6 2>&1 | grep -q "at 115200 baud"; then echo "ok   rapi_setup"; else echo "FAIL rapi_setup"; exit 1; fi
-    ./headless "$ROM" --seconds=100000 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
     LOADED=$(./velo-rapi --socket="$SOCKET" load tests/load/Test.load /Windows/LoadTest >/dev/null && {
@@ -111,7 +112,7 @@ multi "one|two|three"
     rm "$mount"/FRAG/gap*.bin
     rm -rf "$mount/.fseventsd" "$mount/.Spotlight-V100" "$mount/.Trashes"
     hdiutil detach -quiet "$mount"
-    ./headless "$ROM" --seconds=100000 --load="$OUT/desktop.state" --card="$OUT/frag.img" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --card="$OUT/frag.img" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
     ./velo-rapi --socket="$SOCKET" put "$OUT/large.bin" "/PC Card/FRAG/large.bin"

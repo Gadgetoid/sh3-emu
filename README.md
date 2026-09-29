@@ -176,6 +176,7 @@ Headless options:
 - `--type=SECONDS:TEXT` types text (US layout, `\n` for Enter).
 - `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key), `--user-agent=TEXT`.
 - `--rapi=SOCKET` makes the Velo's RAPI port available at SOCKET. A loaded state starts with the cable unplugged, so `--net` reconnects it.
+- `--realtime[=N]` holds the machine to N times real time (default 1). Unpaced, an idle Velo runs about 1000 times faster than real time, which outpaces anything driving it over RAPI; the tests use `--realtime=10`. SIGTERM or SIGINT ends the run early and still writes `--save`, `--pgm` and `--wav`.
 
 ## What's emulated
 

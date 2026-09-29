@@ -1,11 +1,35 @@
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "machine.h"
 #include "netgw.h"
 
 static void log_stderr(const char *message) { fputs(message, stderr); }
+
+static volatile sig_atomic_t stop_requested = 0;
+
+static void request_stop(int signal_number) {
+    (void)signal_number;
+    stop_requested = 1;
+}
+
+static double wall_seconds(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
+static void pace(machine_t *machine, double realtime, double wall_start, uint64_t cycles_start) {
+    if (realtime <= 0) return;
+    double due = wall_start + (double)(machine_cycles(machine) - cycles_start) / MACHINE_CLOCK_HZ / realtime;
+    double ahead = due - wall_seconds();
+    if (ahead <= 0) return;
+    struct timespec wait = { (time_t)ahead, (long)((ahead - (double)(time_t)ahead) * 1e9) };
+    nanosleep(&wait, NULL);
+}
 
 #define SCANCODE_SHIFT 0x51
 
@@ -66,7 +90,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -83,7 +107,7 @@ int main(int argc, char **argv) {
     int power_count = 0;
     double backlight_times[8];
     int backlight_count = 0;
-    double serial_at = -1, net_at = -1;
+    double serial_at = -1, net_at = -1, realtime = 0;
     netgw_t *gateway = NULL;
     netgw_options_t net_options = { NETGW_DEFAULT_USER_AGENT, NULL };
     double send_times[8];
@@ -100,6 +124,8 @@ int main(int argc, char **argv) {
         else if (!strncmp(argv[i], "--net=", 6)) net_at = atof(argv[i] + 6);
         else if (!strncmp(argv[i], "--user-agent=", 13)) net_options.user_agent = argv[i] + 13;
         else if (!strncmp(argv[i], "--rapi=", 7)) net_options.rapi_socket = argv[i] + 7;
+        else if (!strcmp(argv[i], "--realtime")) realtime = 1;
+        else if (!strncmp(argv[i], "--realtime=", 11)) realtime = atof(argv[i] + 11);
         else if (!strncmp(argv[i], "--type=", 7) && type_count < 16) {
             char *colon = strchr(argv[i] + 7, ':');
             if (colon) { type_times[type_count] = atof(argv[i] + 7); type_strings[type_count++] = colon + 1; }
@@ -143,9 +169,13 @@ int main(int argc, char **argv) {
     static int16_t audio[65536];
     if (wav_file) fseek(wav_file, 44, SEEK_SET);
 
+    signal(SIGTERM, request_stop);
+    signal(SIGINT, request_stop);
+    double wall_start = wall_seconds();
+    uint64_t cycles_start = machine_cycles(machine);
     uint64_t total = (uint64_t)(seconds * MACHINE_CLOCK_HZ);
     uint64_t slice = MACHINE_CLOCK_HZ / 10;
-    for (uint64_t done = 0; done < total && !machine_halted(machine); done += slice) {
+    for (uint64_t done = 0; done < total && !machine_halted(machine) && !stop_requested; done += slice) {
         for (int k = 0; k < key_count; k++) {
             uint64_t at = (uint64_t)(key_times[k] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
@@ -204,6 +234,7 @@ int main(int argc, char **argv) {
             uint64_t step = MACHINE_CLOCK_HZ / 100;
             for (uint64_t ran = 0; ran < slice; ran += step) {
                 machine_run(machine, step);
+                pace(machine, realtime, wall_start, cycles_start);
                 uint8_t buffer[4096];
                 size_t count;
                 while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) netgw_from_guest(gateway, buffer, count);
@@ -212,6 +243,7 @@ int main(int argc, char **argv) {
             }
         } else {
             machine_run(machine, slice);
+            pace(machine, realtime, wall_start, cycles_start);
         }
         {
             uint8_t tx[4096];
