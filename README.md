@@ -67,7 +67,7 @@ To install Python CE 1.0b1, copy `Python.exe` and `PYTHON15.DLL` from the card t
 
 ## Serial and networking
 
-Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator answers `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the Mac at 10.0.2.2 and DNS at 10.0.2.3. The connection icon appears in the taskbar and CE's sockets reach the Mac and the internet (outgoing only). For example, in Python CE:
+Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator answers `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the Mac at 10.0.2.2 and DNS at 10.0.2.3. The connection icon appears in the taskbar and CE's sockets reach the Mac and the internet (outgoing only). CE also connects to the desktop sync service at 10.0.2.2 port 5679; the emulator accepts and ignores it, since with the connection refused CE shows "Cannot start communications with the desktop computer" (Error 10061) after about five minutes. For example, in Python CE:
 
 ```
 import socket

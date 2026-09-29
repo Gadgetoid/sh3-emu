@@ -24,7 +24,9 @@ sh tools/mkcard.sh "$OUT/card.img" 8 tests/card/HELLO
 CARD="--card=$OUT/card.img --tap=4:30:25:0.08 --tap=4.12:30:25:0.08 --tap=7:262:65:0.08 --tap=7.12:262:65:0.08"
 check card_listing b92dd3e0c4dbf3472d5ebc40937767f061a626fca3209eed6682393c77530786 --seconds=10 --load="$OUT/desktop.state" $CARD
 if pkg-config --exists slirp; then
-    if ./headless "$ROM" --seconds=6 --load="$OUT/desktop.state" --net=1 2>&1 | grep -q "IPCP up"; then echo "ok   ppp_online"; else echo "FAIL ppp_online"; exit 1; fi
+    ./headless "$ROM" --seconds=10 --load="$OUT/desktop.state" --net=1 > "$OUT/ppp.log" 2>&1
+    if grep -q "IPCP up" "$OUT/ppp.log"; then echo "ok   ppp_online"; else echo "FAIL ppp_online"; exit 1; fi
+    if grep -q "desktop: connection" "$OUT/ppp.log"; then echo "ok   desktop_accepted"; else echo "FAIL desktop_accepted"; exit 1; fi
 fi
 if pkg-config --exists slirp libcurl; then
     PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')

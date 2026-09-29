@@ -2,6 +2,8 @@
 #include "webproxy.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -9,6 +11,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include <libslirp.h>
 
@@ -48,6 +53,8 @@
 #define ETH_IPV4   0x0800
 
 #define PROXY_PORT 8080
+#define DESKTOP_PORT 5679
+#define DESKTOP_CLIENTS 4
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
 static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
@@ -67,6 +74,9 @@ struct netgw {
     netgw_log_fn log;
     Slirp   *slirp;
     webproxy_t *proxy;
+    int      desktop_listener;
+    int      desktop_clients[DESKTOP_CLIENTS];
+    struct sockaddr_un desktop_address;
     bool     ppp;
     char     handshake[64];
     size_t   handshake_length;
@@ -442,6 +452,71 @@ static void start_proxy(netgw_t *gateway, const char *user_agent) {
 #endif
 }
 
+static void start_desktop(netgw_t *gateway) {
+    gateway->desktop_listener = -1;
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) gateway->desktop_clients[i] = -1;
+#if SLIRP_CHECK_VERSION(4, 7, 0)
+    struct sockaddr_un *address = &gateway->desktop_address;
+    address->sun_family = AF_UNIX;
+    const char *directory = getenv("TMPDIR");
+    if (!directory || !*directory) directory = "/tmp";
+    const char *separator = directory[strlen(directory) - 1] == '/' ? "" : "/";
+    int length = snprintf(address->sun_path, sizeof address->sun_path, "%s%svelo-desktop-%d.sock", directory, separator, (int)getpid());
+    if (length < 0 || (size_t)length >= sizeof address->sun_path) return;
+    unlink(address->sun_path);
+    int listener = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (listener < 0) return;
+    if (bind(listener, (struct sockaddr *)address, sizeof *address) != 0 || listen(listener, DESKTOP_CLIENTS) != 0) {
+        close(listener);
+        return;
+    }
+    fcntl(listener, F_SETFL, fcntl(listener, F_GETFL) | O_NONBLOCK);
+    struct in_addr host;
+    memcpy(&host, gateway_ip, sizeof host);
+    if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
+        close(listener);
+        unlink(address->sun_path);
+        return;
+    }
+    gateway->desktop_listener = listener;
+#endif
+}
+
+static void stop_desktop(netgw_t *gateway) {
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) {
+        if (gateway->desktop_clients[i] >= 0) close(gateway->desktop_clients[i]);
+    }
+    if (gateway->desktop_listener < 0) return;
+    close(gateway->desktop_listener);
+    unlink(gateway->desktop_address.sun_path);
+}
+
+static void poll_desktop(netgw_t *gateway) {
+    if (gateway->desktop_listener < 0) return;
+    int client;
+    while ((client = accept(gateway->desktop_listener, NULL, NULL)) >= 0) {
+        fcntl(client, F_SETFL, fcntl(client, F_GETFL) | O_NONBLOCK);
+        int slot = 0;
+        while (slot < DESKTOP_CLIENTS && gateway->desktop_clients[slot] >= 0) slot++;
+        if (slot == DESKTOP_CLIENTS) {
+            close(client);
+            continue;
+        }
+        gateway->desktop_clients[slot] = client;
+        gateway_log(gateway, "desktop: connection from the Velo\n");
+    }
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) {
+        if (gateway->desktop_clients[i] < 0) continue;
+        uint8_t discard[512];
+        ssize_t got;
+        while ((got = read(gateway->desktop_clients[i], discard, sizeof discard)) > 0) continue;
+        if (got == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            close(gateway->desktop_clients[i]);
+            gateway->desktop_clients[i] = -1;
+        }
+    }
+}
+
 netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) {
     signal(SIGPIPE, SIG_IGN);
     netgw_t *gateway = calloc(1, sizeof *gateway);
@@ -459,6 +534,7 @@ netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) {
     config.if_mru = 1500;
     gateway->slirp = slirp_new(&config, &callbacks, gateway);
     start_proxy(gateway, user_agent);
+    start_desktop(gateway);
     netgw_reset(gateway);
     return gateway;
 }
@@ -467,6 +543,7 @@ void netgw_destroy(netgw_t *gateway) {
     if (!gateway) return;
     slirp_cleanup(gateway->slirp);
     webproxy_stop(gateway->proxy);
+    stop_desktop(gateway);
     free(gateway);
 }
 
@@ -566,6 +643,7 @@ void netgw_poll(netgw_t *gateway) {
         send_arp(gateway, gateway->arp_mac, 2, gateway->arp_mac, gateway->arp_ip);
     }
     webproxy_poll(gateway->proxy);
+    poll_desktop(gateway);
     int64_t now_ms = slirp_clock_ns(gateway) / 1000000;
     for (int i = 0; i < MAX_TIMERS; i++) {
         netgw_timer_t *timer = &gateway->timers[i];
