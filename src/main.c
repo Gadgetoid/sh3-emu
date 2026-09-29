@@ -415,8 +415,9 @@ int main(int argc, char **argv) {
     uint64_t serial_reconnect_at = 0;
     serial_mode_t serial_reconnect_mode = SERIAL_OFF;
     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
-    if (serial_mode != SERIAL_OFF) serial_reconnect_at = 0;
-    if (serial_mode != SERIAL_OFF) {
+    if (serial_mode != SERIAL_OFF && serial_reconnect_at) {
+        serial_reconnect_mode = serial_mode;
+    } else if (serial_mode != SERIAL_OFF) {
         const char *result = serial_open(&serial, machine, serial_mode);
         if (!notice) { notice = result; notice_left = NOTICE_SECONDS * 2; }
     }
