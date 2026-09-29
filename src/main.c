@@ -100,6 +100,7 @@ typedef struct {
     int      pty;
     int      pty_slave;
     char     pty_name[128];
+    const char *user_agent;
 } serial_t;
 
 static void serial_log(const char *message) {
@@ -120,7 +121,7 @@ static void serial_close(serial_t *serial, machine_t *machine) {
 static const char *serial_open(serial_t *serial, machine_t *machine, serial_mode_t mode) {
     serial_close(serial, machine);
     if (mode == SERIAL_NETWORK) {
-        serial->gateway = netgw_create(serial_log);
+        serial->gateway = netgw_create(serial_log, serial->user_agent);
         if (!serial->gateway) return "built without libslirp";
     } else if (mode == SERIAL_PTY) {
         int fd = posix_openpt(O_RDWR | O_NOCTTY);
@@ -198,6 +199,7 @@ static void state_path(char *path, size_t size) {
 typedef struct {
     uint32_t memory;
     uint32_t speed;
+    char     user_agent[256];
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -210,16 +212,20 @@ static void settings_path(char *path, size_t size) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1 };
+    settings_t settings = { 4, 1, NETGW_DEFAULT_USER_AGENT };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
     if (!file) return settings;
-    char line[256];
+    char line[512];
     unsigned value;
     while (fgets(line, sizeof line, file)) {
         if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
+        else if (!strncmp(line, "user_agent=", 11)) {
+            line[strcspn(line, "\r\n")] = 0;
+            snprintf(settings.user_agent, sizeof settings.user_agent, "%s", line + 11);
+        }
     }
     fclose(file);
     return settings;
@@ -230,7 +236,7 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\n", settings->memory, settings->speed);
+    fprintf(file, "memory=%u\nspeed=%u\nuser_agent=%s\n", settings->memory, settings->speed, settings->user_agent);
     fclose(file);
 }
 
@@ -274,6 +280,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--memory=", 9)) { settings.memory = (uint32_t)atoi(argv[i] + 9); continue; }
         if (!strncmp(argv[i], "--speed=", 8)) { settings.speed = (uint32_t)atoi(argv[i] + 8); continue; }
+        if (!strncmp(argv[i], "--user-agent=", 13)) { snprintf(settings.user_agent, sizeof settings.user_agent, "%s", argv[i] + 13); continue; }
         if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
         if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
         if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
@@ -284,7 +291,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -365,7 +372,7 @@ int main(int argc, char **argv) {
     uint64_t power_release_at = 0, backlight_release_at = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
-    serial_t serial = { SERIAL_OFF, NULL, -1, -1, "" };
+    serial_t serial = { SERIAL_OFF, NULL, -1, -1, "", settings.user_agent };
     uint64_t serial_reconnect_at = 0;
     serial_mode_t serial_reconnect_mode = SERIAL_OFF;
     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);

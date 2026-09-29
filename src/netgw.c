@@ -1,4 +1,5 @@
 #include "netgw.h"
+#include "webproxy.h"
 
 #include <arpa/inet.h>
 #include <poll.h>
@@ -45,9 +46,12 @@
 #define ETH_ARP    0x0806
 #define ETH_IPV4   0x0800
 
+#define PROXY_PORT 8080
+
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
 static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
 static const uint8_t dns_ip[4] = { 10, 0, 2, 3 };
+static const char proxy_address[] = "10.0.2.4";
 static const uint8_t guest_mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
 static const uint8_t gateway_mac[6] = { 0x52, 0x55, 0x0A, 0x00, 0x02, 0x02 };
 
@@ -61,6 +65,7 @@ typedef struct {
 struct netgw {
     netgw_log_fn log;
     Slirp   *slirp;
+    webproxy_t *proxy;
     bool     ppp;
     char     handshake[64];
     size_t   handshake_length;
@@ -418,7 +423,25 @@ static const SlirpCb callbacks = {
     .unregister_poll_socket = slirp_unregister_socket,
 };
 
-netgw_t *netgw_create(netgw_log_fn log) {
+static void start_proxy(netgw_t *gateway, const char *user_agent) {
+#if SLIRP_CHECK_VERSION(4, 7, 0)
+    gateway->proxy = webproxy_start(gateway->log, user_agent);
+    if (!gateway->proxy) return;
+    struct in_addr address;
+    inet_pton(AF_INET, proxy_address, &address);
+    if (slirp_add_unix(gateway->slirp, webproxy_socket_path(gateway->proxy), &address, PROXY_PORT) < 0) {
+        webproxy_stop(gateway->proxy);
+        gateway->proxy = NULL;
+        return;
+    }
+    gateway_log(gateway, "proxy: web proxy at %s:%d\n", proxy_address, PROXY_PORT);
+#else
+    (void)gateway;
+    (void)user_agent;
+#endif
+}
+
+netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) {
     netgw_t *gateway = calloc(1, sizeof *gateway);
     gateway->log = log;
     SlirpConfig config = { 0 };
@@ -433,6 +456,7 @@ netgw_t *netgw_create(netgw_log_fn log) {
     config.if_mtu = 1500;
     config.if_mru = 1500;
     gateway->slirp = slirp_new(&config, &callbacks, gateway);
+    start_proxy(gateway, user_agent);
     netgw_reset(gateway);
     return gateway;
 }
@@ -440,6 +464,7 @@ netgw_t *netgw_create(netgw_log_fn log) {
 void netgw_destroy(netgw_t *gateway) {
     if (!gateway) return;
     slirp_cleanup(gateway->slirp);
+    webproxy_stop(gateway->proxy);
     free(gateway);
 }
 
@@ -538,6 +563,7 @@ void netgw_poll(netgw_t *gateway) {
         gateway->arp_pending = false;
         send_arp(gateway, gateway->arp_mac, 2, gateway->arp_mac, gateway->arp_ip);
     }
+    webproxy_poll(gateway->proxy);
     int64_t now_ms = slirp_clock_ns(gateway) / 1000000;
     for (int i = 0; i < MAX_TIMERS; i++) {
         netgw_timer_t *timer = &gateway->timers[i];

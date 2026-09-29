@@ -15,7 +15,7 @@ brew install sdl3 libslirp
 make
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting and a page through it in Pocket IE; backlight key
 ```
 
 ## Use
@@ -81,13 +81,28 @@ Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its p
 
 Without libslirp the build still works, with no Network (PPP) option.
 
+### Web proxy
+
+Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. In Pocket IE, View > Options > Proxy Server: tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter (the setting is kept in the saved state). Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
+
+For `http://` addresses without a port it tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
+
+- rewrites `https://` links and redirects to `http://`, so they come back through the proxy
+- removes `<script>`, `<style>`, `<svg>` and comments, which Pocket IE would show as text
+- converts UTF-8 text to Windows-1252 and drops the charset
+- drops `Secure` from cookies and maps 303, 307 and 308 redirects to 301 and 302
+
+It sends a Lynx user agent upstream in place of Pocket IE's `Mozilla/1.1 (compatible; MSPIE 1.1; Windows CE)`, which some sites block (Cloudflare error 1010). Sites generally serve text browsers their simplest pages, such as Google's basic HTML results. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT` (also in headless); an empty value passes Pocket IE's own through.
+
+Through the proxy, `127.0.0.1` is the Mac's loopback. It needs libcurl (part of macOS).
+
 ## Memory and speed
 
 Memory sets the RAM for the next cold boot (Run > Reset, which clears the machine) or `--memory=`. CE sizes the built-in RAM at boot and uses at most 16 MB of it. Beyond that, 20 MB and 32 MB add a 16 MB DRAM Miniature Card in slot 1, the Velo's own memory expansion: CE reads its ID EEPROM and maps it as a second RAM region, reporting 20,348 KB and 32,636 KB, split between storage and programs in Control Panel > System > Memory. A saved machine keeps the memory it was booted with (a 32 MB save is about 33 MB).
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
 
-Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/velo-emu/emu.ini`).
+Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/velo-emu/emu.ini`), with `user_agent=`.
 
 ## Saved state
 
@@ -104,7 +119,7 @@ Headless options:
 - `--card=IMAGE` inserts a card image, after `--load`.
 - `--net=SECONDS` connects COM1 to the PPP gateway. `--serial=SECONDS` connects a bare cable, and `--serial-send=SECONDS:TEXT` sends bytes. Anything CE transmits is printed.
 - `--type=SECONDS:TEXT` types text (US layout, `\n` for Enter).
-- `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key).
+- `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key), `--user-agent=TEXT`.
 
 ## What's emulated
 

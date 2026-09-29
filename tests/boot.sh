@@ -26,6 +26,17 @@ check card_listing b92dd3e0c4dbf3472d5ebc40937767f061a626fca3209eed6682393c77530
 if pkg-config --exists slirp; then
     if ./headless "$ROM" --seconds=6 --load="$OUT/desktop.state" --net=1 2>&1 | grep -q "IPCP up"; then echo "ok   ppp_online"; else echo "FAIL ppp_online"; exit 1; fi
 fi
+if pkg-config --exists slirp libcurl; then
+    PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    python3 -m http.server "$PORT" --bind 127.0.0.1 --directory tests/web >/dev/null 2>&1 &
+    SERVER=$!
+    trap 'kill $SERVER 2>/dev/null' EXIT
+    sleep 1
+    PAGE=$(./proxycheck "http://127.0.0.1:$PORT/page.html" 2>/dev/null | iconv -f WINDOWS-1252 -t UTF-8)
+    if echo "$PAGE" | grep -q 'Café “quoted” — dash</p><a href="http://example.com/next">next</a></body>' && ! echo "$PAGE" | grep -qiE 'script|style|svg|hidden'; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; exit 1; fi
+    IE="--tap=2:112:20:0.08 --tap=2.12:112:20:0.08 --tap=6:97:14:0.1 --tap=7:110:151:0.1 --tap=8.5:298:43:0.1 --tap=9.5:120:107:0.1 --tap=10.2:210:171:0.1 --type=10.6:10.0.2.4 --tap=11.5:365:171:0.1 --key=12:39 --key=12.2:39 --key=12.4:39 --type=12.8:8080 --key=14:4B --net=15 --tap=22:16:14:0.1 --tap=23:36:49:0.1"
+    check proxy_browse 9c5af91bed6b16480a9e586f011716f6c68b3d9163eb8d0e338d10b7d08f1ca7 --seconds=40 --load="$OUT/desktop.state" $IE "--type=24:http://127.0.0.1:$PORT/page.html\\n"
+fi
 if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   backlight_button"; else echo "FAIL backlight_button"; exit 1; fi
 SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
 check memory_16mb 151d7d109bd5e68c370edf0069c58225c69d0f9bbd9c97016820b08c64ebdea5 --memory=16 --seconds=56 $CALIBRATE $WIZARD $SYSINFO

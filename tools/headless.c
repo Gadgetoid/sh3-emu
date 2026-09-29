@@ -66,7 +66,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -85,6 +85,7 @@ int main(int argc, char **argv) {
     int backlight_count = 0;
     double serial_at = -1, net_at = -1;
     netgw_t *gateway = NULL;
+    const char *user_agent = NETGW_DEFAULT_USER_AGENT;
     double send_times[8];
     const char *send_text[8];
     int send_count = 0;
@@ -97,6 +98,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--trace-pc")) trace_pc = true;
         else if (!strncmp(argv[i], "--serial=", 9)) serial_at = atof(argv[i] + 9);
         else if (!strncmp(argv[i], "--net=", 6)) net_at = atof(argv[i] + 6);
+        else if (!strncmp(argv[i], "--user-agent=", 13)) user_agent = argv[i] + 13;
         else if (!strncmp(argv[i], "--type=", 7) && type_count < 16) {
             char *colon = strchr(argv[i] + 7, ':');
             if (colon) { type_times[type_count] = atof(argv[i] + 7); type_strings[type_count++] = colon + 1; }
@@ -159,7 +161,7 @@ int main(int argc, char **argv) {
             }
         }
         if (net_at >= 0 && !gateway && (uint64_t)(net_at * MACHINE_CLOCK_HZ) < done + slice) {
-            gateway = netgw_create(log_stderr);
+            gateway = netgw_create(log_stderr, user_agent);
             machine_serial_connect(machine, true);
         }
         if (serial_at >= 0 && (uint64_t)(serial_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(serial_at * MACHINE_CLOCK_HZ) < done + slice) machine_serial_connect(machine, true);

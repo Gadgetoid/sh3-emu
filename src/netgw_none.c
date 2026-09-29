@@ -2,7 +2,7 @@
 
 #include <stddef.h>
 
-netgw_t *netgw_create(netgw_log_fn log) { (void)log; return NULL; }
+netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) { (void)log; (void)user_agent; return NULL; }
 void     netgw_destroy(netgw_t *gateway) { (void)gateway; }
 void     netgw_reset(netgw_t *gateway) { (void)gateway; }
 void     netgw_from_guest(netgw_t *gateway, const uint8_t *data, size_t length) { (void)gateway; (void)data; (void)length; }
