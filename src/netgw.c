@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -442,6 +443,7 @@ static void start_proxy(netgw_t *gateway, const char *user_agent) {
 }
 
 netgw_t *netgw_create(netgw_log_fn log, const char *user_agent) {
+    signal(SIGPIPE, SIG_IGN);
     netgw_t *gateway = calloc(1, sizeof *gateway);
     gateway->log = log;
     SlirpConfig config = { 0 };

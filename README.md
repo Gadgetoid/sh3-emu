@@ -85,7 +85,7 @@ Without libslirp the build still works, with no Network (PPP) option.
 
 Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. In Pocket IE, View > Options > Proxy Server: tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter (the setting is kept in the saved state). Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
 
-For `http://` addresses without a port it tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
+Type addresses as `http://`: Pocket IE makes `https://` connections itself, not through the proxy, and they fail. For `http://` addresses without a port the proxy tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
 
 - rewrites `https://` links and redirects to `http://`, so they come back through the proxy
 - removes `<script>`, `<style>`, `<svg>` and comments, which Pocket IE would show as text
