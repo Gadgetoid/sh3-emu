@@ -134,6 +134,7 @@ int main(int argc, char **argv) {
         else if (!strncmp(argv[i], "--speed=", 8)) machine_set_speed(machine, (uint32_t)atoi(argv[i] + 8));
     }
     if (load && !machine_load(machine, load, NULL)) { fprintf(stderr, "cannot load state %s\n", load); return 1; }
+    if (load) machine_serial_connect(machine, false);
     if (card && !machine_insert_card(machine, card)) { fprintf(stderr, "cannot open card image %s\n", card); return 1; }
 
     FILE *wav_file = wav ? fopen(wav, "wb") : NULL;

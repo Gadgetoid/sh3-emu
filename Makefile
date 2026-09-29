@@ -37,7 +37,7 @@ SRC_NET  = src/netgw_none.c
 endif
 
 SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c
-SRC_RAPI    = src/rapi.c src/rapisync.c
+SRC_RAPI    = src/rapi.c src/rapisetup.c src/rapisync.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))

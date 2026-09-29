@@ -20,6 +20,13 @@
 #define COMMAND_CREATE_PROCESS     0x19
 #define COMMAND_MOVE_FILE          0x1A
 #define COMMAND_DELETE_FILE        0x1C
+#define COMMAND_REG_OPEN_KEY       0x1E
+#define COMMAND_REG_ENUM_KEY       0x1F
+#define COMMAND_REG_CREATE_KEY     0x20
+#define COMMAND_REG_CLOSE_KEY      0x21
+#define COMMAND_REG_ENUM_VALUE     0x23
+#define COMMAND_REG_QUERY_VALUE    0x26
+#define COMMAND_REG_SET_VALUE      0x27
 #define COMMAND_GET_STORE_INFO     0x29
 #define COMMAND_GET_VERSION        0x3B
 
@@ -34,6 +41,7 @@
 #define OPEN_EXISTING  3
 #define ATTRIBUTE_NORMAL 0x80
 #define INVALID_HANDLE 0xFFFFFFFFu
+#define ERROR_NO_MORE_ITEMS 259
 
 #define CHUNK_SIZE      8192
 #define REPLY_MAX       (4 * 1024 * 1024)
@@ -416,6 +424,135 @@ bool rapi_run(rapi_t *rapi, const char *program, const char *arguments) {
     for (int i = 0; i < 7; i++) message_u32(&message, 0);
     if (!message_optional_out(&message, 16) || !call_result(rapi, &message, &last_error, &result)) return false;
     return result ? true : ce_failed(rapi, "run", program, last_error);
+}
+
+static bool reply_optional(rapi_t *rapi, const uint8_t **data, uint32_t *size) {
+    uint32_t present, has_value = 0;
+    *data = NULL;
+    *size = 0;
+    if (!reply_u32(rapi, &present)) return false;
+    if (present != 1) return true;
+    if (!reply_u32(rapi, size) || !reply_u32(rapi, &has_value)) return false;
+    if (has_value != 1) return true;
+    *data = reply_bytes(rapi, *size);
+    return *data != NULL;
+}
+
+static uint32_t decode_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static bool message_optional_u32(message_t *message, uint32_t value) {
+    return message_u32(message, 1) && message_u32(message, 4) && message_u32(message, 1) && message_u32(message, value);
+}
+
+static bool reg_failed(rapi_t *rapi, const char *what, const char *name, uint32_t code) {
+    set_error(rapi, "registry %s %s: %s (%u)", what, name, error_name(code), code);
+    return false;
+}
+
+bool rapi_reg_open(rapi_t *rapi, uint32_t parent, const char *subkey, bool create, uint32_t *key) {
+    message_t message = { 0 };
+    uint32_t last_error, result;
+    if (!message_begin(&message, create ? COMMAND_REG_CREATE_KEY : COMMAND_REG_OPEN_KEY) || !message_u32(&message, parent) ||
+        !message_string(&message, subkey) || (create && !message_string(&message, ""))) return false;
+    if (!call_result(rapi, &message, &last_error, &result)) return false;
+    if (result != 0) return reg_failed(rapi, create ? "create" : "open", subkey, result);
+    return reply_u32(rapi, key);
+}
+
+bool rapi_reg_close(rapi_t *rapi, uint32_t key) {
+    message_t message = { 0 };
+    uint32_t last_error, result;
+    return message_begin(&message, COMMAND_REG_CLOSE_KEY) && message_u32(&message, key) &&
+           call_result(rapi, &message, &last_error, &result) && result == 0;
+}
+
+bool rapi_reg_subkey(rapi_t *rapi, uint32_t key, uint32_t index, char *name, size_t size, bool *found) {
+    message_t message = { 0 };
+    uint32_t last_error, result, units = RAPI_NAME_MAX / 3;
+    *found = false;
+    if (!message_begin(&message, COMMAND_REG_ENUM_KEY) || !message_u32(&message, key) || !message_u32(&message, index) ||
+        !message_optional_out(&message, units * 2) || !message_optional_u32(&message, units) || !message_u32(&message, 0) ||
+        !message_u32(&message, 0) || !message_u32(&message, 0) || !message_u32(&message, 0)) return false;
+    if (!call_result(rapi, &message, &last_error, &result)) return false;
+    if (result == ERROR_NO_MORE_ITEMS) return true;
+    if (result != 0) return reg_failed(rapi, "list", "", result);
+    const uint8_t *data;
+    uint32_t length;
+    if (!reply_optional(rapi, &data, &length)) return false;
+    utf16_to_utf8(data ? data : (const uint8_t *)"\0\0", data ? length / 2 : 1, name, size);
+    *found = true;
+    return true;
+}
+
+bool rapi_reg_value(rapi_t *rapi, uint32_t key, uint32_t index, char *name, size_t size, uint32_t *type, uint8_t *data, uint32_t *length, bool *found) {
+    message_t message = { 0 };
+    uint32_t last_error, result, units = RAPI_NAME_MAX / 3;
+    *found = false;
+    if (!message_begin(&message, COMMAND_REG_ENUM_VALUE) || !message_u32(&message, key) || !message_u32(&message, index) ||
+        !message_optional_out(&message, units * 2) || !message_optional_u32(&message, units) || !message_u32(&message, 0) ||
+        !message_optional_out(&message, 4) || !message_optional_out(&message, RAPI_REG_DATA_MAX) ||
+        !message_optional_u32(&message, RAPI_REG_DATA_MAX)) return false;
+    if (!call_result(rapi, &message, &last_error, &result)) return false;
+    if (result == ERROR_NO_MORE_ITEMS) return true;
+    if (result != 0) return reg_failed(rapi, "list", "", result);
+    const uint8_t *name_data, *type_data, *value_data, *size_data;
+    uint32_t name_length, type_length, value_length, size_length;
+    if (!reply_optional(rapi, &name_data, &name_length) || !reply_optional(rapi, &size_data, &size_length) ||
+        !reply_optional(rapi, &type_data, &type_length) || !reply_optional(rapi, &value_data, &value_length) ||
+        !reply_optional(rapi, &size_data, &size_length)) return false;
+    utf16_to_utf8(name_data ? name_data : (const uint8_t *)"\0\0", name_data ? name_length / 2 : 1, name, size);
+    *type = type_data && type_length >= 4 ? decode_u32(type_data) : 0;
+    uint32_t actual = size_data && size_length >= 4 ? decode_u32(size_data) : value_length;
+    if (actual > value_length) actual = value_length;
+    if (actual > RAPI_REG_DATA_MAX) actual = RAPI_REG_DATA_MAX;
+    if (value_data) memcpy(data, value_data, actual);
+    *length = value_data ? actual : 0;
+    *found = true;
+    return true;
+}
+
+bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, uint8_t *data, uint32_t *length) {
+    message_t message = { 0 };
+    uint32_t last_error, result;
+    if (!message_begin(&message, COMMAND_REG_QUERY_VALUE) || !message_u32(&message, key) || !message_optional_string(&message, name) ||
+        !message_u32(&message, 0) || !message_optional_out(&message, 4) || !message_optional_out(&message, RAPI_REG_DATA_MAX) ||
+        !message_optional_u32(&message, RAPI_REG_DATA_MAX)) return false;
+    if (!call_result(rapi, &message, &last_error, &result)) return false;
+    if (result != 0) return reg_failed(rapi, "read", name, result);
+    const uint8_t *type_data, *value_data, *size_data;
+    uint32_t type_length, value_length, size_length;
+    if (!reply_optional(rapi, &type_data, &type_length) || !reply_optional(rapi, &value_data, &value_length) ||
+        !reply_optional(rapi, &size_data, &size_length)) return false;
+    *type = type_data && type_length >= 4 ? decode_u32(type_data) : 0;
+    uint32_t actual = size_data && size_length >= 4 ? decode_u32(size_data) : value_length;
+    if (actual > value_length) actual = value_length;
+    if (value_data) memcpy(data, value_data, actual);
+    *length = value_data ? actual : 0;
+    return true;
+}
+
+bool rapi_reg_set(rapi_t *rapi, uint32_t key, const char *name, uint32_t type, const uint8_t *data, uint32_t length) {
+    message_t message = { 0 };
+    uint32_t last_error, result;
+    if (!message_begin(&message, COMMAND_REG_SET_VALUE) || !message_u32(&message, key) || !message_optional_string(&message, name) ||
+        !message_u32(&message, type) || !message_u32(&message, 1) || !message_u32(&message, length) || !message_u32(&message, 1) ||
+        !message_bytes(&message, data, length) || !message_u32(&message, length)) return false;
+    if (!call_result(rapi, &message, &last_error, &result)) return false;
+    return result == 0 ? true : reg_failed(rapi, "write", name, result);
+}
+
+void rapi_reg_text(const uint8_t *data, uint32_t length, char *out, size_t size) {
+    utf16_to_utf8(data, length / 2, out, size);
+}
+
+uint32_t rapi_reg_encode(const char *text, uint8_t *out, size_t size) {
+    uint8_t bytes[RAPI_NAME_MAX * 2];
+    size_t length = encode_utf16(text, bytes) * 2;
+    if (length > size) length = size;
+    memcpy(out, bytes, length);
+    return (uint32_t)length;
 }
 
 static bool open_file(rapi_t *rapi, const char *path, bool write, uint32_t *handle) {

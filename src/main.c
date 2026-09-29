@@ -548,6 +548,15 @@ int main(int argc, char **argv) {
             case MENU_SYNC_NOW:
                 desktop_sync(desktop, settings.shared_folder);
                 break;
+            case MENU_SET_PROXY:
+                desktop_set_proxy(desktop);
+                break;
+            case MENU_BAUD_19200:
+            case MENU_BAUD_38400:
+            case MENU_BAUD_57600:
+            case MENU_BAUD_115200:
+                desktop_set_baud(desktop, item == MENU_BAUD_19200 ? 19200 : item == MENU_BAUD_38400 ? 38400 : item == MENU_BAUD_57600 ? 57600 : 115200);
+                break;
             case MENU_STOP_SHARING:
                 snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", leaf_name(settings.shared_folder));
                 settings.shared_folder[0] = 0;
@@ -590,6 +599,11 @@ int main(int argc, char **argv) {
         if (serial.gateway && netgw_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) {
             desktop_sync(desktop, settings.shared_folder);
         }
+        if (desktop_take_reconnect(desktop) && serial.mode == SERIAL_NETWORK) {
+            serial_open(&serial, machine, SERIAL_OFF);
+            serial_reconnect_mode = SERIAL_NETWORK;
+            serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
+        }
         if (desktop_take_status(desktop, desktop_notice, sizeof desktop_notice)) {
             notice = desktop_notice;
             notice_left = NOTICE_SECONDS * 2;
@@ -600,6 +614,8 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_FETCH_DOCUMENTS, desktop_free);
         menu_set_enabled(MENU_SYNC_NOW, desktop_free && settings.shared_folder[0]);
         menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
+        menu_set_enabled(MENU_SET_PROXY, desktop_free);
+        for (int baud_item = MENU_BAUD_19200; baud_item <= MENU_BAUD_115200; baud_item++) menu_set_enabled(baud_item, desktop_free);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
         menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);

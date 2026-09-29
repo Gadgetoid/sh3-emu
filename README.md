@@ -15,7 +15,7 @@ brew install sdl3 libslirp
 make         # velo and velo-rapi
 make run
 make headless
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting and a page through it in Pocket IE; a file round trip and a folder sync over RAPI; backlight key
+make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting and a page through it in Pocket IE; a file round trip, a folder sync and the proxy and 115200 setup over RAPI; backlight key
 ```
 
 ## Use
@@ -48,6 +48,8 @@ Menus:
 | Desktop | Send Files to Velo… (into \My Documents) | |
 | Desktop | Copy My Documents to Mac… | |
 | Desktop | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |
+| Desktop | Set Up Pocket IE Proxy | |
+| Desktop | Desktop Connection Speed: 19200 (original), 38400, 57600, 115200 | |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
 | Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB, 20 MB (4 MB + 16 MB DRAM card), 32 MB (16 MB + 16 MB DRAM card) | |
@@ -105,19 +107,13 @@ The Desktop menu uses it:
 ./velo-rapi sync ~/Velo
 ```
 
-Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. It also has `rm`, `mkdir`, `rmdir` and `mv`. `--socket=PATH` picks another socket, for headless runs with `--rapi=PATH`.
+Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. It also has `rm`, `mkdir`, `rmdir`, `mv`, `proxy on|off`, `baud RATE`, and `reg ls|dump|get|set` for the registry (keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`, for example `./velo-rapi reg dump HKCU/Software/Apps/PocketIE`). `--socket=PATH` picks another socket, for headless runs with `--rapi=PATH`.
 
-CE's desktop connection runs at 19200 baud, about 1.6 KB/s. For more, make a faster connection on the Velo:
-
-1. In Start > Programs > Communication > Remote Networking, open Make New Connection, name it, choose Direct Connection and Next.
-2. Configure…: Baud Rate 115200, OK, then Finish.
-3. In Control Panel > Communications > PC Connection, Change…, pick the new connection, OK, and OK.
-
-The emulated CPU then sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x (8x is no faster).
+CE's desktop connection runs at 19200 baud, about 1.6 KB/s. Desktop > Desktop Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. 19200 goes back to CE's own. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x (8x is no faster).
 
 ### Web proxy
 
-Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. In Pocket IE, View > Options > Proxy Server: tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter (the setting is kept in the saved state). Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
+Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. Desktop > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter. Either way it's kept in the saved state. Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
 
 Type addresses as `http://`: Pocket IE makes `https://` connections itself, not through the proxy, and they fail. For `http://` addresses without a port the proxy tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
 
@@ -154,6 +150,7 @@ Headless options:
 - `--net=SECONDS` connects COM1 to the PPP gateway. `--serial=SECONDS` connects a bare cable, and `--serial-send=SECONDS:TEXT` sends bytes. Anything CE transmits is printed.
 - `--type=SECONDS:TEXT` types text (US layout, `\n` for Enter).
 - `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key), `--user-agent=TEXT`.
+- `--rapi=SOCKET` makes the Velo's RAPI port available at SOCKET. A loaded state starts with the cable unplugged, so `--net` reconnects it.
 
 ## What's emulated
 

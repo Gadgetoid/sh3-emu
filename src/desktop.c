@@ -1,5 +1,6 @@
 #include "desktop.h"
 #include "rapi.h"
+#include "rapisetup.h"
 #include "rapisync.h"
 
 #include <pthread.h>
@@ -14,13 +15,14 @@
 #define CONNECT_ATTEMPTS 10
 #define PATH_SIZE        1024
 
-typedef enum { JOB_SEND, JOB_FETCH, JOB_SYNC } job_kind_t;
+typedef enum { JOB_SEND, JOB_FETCH, JOB_SYNC, JOB_PROXY, JOB_BAUD } job_kind_t;
 
 struct desktop {
     char            socket_path[PATH_SIZE];
     char            manifest_path[PATH_SIZE];
     pthread_mutex_t lock;
-    bool            busy, status_changed;
+    bool            busy, status_changed, reconnect;
+    unsigned        baud;
     char            status[256];
     job_kind_t      kind;
     char          **files;
@@ -134,12 +136,30 @@ static void run_sync(desktop_t *desktop, rapi_t *rapi) {
                     result.skipped ? ", some skipped" : "");
 }
 
+static void run_proxy(desktop_t *desktop, rapi_t *rapi) {
+    if (rapisetup_proxy(rapi, true)) set_status(desktop, "Pocket IE uses the web proxy from its next start");
+    else set_status(desktop, "%s", rapi_error(rapi));
+}
+
+static void run_baud(desktop_t *desktop, rapi_t *rapi) {
+    if (!rapisetup_connection(rapi, desktop->baud)) {
+        set_status(desktop, "%s", rapi_error(rapi));
+        return;
+    }
+    set_status(desktop, "desktop connection set to %u baud, reconnecting", desktop->baud);
+    pthread_mutex_lock(&desktop->lock);
+    desktop->reconnect = true;
+    pthread_mutex_unlock(&desktop->lock);
+}
+
 static void *job_thread(void *opaque) {
     desktop_t *desktop = opaque;
     rapi_t *rapi = connect_velo(desktop);
     if (rapi) {
         if (desktop->kind == JOB_SEND) run_send(desktop, rapi);
         else if (desktop->kind == JOB_FETCH) run_fetch(desktop, rapi);
+        else if (desktop->kind == JOB_PROXY) run_proxy(desktop, rapi);
+        else if (desktop->kind == JOB_BAUD) run_baud(desktop, rapi);
         else run_sync(desktop, rapi);
         rapi_disconnect(rapi);
     }
@@ -230,4 +250,25 @@ bool desktop_sync(desktop_t *desktop, const char *folder) {
     desktop->kind = JOB_SYNC;
     snprintf(desktop->folder, sizeof desktop->folder, "%s", folder);
     return start(desktop);
+}
+
+bool desktop_set_proxy(desktop_t *desktop) {
+    if (!claim(desktop)) return false;
+    desktop->kind = JOB_PROXY;
+    return start(desktop);
+}
+
+bool desktop_set_baud(desktop_t *desktop, unsigned baud) {
+    if (!claim(desktop)) return false;
+    desktop->kind = JOB_BAUD;
+    desktop->baud = baud;
+    return start(desktop);
+}
+
+bool desktop_take_reconnect(desktop_t *desktop) {
+    pthread_mutex_lock(&desktop->lock);
+    bool reconnect = desktop->reconnect;
+    desktop->reconnect = false;
+    pthread_mutex_unlock(&desktop->lock);
+    return reconnect;
 }
