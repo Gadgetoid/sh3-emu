@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "keytext.h"
 #include "machine.h"
 #include "netgw.h"
 
@@ -31,39 +32,19 @@ static void pace(machine_t *machine, double realtime, double wall_start, uint64_
     nanosleep(&wait, NULL);
 }
 
-#define SCANCODE_SHIFT 0x51
-
-typedef struct { char plain, shifted; uint8_t scancode; } key_char_t;
-
-static const key_char_t key_chars[] = {
-    { 'a', 'A', 0x14 }, { 'b', 'B', 0x2B }, { 'c', 'C', 0x2A }, { 'd', 'D', 0x2C }, { 'e', 'E', 0x28 },
-    { 'f', 'F', 0x34 }, { 'g', 'G', 0x38 }, { 'h', 'H', 0x40 }, { 'i', 'I', 0x45 }, { 'j', 'J', 0x3C },
-    { 'k', 'K', 0x44 }, { 'l', 'L', 0x36 }, { 'm', 'M', 0x3B }, { 'n', 'N', 0x33 }, { 'o', 'O', 0x3E },
-    { 'p', 'P', 0x4D }, { 'q', 'Q', 0x26 }, { 'r', 'R', 0x30 }, { 's', 'S', 0x24 }, { 't', 'T', 0x2D },
-    { 'u', 'U', 0x3D }, { 'v', 'V', 0x23 }, { 'w', 'W', 0x18 }, { 'x', 'X', 0x22 }, { 'y', 'Y', 0x35 },
-    { 'z', 'Z', 0x12 },
-    { '0', ')', 0x47 }, { '1', '!', 0x13 }, { '2', '@', 0x16 }, { '3', '#', 0x15 }, { '4', '$', 0x25 },
-    { '5', '%', 0x17 }, { '6', '^', 0x27 }, { '7', '&', 0x2F }, { '8', '*', 0x37 }, { '9', '(', 0x3F },
-    { ' ', 0, 0x21 }, { ';', ':', 0x4C }, { '=', '+', 0x4F }, { ',', '<', 0x43 }, { '-', '_', 0x4E },
-    { '.', '>', 0x3A }, { '/', '?', 0x42 }, { '`', '~', 0x31 }, { '[', '{', 0x48 }, { '\\', '|', 0x50 },
-    { ']', '}', 0x46 }, { '\'', '"', 0x2E }, { '\n', 0, 0x4B },
-};
-
 static void type_text(machine_t *machine, const char *text) {
     for (const char *c = text; *c; c++) {
         char ch = *c;
         if (ch == '\\' && c[1] == 'n') { ch = '\n'; c++; }
-        for (size_t i = 0; i < sizeof key_chars / sizeof key_chars[0]; i++) {
-            bool shifted = key_chars[i].shifted && key_chars[i].shifted == ch;
-            if (key_chars[i].plain != ch && !shifted) continue;
-            if (shifted) machine_key(machine, SCANCODE_SHIFT, false);
-            machine_key(machine, key_chars[i].scancode, false);
-            machine_run(machine, MACHINE_CLOCK_HZ / 50);
-            machine_key(machine, key_chars[i].scancode, true);
-            if (shifted) machine_key(machine, SCANCODE_SHIFT, true);
-            machine_run(machine, MACHINE_CLOCK_HZ / 50);
-            break;
-        }
+        uint8_t scancode;
+        bool shifted;
+        if (!keytext_find(ch, &scancode, &shifted)) continue;
+        if (shifted) machine_key(machine, KEYTEXT_SHIFT, false);
+        machine_key(machine, scancode, false);
+        machine_run(machine, MACHINE_CLOCK_HZ / 50);
+        machine_key(machine, scancode, true);
+        if (shifted) machine_key(machine, KEYTEXT_SHIFT, true);
+        machine_run(machine, MACHINE_CLOCK_HZ / 50);
     }
 }
 

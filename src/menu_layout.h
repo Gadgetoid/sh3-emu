@@ -35,6 +35,10 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SHOW_STATE, "Show Saved State in Finder", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
+    { MENU_ENTRY_MENU, 0, "Edit", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_PASTE, "Paste as Typing", 'v', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+
     { MENU_ENTRY_MENU, 0, "Card", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_INSERT_CARD, "Insert Card Image\xe2\x80\xa6", 'o', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_EJECT_CARD, "Eject Card", 'e', MENU_KEY_PRIMARY },

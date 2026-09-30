@@ -36,6 +36,7 @@ enum {
     MENU_BAUD_57600,
     MENU_BAUD_115200,
     MENU_HOST_TIME,
+    MENU_PASTE,
     MENU_COUNT,
 };
 

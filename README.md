@@ -52,6 +52,7 @@ Menus:
 | Run | Save State | Cmd-S |
 | Run | Load State | Cmd-L |
 | Run | Show Saved State in Finder | |
+| Edit | Paste as Typing (types the Mac clipboard on the Velo keyboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
 | Card | Insert Card Image… | Cmd-O |
 | Card | Eject Card | Cmd-E |
 | Serial | Network (PPP) | Cmd-Shift-N |

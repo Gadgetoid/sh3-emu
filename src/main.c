@@ -11,6 +11,7 @@
 #include "machine.h"
 #include "menu.h"
 #include "netgw.h"
+#include "typer.h"
 #include "rapi.h"
 
 #include <fcntl.h>
@@ -439,7 +440,8 @@ int main(int argc, char **argv) {
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
     serial_t serial = { SERIAL_OFF, NULL, -1, -1, "", settings.user_agent };
-    char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200];
+    char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
+    static typer_t typer;
     rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
     desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
@@ -517,6 +519,15 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
+            case MENU_PASTE: {
+                char *clipboard = SDL_GetClipboardText();
+                size_t typed = clipboard ? typer_start(&typer, clipboard) : 0;
+                SDL_free(clipboard);
+                snprintf(paste_notice, sizeof paste_notice, typed ? "typing %zu characters" : "nothing to type", typed);
+                notice = paste_notice;
+                notice_left = NOTICE_SECONDS;
+                break;
+            }
             case MENU_RESET:
                 if (confirm_reset(window)) machine_reset(machine);
                 break;
@@ -693,6 +704,7 @@ int main(int argc, char **argv) {
             owed -= (double)cycles;
             machine_run(machine, cycles);
         }
+        typer_step(&typer, machine);
         serial_pump(&serial, machine);
         if (serial_reconnect_at && machine_cycles(machine) >= serial_reconnect_at) {
             serial_reconnect_at = 0;
