@@ -195,7 +195,7 @@ Headless options:
   - interrupt controller, including the high-priority encoder
   - periodic timer, RTC and alarm
   - power, with STOPCPU idle, the stop timer and suspend (clock stop, resume in place, woken by the power button or an enabled interrupt)
-  - LCD controller (2bpp and VIDEO_CTL7 shade map)
+  - LCD controller (2bpp and VIDEO_CTL7 shade map), with the frame and DF interrupts and the power controller's VIDRF video clock divider
   - SPI
   - SIB subframe 0 and sound transmit DMA (half and end interrupts, 16-bit high byte first)
   - I/O and MFIO

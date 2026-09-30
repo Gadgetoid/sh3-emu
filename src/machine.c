@@ -71,6 +71,7 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 #define STATUS5_NEGONBUTN  (1u << 22)
 #define STATUS5_SPIRCV     (1u << 19)
 #define STATUS1_LCDINT     (1u << 31)
+#define STATUS1_DFINT      (1u << 30)
 #define STATUS1_SIBSF0     (1u << 8)
 #define STATUS1_SIBSF1     (1u << 7)
 #define STATUS1_SIBIRQPOS  (1u << 6)
@@ -83,6 +84,7 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 #define LCD_ENVID  (1u << 0)
 #define LCD_DISPON (1u << 1)
 #define LCD_INVVID (1u << 2)
+#define LCD_DFMODE (1u << 3)
 #define LCD_DISP8  (1u << 4)
 
 #define MFIO_LCD_POWER_OFF (1u << 17)
@@ -205,6 +207,7 @@ struct machine {
     uint64_t stop_timer_next;
 
     uint64_t lcd_next;
+    uint64_t df_next;
 
     uint32_t io_ctl;
     uint32_t mfio_dout, mfio_direc, mfio_sel;
@@ -342,17 +345,27 @@ static void alarm_schedule(machine_t *m) {
     m->alarm_next = m->cpu.cycles + (m->alarm - now) * MACHINE_CLOCK_HZ / 32768u + 1;
 }
 
-static uint64_t lcd_frame_cycles(const machine_t *m) {
+static uint64_t lcd_line_cycles(const machine_t *m) {
     uint32_t ctl1 = m->regs[0x28 / 4], ctl2 = m->regs[0x2C / 4];
     uint64_t baudval = (ctl1 >> 16) & 0x1Fu;
     uint64_t vidrate = (ctl2 >> 22) & 0x3FFu;
-    uint64_t lineval = ctl2 & 0x3FFu;
     uint32_t vidrf = (m->power_ctl >> POWER_VIDRF_SHIFT) & 3u;
-    return ((baudval * 2 + 2) * (vidrate + 1) * (lineval + 1)) << vidrf;
+    return ((baudval * 2 + 2) * (vidrate + 1)) << vidrf;
+}
+
+static uint64_t lcd_frame_cycles(const machine_t *m) {
+    uint64_t lineval = m->regs[0x2C / 4] & 0x3FFu;
+    return lcd_line_cycles(m) * (lineval + 1);
+}
+
+static uint64_t lcd_df_cycles(const machine_t *m) {
+    if (!(m->regs[0x28 / 4] & LCD_DFMODE)) return lcd_frame_cycles(m);
+    uint64_t dfval = m->regs[0x34 / 4] >> 24;
+    return lcd_line_cycles(m) * (dfval + 1);
 }
 
 static void lcd_schedule(machine_t *m) {
-    if (!(m->regs[0x28 / 4] & LCD_ENVID) || lcd_frame_cycles(m) == 0) { m->lcd_next = NO_EVENT; return; }
+    if (!(m->regs[0x28 / 4] & LCD_ENVID) || lcd_frame_cycles(m) == 0) { m->lcd_next = m->df_next = NO_EVENT; return; }
     if (m->lcd_next == NO_EVENT) m->lcd_next = m->cpu.cycles + lcd_frame_cycles(m);
 }
 
@@ -667,7 +680,7 @@ static void soc_write(machine_t *m, uint32_t offset, int size, uint32_t value) {
         case 0x028:
             m->regs[index] = value & 0x003FFFFFu;
             lcd_schedule(m);
-            if (!(value & LCD_ENVID)) m->lcd_next = NO_EVENT;
+            if (!(value & LCD_ENVID)) m->lcd_next = m->df_next = NO_EVENT;
             return;
         case 0x02C:
             m->regs[index] = value;
@@ -888,6 +901,7 @@ static void machine_power_on(machine_t *m) {
     m->alarm_next = NO_EVENT;
     m->stop_timer_next = NO_EVENT;
     m->lcd_next = NO_EVENT;
+    m->df_next = NO_EVENT;
     m->sound_next = NO_EVENT;
     m->regs[0x1C0 / 4] = 1u << 7;
 }
@@ -1075,6 +1089,7 @@ static uint64_t next_event(const machine_t *m) {
     if (m->alarm_next < next) next = m->alarm_next;
     if (m->stop_timer_next < next) next = m->stop_timer_next;
     if (m->lcd_next < next) next = m->lcd_next;
+    if (m->df_next < next) next = m->df_next;
     if (m->sound_active && m->sound_next < next) next = m->sound_next;
     if (uart_next_event(&m->uart_port) < next) next = uart_next_event(&m->uart_port);
     if (m->pending_card && m->card_insert_at < next) next = m->card_insert_at;
@@ -1104,8 +1119,14 @@ static void process_events(machine_t *m) {
         pccard_insert(&m->card_socket, m->pending_card);
         m->pending_card = NULL;
     }
+    if (m->df_next <= now) {
+        intc_set_pending(m, 0, STATUS1_DFINT);
+        uint64_t period = lcd_df_cycles(m);
+        while (m->df_next <= now) m->df_next += period;
+    }
     if (m->lcd_next <= now) {
         intc_set_pending(m, 0, STATUS1_LCDINT);
+        if (m->df_next == NO_EVENT && lcd_df_cycles(m)) m->df_next = m->lcd_next + lcd_df_cycles(m);
         uint64_t period = lcd_frame_cycles(m);
         while (m->lcd_next <= now) m->lcd_next += period;
     }
@@ -1122,6 +1143,7 @@ static void wake_from_suspend(machine_t *m) {
     shift_deadline(&m->periodic_next, asleep);
     shift_deadline(&m->stop_timer_next, asleep);
     shift_deadline(&m->lcd_next, asleep);
+    shift_deadline(&m->df_next, asleep);
     shift_deadline(&m->sound_next, asleep);
     shift_deadline(&m->uart_a.rx_next, asleep);
     m->power_ctl |= POWER_PWRCS | POWER_VCCON | POWER_FORCESHUTDWN;
@@ -1311,7 +1333,7 @@ bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
     X(alarm_armed, m->alarm_armed) X(alarm_next, m->alarm_next) X(power_ctl, m->power_ctl) \
     X(cpu_stopped, m->cpu_stopped) X(suspended, m->suspended) X(power_button, m->power_button) \
     X(suspended_at, m->suspended_at) X(suspended_cycles, m->suspended_cycles) X(stopped_cycles, m->stopped_cycles) \
-    X(stop_timer_next, m->stop_timer_next) X(lcd_next, m->lcd_next) X(io_ctl, m->io_ctl) \
+    X(stop_timer_next, m->stop_timer_next) X(lcd_next, m->lcd_next) X(df_next, m->df_next) X(io_ctl, m->io_ctl) \
     X(mfio_dout, m->mfio_dout) X(mfio_direc, m->mfio_direc) X(mfio_sel, m->mfio_sel) X(spi_ctl, m->spi_ctl) \
     X(key_queue, m->key_queue) X(key_head, m->key_head) X(key_count, m->key_count) \
     X(keyboard_enabled, m->keyboard_enabled) X(sib_ctl, m->sib_ctl) X(sib_sf0_aux, m->sib_sf0_aux) \
