@@ -39,7 +39,7 @@ if pkg-config --exists slirp libcurl; then
     BODY='import sys, struct, hashlib; head, body = sys.stdin.buffer.read().split(b"\r\n\r\n", 1); print(body[:6].decode("latin-1"), *struct.unpack("<HH", body[6:10]), hashlib.sha256(body).hexdigest())'
     SVG=$(./proxycheck "http://127.0.0.1:$PORT/images.html" "http://127.0.0.1:$PORT/shapes.svg" 2>/dev/null | python3 -c "$BODY")
     PNG=$(./proxycheck "http://127.0.0.1:$PORT/gradient.png" 2>/dev/null | python3 -c "$BODY")
-    if [ "$SVG" = "GIF89a 100 50 837b87b4d48f9349a646a5d06eef7d4cac13292b7b908cc1eabec11b853327e9" ] && [ "${PNG% *}" = "GIF89a 436 218" ]; then echo "ok   proxy_images"; else echo "FAIL proxy_images $SVG / $PNG"; exit 1; fi
+    if [ "$SVG" = "GIF89a 100 50 4952502eef863d6cd28acd031a890c4d93b43269bebd712c05318955547ac371" ] && [ "${PNG% *}" = "GIF89a 436 218" ]; then echo "ok   proxy_images"; else echo "FAIL proxy_images $SVG / $PNG"; exit 1; fi
     IE="--tap=2:112:20:0.08 --tap=2.12:112:20:0.08 --tap=6:97:14:0.1 --tap=7:110:151:0.1 --tap=8.5:298:43:0.1 --tap=9.5:120:107:0.1 --tap=10.2:210:171:0.1 --type=10.6:10.0.2.4 --tap=11.5:365:171:0.1 --key=12:39 --key=12.2:39 --key=12.4:39 --type=12.8:8080 --key=14:4B --net=15 --tap=22:16:14:0.1 --tap=23:36:49:0.1"
     check proxy_browse 9c5af91bed6b16480a9e586f011716f6c68b3d9163eb8d0e338d10b7d08f1ca7 --seconds=40 --load="$OUT/desktop.state" $IE "--type=24:http://127.0.0.1:$PORT/page.html\\n"
 fi

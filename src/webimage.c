@@ -122,8 +122,7 @@ static bool compress(bytes_t *out, const uint8_t *pixels, size_t count) {
     }
     pack(&packer, current, code_size);
     if (!first_after_clear && max_code + 1 >= (1 << code_size) && code_size < 12) code_size++;
-    pack(&packer, CLEAR_CODE, code_size);
-    pack(&packer, END_CODE, MIN_CODE_SIZE + 1);
+    pack(&packer, END_CODE, code_size);
     finish(&packer);
     free(children);
     return true;
