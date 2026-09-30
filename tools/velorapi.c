@@ -288,7 +288,9 @@ int main(int argc, char **argv) {
         status = rapiload_run(rapi, args[0], dest, log_line, NULL) ? 0 : 1;
     }
     else if (!strcmp(command, "proxy") && count == 1 && (!strcmp(args[0], "on") || !strcmp(args[0], "off"))) {
+        rapi_version_t version = { 0 };
         status = rapisetup_proxy(rapi, !strcmp(args[0], "on")) ? 0 : fail(rapi);
+        if (!status && rapi_version(rapi, &version) && version.major >= 2) printf("Pocket IE picks this up after a soft reset\n");
     }
     else if (!strcmp(command, "baud") && count == 1) {
         uint32_t baud = (uint32_t)strtoul(args[0], NULL, 10);

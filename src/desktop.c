@@ -137,8 +137,10 @@ static void run_sync(desktop_t *desktop, rapi_t *rapi) {
 }
 
 static void run_proxy(desktop_t *desktop, rapi_t *rapi) {
-    if (rapisetup_proxy(rapi, true)) set_status(desktop, "Pocket IE uses the web proxy from its next start");
-    else set_status(desktop, "%s", rapi_error(rapi));
+    rapi_version_t version = { 0 };
+    if (!rapisetup_proxy(rapi, true)) set_status(desktop, "%s", rapi_error(rapi));
+    else if (rapi_version(rapi, &version) && version.major >= 2) set_status(desktop, "Pocket IE uses the web proxy after a soft reset");
+    else set_status(desktop, "Pocket IE uses the web proxy from its next start");
 }
 
 static void run_baud(desktop_t *desktop, rapi_t *rapi) {

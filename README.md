@@ -146,7 +146,7 @@ Cascading Menus and Mute start straight away in the taskbar, Paint is in Program
 
 ### Web proxy
 
-Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. Desktop > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter. Either way it's kept in the saved state. Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
+Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. Desktop > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 keeps the old setting until a soft reset (Run > Soft Reset). By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter. Either way it's kept in the saved state. Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
 
 Type addresses as `http://`: Pocket IE makes `https://` connections itself, not through the proxy, and they fail. For `http://` addresses without a port the proxy tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
 
