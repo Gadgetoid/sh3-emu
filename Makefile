@@ -11,7 +11,7 @@ CE2_ROM  ?= rom/nk-ce2.bin
 CFLAGS  += -Isrc -Wall -Wextra -O2 -std=c11 -fno-common -MMD -MP
 CFLAGS  += $(shell pkg-config --cflags sdl3)
 THREAD_LIBS = -lpthread
-LDFLAGS += $(shell pkg-config --libs sdl3) -lm $(THREAD_LIBS)
+LDFLAGS += $(shell pkg-config --libs sdl3) -lm -lz $(THREAD_LIBS)
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Darwin)
@@ -39,7 +39,7 @@ endif
 
 SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c src/keytext.c
 SRC_RAPI    = src/rapi.c src/rapiload.c src/rapisetup.c src/rapisync.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/typer.c src/view.c src/main.c $(SRC_MENU)
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/png.c src/typer.c src/view.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/headless.o

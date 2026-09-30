@@ -37,7 +37,10 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "Edit", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_COPY_SCREEN, "Copy Screen", 'c', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_PASTE, "Paste as Typing", 'v', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SAVE_SCREENSHOT, "Save Screenshot to Desktop", 's', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "View", 0, 0 },

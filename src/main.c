@@ -11,6 +11,7 @@
 #include "machine.h"
 #include "menu.h"
 #include "netgw.h"
+#include "png.h"
 #include "typer.h"
 #include "view.h"
 #include "rapi.h"
@@ -366,6 +367,49 @@ static void set_title(SDL_Window *window, const char *notice, bool paused, bool 
     SDL_SetWindowTitle(window, title);
 }
 
+static const void *clipboard_png(void *userdata, const char *mime_type, size_t *size) {
+    const size_t *stored = userdata;
+    if (strcmp(mime_type, "image/png")) { *size = 0; return NULL; }
+    *size = stored[0];
+    return stored + 1;
+}
+
+static bool copy_screen(view_t *view) {
+    int width, height;
+    const uint32_t *pixels = view_image(view, &width, &height);
+    uint8_t *png;
+    size_t length;
+    if (!pixels || !png_encode(pixels, width, height, &png, &length)) return false;
+    size_t *stored = malloc(sizeof(size_t) + length);
+    if (!stored) { free(png); return false; }
+    stored[0] = length;
+    memcpy(stored + 1, png, length);
+    free(png);
+    const char *types[] = { "image/png" };
+    if (SDL_SetClipboardData(clipboard_png, free, stored, types, 1)) return true;
+    free(stored);
+    return false;
+}
+
+static bool save_screenshot(view_t *view, char *path, size_t size) {
+    int width, height;
+    const uint32_t *pixels = view_image(view, &width, &height);
+    uint8_t *png;
+    size_t length;
+    if (!pixels || !png_encode(pixels, width, height, &png, &length)) return false;
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[64];
+    strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
+    snprintf(path, size, "%s/Desktop/Velo Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
+    FILE *file = fopen(path, "wb");
+    bool saved = file && fwrite(png, 1, length, file) == length;
+    if (file) fclose(file);
+    free(png);
+    return saved;
+}
+
 static void fit_window(SDL_Window *window, view_t *view, uint32_t zoom) {
     if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(window, false);
     int width, height;
@@ -589,6 +633,19 @@ int main(int argc, char **argv) {
                 view_set_display(view, (view_display_t)settings.display);
                 fit_window(window, view, settings.zoom);
                 break;
+            case MENU_COPY_SCREEN:
+                notice = copy_screen(view) ? "screen copied" : "could not copy the screen";
+                notice_left = NOTICE_SECONDS;
+                break;
+            case MENU_SAVE_SCREENSHOT: {
+                static char screenshot_notice[1200];
+                char path[1100];
+                if (save_screenshot(view, path, sizeof path)) snprintf(screenshot_notice, sizeof screenshot_notice, "saved %s", leaf_name(path));
+                else snprintf(screenshot_notice, sizeof screenshot_notice, "could not save the screenshot");
+                notice = screenshot_notice;
+                notice_left = NOTICE_SECONDS * 2;
+                break;
+            }
             case MENU_PASTE: {
                 char *clipboard = SDL_GetClipboardText();
                 size_t typed = clipboard ? typer_start(&typer, clipboard) : 0;
