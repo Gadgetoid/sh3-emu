@@ -124,7 +124,7 @@ CE's desktop connection runs at 19200 baud, about 1.6 KB/s. Desktop > Desktop Co
 
 ### Installing CE 1.0 software
 
-CE 1.0 programs were installed from Windows by H/PC Explorer, which ran a `.load` script for each package over RAPI. `velo-rapi load SCRIPT [DEST]` does the same: it copies files (taking the `.mips` build where there is one), creates folders and shortcuts, writes registry strings and starts programs. `.` in the script is the script's folder as a source, and DEST (default `\Program Files\Accessories`) as a destination.
+CE 1.0 programs were installed from Windows by H/PC Explorer, which ran a `.load` script for each package over RAPI. `velo-rapi load SCRIPT [DEST]` does the same: it copies files (taking the `.mips` build where there is one), creates folders, shortcuts and registry keys, writes registry strings and numbers and starts programs. `.` in the script is the script's folder as a source, and DEST as a destination; `%P` is DEST, and `~ ~` is `HKEY_LOCAL_MACHINE\Software\Apps\APPNAME`. DEST and APPNAME come from an `Install.inf` beside the script (`InstallDir` and `AppName`), otherwise DEST is `\Program Files\Accessories` and APPNAME the script's name. `execOnUnload` is skipped, as there's no uninstall.
 
 For example, Microsoft's Power Toys 1.0 for CE 1.0 (Cascading Menus, Mute, Pocket Paint, sound schemes, wallpapers, control panel annunciators and Remote Control). `powtoy.exe` is in archive.org's [Windows CE 1.0 Programs](https://archive.org/details/windowsce1.0) collection. It is an InstallShield 3 package: extract the two embedded archives with [unshieldv3](https://github.com/wfr/unshieldv3), then run each component's script:
 

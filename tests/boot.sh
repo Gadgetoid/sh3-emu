@@ -89,6 +89,8 @@ if pkg-config --exists slirp; then
         ./velo-rapi --socket="$SOCKET" ls "/Windows/Load Test" | grep -c "Empty"
         ./velo-rapi --socket="$SOCKET" reg get HKLM/Software/LoadTest Name
         ./velo-rapi --socket="$SOCKET" reg get HKLM/Software/LoadTest List
+        ./velo-rapi --socket="$SOCKET" reg ls HKCR/.loadtest
+        ./velo-rapi --socket="$SOCKET" reg ls "HKLM/Software/Apps/Load Test"
         ./velo-rapi --socket="$SOCKET" ls /Windows/LoadTest | grep -c never || true
     })
     kill $EMULATOR
@@ -101,6 +103,9 @@ plain file
 1
 string "Load Test"
 multi "one|two|three"
+Default = string "loadtestfile"
+Count = dword 42 (0x2a)
+Tool = string "\Windows\LoadTest\tool.exe"
 0'
     if [ "$LOADED" = "$EXPECTED" ]; then echo "ok   rapi_load"; else echo "FAIL rapi_load"; echo "$LOADED"; exit 1; fi
     rm -rf "$OUT/FRAG"
