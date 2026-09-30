@@ -12,6 +12,7 @@
 #include "menu.h"
 #include "netgw.h"
 #include "typer.h"
+#include "view.h"
 #include "rapi.h"
 
 #include <fcntl.h>
@@ -284,6 +285,8 @@ typedef struct {
     uint32_t memory;
     uint32_t speed;
     uint32_t host_time;
+    uint32_t zoom;
+    uint32_t display;
     char     user_agent[256];
     char     shared_folder[1024];
 } settings_t;
@@ -298,7 +301,7 @@ static void settings_path(char *path, size_t size) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1, 1, NETGW_DEFAULT_USER_AGENT, "" };
+    settings_t settings = { 4, 1, 1, 2, VIEW_SIMULATED, NETGW_DEFAULT_USER_AGENT, "" };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -309,6 +312,8 @@ static settings_t settings_load(void) {
         if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
+        else if (sscanf(line, "zoom=%u", &value) == 1 && value >= 1 && value <= 4) settings.zoom = value;
+        else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
         else if (!strncmp(line, "user_agent=", 11)) {
             line[strcspn(line, "\r\n")] = 0;
             snprintf(settings.user_agent, sizeof settings.user_agent, "%s", line + 11);
@@ -326,7 +331,8 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory, settings->speed, settings->host_time, settings->user_agent, settings->shared_folder);
+    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nzoom=%u\ndisplay=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory, settings->speed,
+            settings->host_time, settings->zoom, settings->display, settings->user_agent, settings->shared_folder);
     fclose(file);
 }
 
@@ -360,18 +366,11 @@ static void set_title(SDL_Window *window, const char *notice, bool paused, bool 
     SDL_SetWindowTitle(window, title);
 }
 
-static bool screen_position(SDL_Window *window, float window_x, float window_y, int *x, int *y) {
+static void fit_window(SDL_Window *window, view_t *view, uint32_t zoom) {
+    if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(window, false);
     int width, height;
-    SDL_GetWindowSize(window, &width, &height);
-    float grid_x = window_x / width * (LCD_WIDTH + 2 * LCD_MARGIN_X) - LCD_MARGIN_X;
-    float grid_y = window_y / height * (LCD_HEIGHT + 2 * LCD_MARGIN_Y) - LCD_MARGIN_Y;
-    *x = (int)grid_x;
-    *y = (int)grid_y;
-    if (*x < 0) *x = 0;
-    if (*y < 0) *y = 0;
-    if (*x >= LCD_WIDTH) *x = LCD_WIDTH - 1;
-    if (*y >= LCD_HEIGHT) *y = LCD_HEIGHT - 1;
-    return grid_x >= 0 && grid_y >= 0 && grid_x < LCD_WIDTH && grid_y < LCD_HEIGHT;
+    view_source_size(view_display(view), &width, &height);
+    SDL_SetWindowSize(window, width * (int)zoom, height * (int)zoom);
 }
 
 int main(int argc, char **argv) {
@@ -413,20 +412,19 @@ int main(int argc, char **argv) {
     machine_set_host_clock(machine, settings.host_time != 0);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
-    int grid_width = LCD_WIDTH + 2 * LCD_MARGIN_X, grid_height = LCD_HEIGHT + 2 * LCD_MARGIN_Y;
-    SDL_Window *window = SDL_CreateWindow("Philips Velo 1", grid_width * WINDOW_SCALE, grid_height * WINDOW_SCALE,
-                                          SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    int source_width, source_height;
+    view_source_size((view_display_t)settings.display, &source_width, &source_height);
+    SDL_Window *window = SDL_CreateWindow("Philips Velo 1", source_width * (int)settings.zoom, source_height * (int)settings.zoom,
+                                          SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE);
     SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, NULL) : NULL;
     if (!renderer) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_SetRenderVSync(renderer, 1);
 
-    int cell = (int)(WINDOW_SCALE * SDL_GetWindowPixelDensity(window) + 0.5f);
-    lcd_compose_setup(cell);
-    SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING,
-                                             lcd_compose_width(), lcd_compose_height());
-    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    SDL_SetWindowMinimumSize(window, LCD_WIDTH / 2, LCD_HEIGHT / 2);
+    view_t *view = view_create(window, renderer, (view_display_t)settings.display);
 
     if (screenshot) {
+        lcd_compose_setup((int)(WINDOW_SCALE * SDL_GetWindowPixelDensity(window) + 0.5f));
         machine_run(machine, (uint64_t)(screenshot_seconds * MACHINE_CLOCK_HZ));
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight(machine_backlight(machine));
@@ -537,7 +535,7 @@ int main(int argc, char **argv) {
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     int x, y;
-                    if (screen_position(window, event.button.x, event.button.y, &x, &y)) {
+                    if (view_screen_position(view, event.button.x, event.button.y, &x, &y)) {
                         pen_down = true;
                         machine_touch(machine, true, x, y);
                     }
@@ -546,14 +544,14 @@ int main(int argc, char **argv) {
             case SDL_EVENT_MOUSE_MOTION:
                 if (pen_down) {
                     int x, y;
-                    screen_position(window, event.motion.x, event.motion.y, &x, &y);
+                    view_screen_position(view, event.motion.x, event.motion.y, &x, &y);
                     machine_touch(machine, true, x, y);
                 }
                 break;
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (event.button.button == SDL_BUTTON_LEFT && pen_down) {
                     int x, y;
-                    screen_position(window, event.button.x, event.button.y, &x, &y);
+                    view_screen_position(view, event.button.x, event.button.y, &x, &y);
                     pen_down = false;
                     machine_touch(machine, false, x, y);
                 }
@@ -573,6 +571,24 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
+            case MENU_ZOOM_1:
+            case MENU_ZOOM_2:
+            case MENU_ZOOM_3:
+            case MENU_ZOOM_4:
+                settings.zoom = (uint32_t)(item - MENU_ZOOM_1 + 1);
+                settings_save(&settings);
+                fit_window(window, view, settings.zoom);
+                break;
+            case MENU_FULL_SCREEN:
+                SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+                break;
+            case MENU_DISPLAY_SIMULATED:
+            case MENU_DISPLAY_SHARP:
+                settings.display = item == MENU_DISPLAY_SHARP ? VIEW_SHARP : VIEW_SIMULATED;
+                settings_save(&settings);
+                view_set_display(view, (view_display_t)settings.display);
+                fit_window(window, view, settings.zoom);
+                break;
             case MENU_PASTE: {
                 char *clipboard = SDL_GetClipboardText();
                 size_t typed = clipboard ? typer_start(&typer, clipboard) : 0;
@@ -733,6 +749,10 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
         menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
         menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
+        for (int zoom_item = MENU_ZOOM_1; zoom_item <= MENU_ZOOM_4; zoom_item++) menu_set_checked(zoom_item, settings.zoom == (uint32_t)(zoom_item - MENU_ZOOM_1 + 1));
+        menu_set_checked(MENU_FULL_SCREEN, (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0);
+        menu_set_checked(MENU_DISPLAY_SIMULATED, settings.display == VIEW_SIMULATED);
+        menu_set_checked(MENU_DISPLAY_SHARP, settings.display == VIEW_SHARP);
         menu_set_checked(MENU_SPEED_1, machine_speed(machine) == 1);
         menu_set_checked(MENU_SPEED_2, machine_speed(machine) == 2);
         menu_set_checked(MENU_SPEED_4, machine_speed(machine) == 4);
@@ -786,12 +806,7 @@ int main(int argc, char **argv) {
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight(machine_backlight(machine));
         machine_screen(machine, lcd_framebuffer);
-        if (lcd_compose((float)elapsed)) {
-            SDL_UpdateTexture(texture, NULL, lcd_compose_pixels(), lcd_compose_width() * 4);
-        }
-        SDL_RenderClear(renderer);
-        SDL_RenderTexture(renderer, texture, NULL, NULL);
-        SDL_RenderPresent(renderer);
+        view_draw(view, (float)elapsed, machine_lcd_enabled(machine));
     }
 
     machine_save(machine, state, (int64_t)time(NULL));
@@ -799,7 +814,7 @@ int main(int argc, char **argv) {
     desktop_destroy(desktop);
     if (verbose) machine_dump_state(machine);
     SDL_DestroyAudioStream(audio);
-    SDL_DestroyTexture(texture);
+    view_destroy(view);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();

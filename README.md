@@ -53,6 +53,9 @@ Menus:
 | Run | Load State | Cmd-L |
 | Run | Show Saved State in Finder | |
 | Edit | Paste as Typing (types the Mac clipboard on the Velo keyboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
+| View | 1x, 2x, 3x, 4x (window size; the window can also be resized, and scales in whole pixels) | Cmd-1 to Cmd-4 |
+| View | Full Screen | Cmd-Ctrl-F |
+| View | Simulated LCD (the panel, with glass, ghosting and backlight) or Sharp Pixels (plain greys at 480 x 240) | |
 | Card | Insert Card Image… | Cmd-O |
 | Card | Eject Card | Cmd-E |
 | Serial | Network (PPP) | Cmd-Shift-N |

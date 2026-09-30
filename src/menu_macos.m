@@ -58,6 +58,7 @@ static NSEventModifierFlags cocoa_modifiers(int modifiers) {
     NSEventModifierFlags flags = 0;
     if (modifiers & MENU_KEY_PRIMARY) flags |= NSEventModifierFlagCommand;
     if (modifiers & MENU_KEY_SHIFT) flags |= NSEventModifierFlagShift;
+    if (modifiers & MENU_KEY_CONTROL) flags |= NSEventModifierFlagControl;
     return flags;
 }
 

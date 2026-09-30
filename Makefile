@@ -39,7 +39,7 @@ endif
 
 SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c src/keytext.c
 SRC_RAPI    = src/rapi.c src/rapiload.c src/rapisetup.c src/rapisync.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/typer.c src/main.c $(SRC_MENU)
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/typer.c src/view.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/headless.o

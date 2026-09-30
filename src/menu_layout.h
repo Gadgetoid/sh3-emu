@@ -12,6 +12,7 @@ typedef enum {
 enum {
     MENU_KEY_PRIMARY = 1,
     MENU_KEY_SHIFT = 2,
+    MENU_KEY_CONTROL = 4,
 };
 
 typedef struct {
@@ -37,6 +38,17 @@ static const menu_entry_t MENU_ENTRIES[] = {
 
     { MENU_ENTRY_MENU, 0, "Edit", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_PASTE, "Paste as Typing", 'v', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+
+    { MENU_ENTRY_MENU, 0, "View", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_ZOOM_1, "1x", '1', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_ITEM, MENU_ZOOM_2, "2x", '2', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_ITEM, MENU_ZOOM_3, "3x", '3', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_ITEM, MENU_ZOOM_4, "4x", '4', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_ITEM, MENU_FULL_SCREEN, "Full Screen", 'f', MENU_KEY_PRIMARY | MENU_KEY_CONTROL },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_DISPLAY_SIMULATED, "Simulated LCD", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_DISPLAY_SHARP, "Sharp Pixels", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "Card", 0, 0 },

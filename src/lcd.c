@@ -179,6 +179,10 @@ static float pixel_target(int i) {
     return powered ? lcd_framebuffer[i] / 15.0f : 0.0f;
 }
 
+void lcd_invalidate(void) {
+    force_compose = true;
+}
+
 bool lcd_needs_compose(void) {
     if (force_compose) return true;
     for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
