@@ -25,6 +25,8 @@
 #define ROM_CARD_PA      0x10000000u
 #define ROM_CARD_END     0x10400000u
 #define KSEG_PA_MASK     0x1FFFFFFFu
+#define BOOT_BLOCK_PA    0x1FC00000u
+#define BOOT_BLOCK_SIZE  0x1000u
 
 static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 
@@ -778,8 +780,11 @@ static inline void write_host(uint8_t *base, int size, uint32_t value) {
     if (size == 4) { base[2] = (uint8_t)(value >> 16); base[3] = (uint8_t)(value >> 24); }
 }
 
+static uint8_t boot_block[BOOT_BLOCK_SIZE] = { 0x00, 0x00, 0xF0, 0x0B };
+
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
+    if (pa >= BOOT_BLOCK_PA && pa < BOOT_BLOCK_PA + BOOT_BLOCK_SIZE) { *value = read_host(boot_block + (pa - BOOT_BLOCK_PA), size); return true; }
     if (pa < DRAM_DECODE_END) { *value = read_host(m->dram + (pa & (m->dram_size - 1)), size); return true; }
     if ((pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) || (pa >= ROM_CARD_PA && pa < ROM_CARD_END)) {
         if (pa >= m->rom_pa && pa - m->rom_pa + (uint32_t)size <= m->rom_size) { *value = read_host(m->rom + (pa - m->rom_pa), size); return true; }
@@ -834,6 +839,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
 
 static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     machine_t *m = context;
+    if (pa >= BOOT_BLOCK_PA && pa < BOOT_BLOCK_PA + BOOT_BLOCK_SIZE) return boot_block + (pa - BOOT_BLOCK_PA);
     if (pa < DRAM_DECODE_END) return m->dram + (pa & (m->dram_size - 1));
     if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END && m->card_dram_size) return m->card_dram + (pa & (m->card_dram_size - 1));
     if (pa >= m->rom_pa && pa - m->rom_pa + 4096 <= m->rom_size) return m->rom + (pa - m->rom_pa);
@@ -1033,6 +1039,8 @@ static void run_suspended(machine_t *m, uint64_t target) {
     if (irq_low(m) || irq_high(m)) wake_from_suspend(m);
 }
 
+static void reset_machine(machine_t *m, bool keep_ram);
+
 void machine_run(machine_t *m, uint64_t cycles) {
     uint64_t target = m->cpu.cycles + cycles;
     while (!m->halted && m->cpu.cycles < target) {
@@ -1043,6 +1051,11 @@ void machine_run(machine_t *m, uint64_t cycles) {
         if (m->cpu_stopped && m->cpu.external_ip) {
             m->cpu_stopped = false;
             m->power_ctl &= ~POWER_STOPCPU;
+        }
+        if ((m->cpu.pc & KSEG_PA_MASK) >= BOOT_BLOCK_PA && (m->cpu.pc & KSEG_PA_MASK) < BOOT_BLOCK_PA + 8) {
+            machine_logf(m, "boot block: warm reset\n");
+            reset_machine(m, true);
+            continue;
         }
         uint64_t until = next_event(m);
         if (until > target) until = target;
@@ -1390,7 +1403,18 @@ void machine_advance_clock(machine_t *m, int64_t seconds) {
 }
 
 void machine_reset(machine_t *m) {
+    reset_machine(m, false);
+}
+
+static void reset_machine(machine_t *m, bool keep_ram) {
     mips_bus_t bus = m->cpu.bus;
+    uint64_t cycles = m->cpu.cycles;
+    bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy;
+    uint32_t serial_tag = m->serial_tag;
+    FILE *pending_card = m->pending_card;
+    char pending_card_path[sizeof m->pending_card_path];
+    memcpy(pending_card_path, m->pending_card_path, sizeof pending_card_path);
+    uint64_t card_insert_at = m->card_insert_at;
     uint32_t speed = m->cpu.speed;
     uint8_t *dram = m->dram, *rom = m->rom;
     uint32_t dram_size = m->dram_size, dram_size_next = m->dram_size_next;
@@ -1403,7 +1427,8 @@ void machine_reset(machine_t *m) {
     FILE *image = m->card_socket.image;
     char card_path[sizeof m->card_path];
     memcpy(card_path, m->card_path, sizeof card_path);
-    if (dram_size_next != dram_size) {
+    if (!keep_ram && pending_card) fclose(pending_card);
+    if (!keep_ram && dram_size_next != dram_size) {
         uint8_t *resized = calloc(1, dram_size_next);
         if (resized) {
             free(dram);
@@ -1411,14 +1436,16 @@ void machine_reset(machine_t *m) {
             dram_size = dram_size_next;
         }
     }
-    if (card_size_next != card_size) {
+    if (!keep_ram && card_size_next != card_size) {
         free(card_dram);
         card_dram = card_size_next ? calloc(1, card_size_next) : NULL;
         card_size = card_dram ? card_size_next : 0;
     }
     memset(m, 0, sizeof *m);
-    memset(dram, 0, dram_size);
-    if (card_dram) memset(card_dram, 0, card_size);
+    if (!keep_ram) {
+        memset(dram, 0, dram_size);
+        if (card_dram) memset(card_dram, 0, card_size);
+    }
     m->card_dram = card_dram;
     m->card_dram_size = card_size;
     m->card_dram_size_next = card_size_next;
@@ -1440,6 +1467,16 @@ void machine_reset(machine_t *m) {
     bind_uart(m);
     machine_power_on(m);
     m->cpu.speed = speed;
+    if (keep_ram) {
+        m->cpu.cycles = cycles;
+        m->power_ctl &= ~POWER_COLDSTART;
+        m->serial_connected = serial_connected;
+        m->serial_tag = serial_tag;
+        m->touch_legacy = touch_legacy;
+        m->pending_card = pending_card;
+        memcpy(m->pending_card_path, pending_card_path, sizeof pending_card_path);
+        m->card_insert_at = card_insert_at;
+    }
 }
 
 void machine_set_memory(machine_t *m, uint32_t megabytes) {
