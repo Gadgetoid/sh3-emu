@@ -4,6 +4,7 @@ PROXYCHECK = proxycheck
 VELORAPI  = velo-rapi
 BUILD     = build
 ROM      ?= rom/nk.bin
+CE2_ROM  ?= rom/ce2/nk.bin
 
 .DEFAULT_GOAL := all
 
@@ -78,4 +79,4 @@ clean:
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d $(BUILD)/tools/velorapi.d
 
 test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
-	sh tests/boot.sh $(ROM)
+	sh tests/boot.sh $(ROM) $(CE2_ROM)

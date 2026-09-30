@@ -84,7 +84,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
     FILE *file = fopen(path, "wb");
     if (!file) return;
     fprintf(file, "P5\n%d %d\n255\n", MACHINE_SCREEN_WIDTH, MACHINE_SCREEN_HEIGHT);
-    for (int i = 0; i < MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT; i++) fputc(255 - levels[i] * 85, file);
+    for (int i = 0; i < MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT; i++) fputc(255 - levels[i] * 17, file);
     fclose(file);
 }
 

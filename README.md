@@ -10,6 +10,14 @@ Not included. It expects the 7,799,876-byte `nk.bin` from CERF's `philips_velo_1
 
 The emulator patches one instruction in the loaded ROM, not the file. In CE 1.0's `fatfs.dll`, the function that sizes a direct multi-sector write computes the bytes left in a contiguous cluster run as `run_end - (pos - run_start)` instead of `run_end - pos` (`subu $2, $25, $3` at 0x9F5B4FCC). A large write into a fragmented card then runs past the end of the run, over other files' clusters. The patch uses `pos` (`subu $2, $25, $5`), and only applies if the original word is there.
 
+### Windows CE 2.0
+
+The Velo 1's CE 2.0 upgrade shipped as a ROM Miniature Card. CERF's `philips_velo_1_ce2` bundle has its `nk.bin` (4,185,248 bytes): pass it in place of the CE 1.0 ROM. An `nk.bin` whose single ROM header spans the whole file is mapped at the header's `physfirst` (0x90001000, the card window at physical 0x10000000) and started there, as the Velo's boot block would hand off to the card; the first 4 KB of the card, missing from the dump, reads as erased flash. It reaches the CE 2.0 desktop in about 20 seconds, with the LCD in 16 greys (4 bpp). The upgrade asks for 12 MB, so use `--memory=20` (4 MB and the 16 MB DRAM card).
+
+The ROM's shortcuts and desktop icons point at `\Storage Card`, CE 2.0's name for the PC Card, where the upgrade kept the Microsoft applications. Insert a CompactFlash image holding them with `--card=IMAGE`. The desktop connection doesn't work yet: with PC Connection set to `` `Desktop @ 19200` ``, CE 2.0 reports "Out of Memory" when the cable is connected, without opening COM1.
+
+`make test` runs a few CE 2.0 checks when `rom/ce2/nk.bin` exists, or with `make test CE2_ROM=PATH`.
+
 ## Build
 
 ```
@@ -31,7 +39,7 @@ make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card
 ./headless rom/nk.bin --seconds=10 --load=state.bin --power=2 --power=6 --wav=out.wav
 ```
 
-The mouse is the stylus. Hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. `--verbose` logs unmodelled register accesses and dumps CPU state on exit.
+The mouse is the stylus. The touch panel reports what a real Velo does, so CE 2.0's built-in calibration is right before it is recalibrated; states saved by older builds keep the readings they were calibrated with. Hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. `--verbose` logs unmodelled register accesses and dumps CPU state on exit.
 
 Menus:
 

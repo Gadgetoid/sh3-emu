@@ -176,7 +176,7 @@ void lcd_set_response(float scale) {
 }
 
 static float pixel_target(int i) {
-    return powered ? lcd_framebuffer[i] / 3.0f : 0.0f;
+    return powered ? lcd_framebuffer[i] / 15.0f : 0.0f;
 }
 
 bool lcd_needs_compose(void) {

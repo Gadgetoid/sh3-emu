@@ -22,6 +22,9 @@
 #define CS2_END          0x10800000u
 #define DEBUG_PROBE_PA   0x10401024u
 #define ENTRY_VA         0x9F400000u
+#define ROM_CARD_PA      0x10000000u
+#define ROM_CARD_END     0x10400000u
+#define KSEG_PA_MASK     0x1FFFFFFFu
 
 static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 
@@ -152,6 +155,8 @@ struct machine {
     bool     eeprom_selected, eeprom_read, eeprom_in_ack, eeprom_scl, eeprom_sda, eeprom_sda_out;
     uint8_t *rom;
     uint32_t rom_size;
+    uint32_t rom_pa;
+    uint32_t entry_va;
     uint64_t rom_hash;
     machine_log_fn log;
     bool halted;
@@ -221,6 +226,7 @@ struct machine {
     uint16_t pen_irq_status;
     bool     pen_down;
     int      pen_x, pen_y;
+    bool     touch_legacy;
 
     uint32_t logged[LOGGED_ADDRESSES];
     int      logged_count;
@@ -348,6 +354,16 @@ static uint16_t touch_adc(int pixel) {
     return (uint16_t)(value > 1023 ? 1023 : value);
 }
 
+static uint16_t touch_x_adc(int x) {
+    int value = 40 + (x < 0 ? 0 : x) * 1903 / 1000;
+    return (uint16_t)(value > 1023 ? 1023 : value);
+}
+
+static uint16_t touch_y_adc(int y) {
+    int value = 92 + (y < 0 ? 0 : y) * 3528 / 1000;
+    return (uint16_t)(value > 1023 ? 1023 : value);
+}
+
 static uint16_t ucb_read(machine_t *m, uint8_t reg) {
     switch (reg & 0xF) {
         case UCB_IE_STATUS: return m->pen_irq_status;
@@ -375,9 +391,9 @@ static void ucb_convert(machine_t *m, uint16_t adc_cr) {
     } else if (mode == (1u << 8)) {
         sample = m->pen_down ? 0x3FF : 0;
     } else if (channel == (2u << 2) || channel == (3u << 2)) {
-        sample = touch_adc(m->pen_x);
+        sample = m->touch_legacy ? touch_adc(m->pen_x) : touch_y_adc(m->pen_y);
     } else {
-        sample = touch_adc(m->pen_y);
+        sample = m->touch_legacy ? touch_adc(m->pen_y) : touch_x_adc(m->pen_x);
     }
     m->ucb_adc_data = (uint16_t)((1u << 15) | ((sample & 0x3FFu) << 5));
 }
@@ -765,8 +781,8 @@ static inline void write_host(uint8_t *base, int size, uint32_t value) {
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (pa < DRAM_DECODE_END) { *value = read_host(m->dram + (pa & (m->dram_size - 1)), size); return true; }
-    if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) {
-        if (pa >= ROM_PA && pa - ROM_PA + (uint32_t)size <= m->rom_size) { *value = read_host(m->rom + (pa - ROM_PA), size); return true; }
+    if ((pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) || (pa >= ROM_CARD_PA && pa < ROM_CARD_END)) {
+        if (pa >= m->rom_pa && pa - m->rom_pa + (uint32_t)size <= m->rom_size) { *value = read_host(m->rom + (pa - m->rom_pa), size); return true; }
         *value = size == 4 ? 0xFFFFFFFFu : size == 2 ? 0xFFFFu : 0xFFu;
         return true;
     }
@@ -796,7 +812,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
 static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     machine_t *m = context;
     if (pa < DRAM_DECODE_END) { write_host(m->dram + (pa & (m->dram_size - 1)), size, value); return true; }
-    if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) { note_access(m, "rom write", pa, size, value); return true; }
+    if ((pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) || (pa >= ROM_CARD_PA && pa < ROM_CARD_END)) { note_access(m, "rom write", pa, size, value); return true; }
     if (pa >= REGS_PA && pa < REGS_END) { soc_write(m, pa - REGS_PA, size, value); return true; }
     if (pa >= CS2_PA && pa < CS2_PA + PCCARD_IT8368_SIZE) {
         uint32_t offset = (pa - CS2_PA) & ~1u;
@@ -820,7 +836,7 @@ static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     machine_t *m = context;
     if (pa < DRAM_DECODE_END) return m->dram + (pa & (m->dram_size - 1));
     if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END && m->card_dram_size) return m->card_dram + (pa & (m->card_dram_size - 1));
-    if (pa >= ROM_PA && pa - ROM_PA + 4096 <= m->rom_size) return m->rom + (pa - ROM_PA);
+    if (pa >= m->rom_pa && pa - m->rom_pa + 4096 <= m->rom_size) return m->rom + (pa - m->rom_pa);
     return NULL;
 }
 
@@ -853,7 +869,7 @@ static void bind_card_socket(machine_t *m, FILE *image) {
 static void machine_power_on(machine_t *m) {
     pccard_reset(&m->card_socket);
     m->uart_a.rx_next = NO_EVENT;
-    mips_reset(&m->cpu, ENTRY_VA);
+    mips_reset(&m->cpu, m->entry_va);
     m->power_ctl = POWER_COLDSTART | POWER_PWRCS | POWER_VCCON;
     m->periodic_next = NO_EVENT;
     m->alarm_next = NO_EVENT;
@@ -874,6 +890,7 @@ static const rom_patch_t rom_patches[] = {
 };
 
 static void apply_rom_patches(machine_t *m) {
+    if (m->rom_pa != ROM_PA) return;
     for (size_t i = 0; i < sizeof rom_patches / sizeof rom_patches[0]; i++) {
         const rom_patch_t *patch = &rom_patches[i];
         if (patch->offset + 4 > m->rom_size) continue;
@@ -884,12 +901,33 @@ static void apply_rom_patches(machine_t *m) {
     }
 }
 
+static uint32_t read_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static bool find_image_start(const uint8_t *rom, size_t rom_size, uint32_t *start) {
+    for (size_t offset = 0; offset + 16 <= rom_size; offset += 4) {
+        uint32_t physfirst = read_le32(rom + offset + 8), physlast = read_le32(rom + offset + 12);
+        if (physlast <= physfirst || physlast - physfirst != rom_size || (physfirst & 0xE0000000u) != 0x80000000u) continue;
+        if (physfirst + offset >= physlast) continue;
+        *start = physfirst;
+        return true;
+    }
+    return false;
+}
+
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
-    if (rom_size < 16 || rom_size > ROM_WINDOW_END - ROM_PA) {
+    uint32_t start = ENTRY_VA, window_end = ROM_WINDOW_END;
+    if (rom_size >= 16 && find_image_start(rom, rom_size, &start)) window_end = ROM_CARD_END;
+    uint32_t rom_pa = start & KSEG_PA_MASK;
+    bool placeable = (rom_pa >= ROM_PA && rom_pa < ROM_WINDOW_END) || (rom_pa >= ROM_CARD_PA && rom_pa < ROM_CARD_END);
+    if (rom_size < 16 || !placeable || rom_size > window_end - rom_pa) {
         snprintf(error, error_size, "ROM size %zu is not a Velo 1 nk.bin", rom_size);
         return NULL;
     }
     machine_t *m = calloc(1, sizeof *m);
+    m->rom_pa = rom_pa;
+    m->entry_va = start;
     m->dram_size = m->dram_size_next = DRAM_SIZE;
     m->eeprom_scl = m->eeprom_sda = m->eeprom_sda_out = true;
     m->dram = calloc(1, m->dram_size);
@@ -1071,7 +1109,7 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
                 uint32_t byte = pa < DRAM_DECODE_END ? m->dram[pa & (m->dram_size - 1)] : 0;
                 uint32_t raw = (byte >> (8 - bpp - bit % 8)) & ((1u << bpp) - 1);
                 uint32_t on_duty = lcd_shade(m, raw, bpp);
-                level = (uint8_t)((on_duty * 3 + 7) / 15);
+                level = bpp == 4 ? (uint8_t)on_duty : (uint8_t)((on_duty * 3 + 7) / 15 * 5);
             }
             levels[y * MACHINE_SCREEN_WIDTH + x] = level;
         }
@@ -1164,7 +1202,7 @@ bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
     X(snd_tx_start, m->snd_tx_start) X(sound_active, m->sound_active) X(sound_half, m->sound_half) \
     X(sound_next, m->sound_next) X(audio_rate, m->audio_rate) X(ucb_regs, m->ucb_regs) \
     X(ucb_adc_data, m->ucb_adc_data) X(pen_irq_armed, m->pen_irq_armed) X(pen_irq_status, m->pen_irq_status) \
-    X(pen_down, m->pen_down) X(pen_x, m->pen_x) X(pen_y, m->pen_y) \
+    X(pen_down, m->pen_down) X(pen_x, m->pen_x) X(pen_y, m->pen_y) X(touch_legacy, m->touch_legacy) \
     X(uart_a_ctl1, m->uart_a.ctl1) X(uart_a_baud_divisor, m->uart_a.baud_divisor) \
     X(uart_a_dma_buffer, m->uart_a.dma_buffer) X(uart_a_dma_length, m->uart_a.dma_length) \
     X(uart_a_dma_count, m->uart_a.dma_count) X(uart_a_dma_armed, m->uart_a.dma_armed) \
@@ -1301,6 +1339,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         m->dram_size_next = dram_next;
         m->card_dram_size_next = card_next;
         m->pccard.inserted = false;
+        m->touch_legacy = true;
         const uint8_t *cursor = contents + header, *end = contents + length;
         state_record_t record;
         bool has_uart = false, has_sound = false;
@@ -1357,7 +1396,7 @@ void machine_reset(machine_t *m) {
     uint32_t dram_size = m->dram_size, dram_size_next = m->dram_size_next;
     uint8_t *card_dram = m->card_dram;
     uint32_t card_size = m->card_dram_size, card_size_next = m->card_dram_size_next;
-    uint32_t rom_size = m->rom_size;
+    uint32_t rom_size = m->rom_size, rom_pa = m->rom_pa, entry_va = m->entry_va;
     uint64_t rom_hash = m->rom_hash;
     machine_log_fn log = m->log;
     pccard_t card = m->pccard;
@@ -1389,6 +1428,8 @@ void machine_reset(machine_t *m) {
     m->dram_size_next = dram_size_next;
     m->rom = rom;
     m->rom_size = rom_size;
+    m->rom_pa = rom_pa;
+    m->entry_va = entry_va;
     m->rom_hash = rom_hash;
     m->log = log;
     m->cpu.bus = bus;

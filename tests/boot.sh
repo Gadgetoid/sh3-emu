@@ -143,3 +143,12 @@ if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --tra
 SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
 check memory_16mb 151d7d109bd5e68c370edf0069c58225c69d0f9bbd9c97016820b08c64ebdea5 --memory=16 --seconds=56 $CALIBRATE $WIZARD $SYSINFO
 check memory_32mb c6b7c1de7831be7af001cf41e8d678a21f222b356beeae4440878c9602a3d535 --memory=32 --seconds=56 $CALIBRATE $WIZARD $SYSINFO
+CE2_ROM=${2:-rom/ce2/nk.bin}
+if [ -f "$CE2_ROM" ]; then
+    CE1_ROM=$ROM
+    ROM=$CE2_ROM
+    check ce2_desktop aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20
+    check ce2_memory_20mb 66a2cc77cfed28615b0486c02a749163fc13755aa5cc01348fbc25e689cbaa05 --memory=20 --seconds=25
+    check ce2_start_uncalibrated aa5f6f4b5de495a83c8c53ce380a80692321db5aec941043d2ec02839351d20b --tap=19:15:227:0.1 --seconds=22
+    ROM=$CE1_ROM
+fi
