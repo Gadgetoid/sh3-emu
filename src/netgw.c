@@ -55,6 +55,9 @@
 #define PROXY_PORT 8080
 #define DESKTOP_PORT 5679
 #define DESKTOP_CLIENTS 4
+#define DCCM_PING 0x12345678u
+#define DCCM_PACKET_MAX 512
+#define DCCM_PING_MS 5000
 #define RAPI_PORT 990
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
@@ -63,6 +66,13 @@ static const uint8_t dns_ip[4] = { 10, 0, 2, 3 };
 static const char proxy_address[] = "10.0.2.4";
 static const uint8_t guest_mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
 static const uint8_t gateway_mac[6] = { 0x52, 0x55, 0x0A, 0x00, 0x02, 0x02 };
+
+typedef struct {
+    int      fd;
+    uint8_t  buffer[DCCM_PACKET_MAX + 4];
+    size_t   length;
+    int64_t  next_ping_ms;
+} desktop_client_t;
 
 typedef struct {
     bool     used;
@@ -76,7 +86,7 @@ struct netgw {
     Slirp   *slirp;
     webproxy_t *proxy;
     int      desktop_listener;
-    int      desktop_clients[DESKTOP_CLIENTS];
+    desktop_client_t desktop_clients[DESKTOP_CLIENTS];
     struct sockaddr_un desktop_address;
     bool     desktop_connected;
     char     rapi_socket[sizeof ((struct sockaddr_un *)0)->sun_path];
@@ -457,7 +467,7 @@ static void start_proxy(netgw_t *gateway, const char *user_agent) {
 
 static void start_desktop(netgw_t *gateway) {
     gateway->desktop_listener = -1;
-    for (int i = 0; i < DESKTOP_CLIENTS; i++) gateway->desktop_clients[i] = -1;
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) gateway->desktop_clients[i].fd = -1;
 #if SLIRP_CHECK_VERSION(4, 7, 0)
     struct sockaddr_un *address = &gateway->desktop_address;
     address->sun_family = AF_UNIX;
@@ -487,36 +497,88 @@ static void start_desktop(netgw_t *gateway) {
 
 static void stop_desktop(netgw_t *gateway) {
     for (int i = 0; i < DESKTOP_CLIENTS; i++) {
-        if (gateway->desktop_clients[i] >= 0) close(gateway->desktop_clients[i]);
+        if (gateway->desktop_clients[i].fd >= 0) close(gateway->desktop_clients[i].fd);
     }
     if (gateway->desktop_listener < 0) return;
     close(gateway->desktop_listener);
     unlink(gateway->desktop_address.sun_path);
 }
 
+static uint32_t read_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static void send_ping(desktop_client_t *client) {
+    uint8_t ping[4] = { 0x78, 0x56, 0x34, 0x12 };
+    ssize_t sent = send(client->fd, ping, sizeof ping, 0);
+    (void)sent;
+}
+
+static void log_device(netgw_t *gateway, const uint8_t *packet, uint32_t length) {
+    char name[64] = "";
+    uint32_t offset = length >= 0x1C ? read_u32(packet + 0x18) : 0;
+    for (size_t i = 0; offset + i * 2 + 1 < length && i + 1 < sizeof name; i++) {
+        uint16_t unit = (uint16_t)(packet[offset + i * 2] | packet[offset + i * 2 + 1] << 8);
+        if (!unit) break;
+        name[i] = unit < 0x80 ? (char)unit : '?';
+        name[i + 1] = 0;
+    }
+    gateway_log(gateway, "desktop: %s, Windows CE %u.x\n", name, length >= 8 ? (unsigned)(packet[4] | packet[5] << 8) : 0);
+}
+
+static void handle_packets(netgw_t *gateway, desktop_client_t *client, int64_t now_ms) {
+    while (client->length >= 4) {
+        uint32_t header = read_u32(client->buffer);
+        size_t used = 4;
+        if (header != 0 && header != DCCM_PING) {
+            if (header >= DCCM_PACKET_MAX) {
+                gateway_log(gateway, "desktop: the Velo asked for a password, which isn't supported\n");
+            } else {
+                if (client->length < 4 + header) return;
+                log_device(gateway, client->buffer + 4, header);
+                send_ping(client);
+                client->next_ping_ms = now_ms + DCCM_PING_MS;
+                used += header;
+            }
+        }
+        memmove(client->buffer, client->buffer + used, client->length - used);
+        client->length -= used;
+    }
+}
+
 static void poll_desktop(netgw_t *gateway) {
     if (gateway->desktop_listener < 0) return;
-    int client;
-    while ((client = accept(gateway->desktop_listener, NULL, NULL)) >= 0) {
-        fcntl(client, F_SETFL, fcntl(client, F_GETFL) | O_NONBLOCK);
+    int64_t now_ms = slirp_clock_ns(gateway) / 1000000;
+    int fd;
+    while ((fd = accept(gateway->desktop_listener, NULL, NULL)) >= 0) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
         int slot = 0;
-        while (slot < DESKTOP_CLIENTS && gateway->desktop_clients[slot] >= 0) slot++;
+        while (slot < DESKTOP_CLIENTS && gateway->desktop_clients[slot].fd >= 0) slot++;
         if (slot == DESKTOP_CLIENTS) {
-            close(client);
+            close(fd);
             continue;
         }
-        gateway->desktop_clients[slot] = client;
+        gateway->desktop_clients[slot] = (desktop_client_t){ .fd = fd };
         gateway->desktop_connected = true;
         gateway_log(gateway, "desktop: connection from the Velo\n");
     }
     for (int i = 0; i < DESKTOP_CLIENTS; i++) {
-        if (gateway->desktop_clients[i] < 0) continue;
-        uint8_t discard[512];
+        desktop_client_t *client = &gateway->desktop_clients[i];
+        if (client->fd < 0) continue;
         ssize_t got;
-        while ((got = read(gateway->desktop_clients[i], discard, sizeof discard)) > 0) continue;
+        while ((got = read(client->fd, client->buffer + client->length, sizeof client->buffer - client->length)) > 0) {
+            client->length += (size_t)got;
+            handle_packets(gateway, client, now_ms);
+            if (client->length == sizeof client->buffer) client->length = 0;
+        }
         if (got == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
-            close(gateway->desktop_clients[i]);
-            gateway->desktop_clients[i] = -1;
+            close(client->fd);
+            client->fd = -1;
+            continue;
+        }
+        if (client->next_ping_ms && now_ms >= client->next_ping_ms) {
+            send_ping(client);
+            client->next_ping_ms = now_ms + DCCM_PING_MS;
         }
     }
 }
