@@ -67,6 +67,7 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_BACKLIGHT, "Backlight", 'b', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_SOUND, "Sound", 0, 0 },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_HOST_TIME, "Use Host Date/Time (after Reset)", 0, 0 },
     { MENU_ENTRY_SUBMENU, 0, "Memory (after Reset)", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_MEMORY_4, "4 MB (original)", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_MEMORY_8, "8 MB", 0, 0 },

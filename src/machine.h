@@ -59,6 +59,7 @@ uint64_t machine_rom_hash(machine_t *machine);
 bool machine_state_matches(machine_t *machine, const char *path);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);
 void machine_advance_clock(machine_t *machine, int64_t seconds);
+void machine_set_host_clock(machine_t *machine, bool enabled);
 
 void machine_dump_state(machine_t *machine);
 bool machine_read_virtual(machine_t *machine, uint32_t va, uint32_t *value);

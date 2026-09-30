@@ -90,7 +90,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--soft-reset=SECONDS] [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--soft-reset=SECONDS] [--host-time] [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -106,6 +106,7 @@ int main(int argc, char **argv) {
     double power_times[8];
     int power_count = 0;
     double soft_reset_at = -1;
+    bool host_time = false;
     double backlight_times[8];
     int backlight_count = 0;
     double serial_at = -1, net_at = -1, realtime = 0;
@@ -141,6 +142,7 @@ int main(int argc, char **argv) {
         else if (!strncmp(argv[i], "--backlight=", 12) && backlight_count < 8) backlight_times[backlight_count++] = atof(argv[i] + 12);
         else if (!strncmp(argv[i], "--power=", 8) && power_count < 8) power_times[power_count++] = atof(argv[i] + 8);
         else if (!strncmp(argv[i], "--soft-reset=", 13)) soft_reset_at = atof(argv[i] + 13);
+        else if (!strcmp(argv[i], "--host-time")) host_time = true;
         else if (!strncmp(argv[i], "--wav=", 6)) wav = argv[i] + 6;
         else if (!strncmp(argv[i], "--card=", 7)) card = argv[i] + 7;
         else if (!strncmp(argv[i], "--load=", 7)) load = argv[i] + 7;
@@ -164,6 +166,7 @@ int main(int argc, char **argv) {
         if (!strncmp(argv[i], "--memory=", 9)) machine_set_memory(machine, (uint32_t)atoi(argv[i] + 9));
         else if (!strncmp(argv[i], "--speed=", 8)) machine_set_speed(machine, (uint32_t)atoi(argv[i] + 8));
     }
+    machine_set_host_clock(machine, host_time);
     if (load && !machine_load(machine, load, NULL)) { fprintf(stderr, "cannot load state %s\n", load); return 1; }
     if (load) machine_serial_connect(machine, false);
     for (int w = 0; w < watch_count; w++) machine_watch_pc(machine, watches[w]);

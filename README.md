@@ -64,6 +64,7 @@ Menus:
 | Desktop | Desktop Connection Speed: 19200 (original), 38400, 57600, 115200 | |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
+| Emulation | Use Host Date/Time (after Reset; on by default) | |
 | Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB, 20 MB (4 MB + 16 MB DRAM card), 32 MB (16 MB + 16 MB DRAM card) | |
 | Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
 
@@ -163,6 +164,8 @@ Through the proxy, `127.0.0.1` is the Mac's loopback. It needs libcurl (part of 
 
 ## Memory and speed
 
+Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator replaces that with the Mac's time in Pacific time, so once you pick your home city (in the setup wizard or World Clock) the clock is right. After that the clock keeps running while the emulator is closed, as a saved machine's clock is advanced by the time away.
+
 Memory sets the RAM for the next cold boot (Run > Reset, which clears the machine) or `--memory=`. CE sizes the built-in RAM at boot and uses at most 16 MB of it. Beyond that, 20 MB and 32 MB add a 16 MB DRAM Miniature Card in slot 1, the Velo's own memory expansion: CE reads its ID EEPROM and maps it as a second RAM region, reporting 20,348 KB and 32,636 KB, split between storage and programs in Control Panel > System > Memory. A saved machine keeps the memory it was booted with (a 32 MB save is about 33 MB).
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
@@ -181,6 +184,7 @@ Headless options:
 - `--tap=SECONDS:X:Y[:HOLD]` holds the pen at a screen position, for 500 ms by default. Use 0.08 for double taps.
 - `--power=SECONDS` presses the power button for 200 ms.
 - `--soft-reset=SECONDS` soft-resets the machine (Run > Soft Reset).
+- `--host-time` sets the clock from the Mac at a cold boot (Emulation > Use Host Date/Time).
 - `--wav=FILE` writes the sound output, with the silences between sounds removed.
 - `--card=IMAGE` inserts a card image, after `--load`.
 - `--net=SECONDS` connects COM1 to the PPP gateway. `--serial=SECONDS` connects a bare cable, and `--serial-send=SECONDS:TEXT` sends bytes. Anything CE transmits is printed.

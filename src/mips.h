@@ -53,7 +53,7 @@ typedef struct {
     uint8_t *(*fetch_page)(void *context, uint32_t pa);
 } mips_bus_t;
 
-#define MIPS_WATCH_MAX 4
+#define MIPS_WATCH_MAX 5
 #define MIPS_SLOT_SIZE 0x02000000u
 
 struct mips_cpu {

@@ -239,6 +239,7 @@ static void state_path(char *path, size_t size, machine_t *machine, const char *
 typedef struct {
     uint32_t memory;
     uint32_t speed;
+    uint32_t host_time;
     char     user_agent[256];
     char     shared_folder[1024];
 } settings_t;
@@ -253,7 +254,7 @@ static void settings_path(char *path, size_t size) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1, NETGW_DEFAULT_USER_AGENT, "" };
+    settings_t settings = { 4, 1, 1, NETGW_DEFAULT_USER_AGENT, "" };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -263,6 +264,7 @@ static settings_t settings_load(void) {
     while (fgets(line, sizeof line, file)) {
         if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
+        else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
         else if (!strncmp(line, "user_agent=", 11)) {
             line[strcspn(line, "\r\n")] = 0;
             snprintf(settings.user_agent, sizeof settings.user_agent, "%s", line + 11);
@@ -280,7 +282,7 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory, settings->speed, settings->user_agent, settings->shared_folder);
+    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory, settings->speed, settings->host_time, settings->user_agent, settings->shared_folder);
     fclose(file);
 }
 
@@ -364,6 +366,7 @@ int main(int argc, char **argv) {
     machine_set_log(machine, log_message);
     machine_set_memory(machine, settings.memory);
     machine_set_speed(machine, settings.speed);
+    machine_set_host_clock(machine, settings.host_time != 0);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     int grid_width = LCD_WIDTH + 2 * LCD_MARGIN_X, grid_height = LCD_HEIGHT + 2 * LCD_MARGIN_Y;
@@ -547,6 +550,11 @@ int main(int argc, char **argv) {
                 notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Run > Reset (clears the machine)";
                 notice_left = NOTICE_SECONDS * 3;
                 break;
+            case MENU_HOST_TIME:
+                settings.host_time = !settings.host_time;
+                machine_set_host_clock(machine, settings.host_time != 0);
+                settings_save(&settings);
+                break;
             case MENU_SPEED_1:
             case MENU_SPEED_2:
             case MENU_SPEED_4:
@@ -659,6 +667,7 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_16, machine_memory_next(machine) == 16);
         menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
         menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
+        menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
         menu_set_checked(MENU_SPEED_1, machine_speed(machine) == 1);
         menu_set_checked(MENU_SPEED_2, machine_speed(machine) == 2);
         menu_set_checked(MENU_SPEED_4, machine_speed(machine) == 4);

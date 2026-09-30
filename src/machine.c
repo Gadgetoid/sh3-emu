@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "mips.h"
 #include "pccard.h"
@@ -193,6 +194,8 @@ struct machine {
     uint64_t periodic_next;
     uint64_t rtc_base;
     uint64_t rtc_anchor;
+    bool     host_clock;
+    uint32_t set_time_va;
     uint64_t alarm;
     bool     alarm_armed;
     uint64_t alarm_next;
@@ -1013,6 +1016,30 @@ static int load_b000ff(const uint8_t *file, size_t size, rom_region_t regions[2]
     return count;
 }
 
+static const uint32_t SET_REAL_TIME_CODE[] = { 0x27BDFFD8, 0xAFBF0014, 0x27A5001C, 0x27A60020, 0, 0x27A70024, 0x8FAE001C, 0x3C048000 };
+
+static uint32_t scan_set_real_time(const uint8_t *rom, uint32_t size, uint32_t pa) {
+    size_t words = sizeof SET_REAL_TIME_CODE / sizeof SET_REAL_TIME_CODE[0];
+    for (uint32_t offset = 0; offset + words * 4 <= size; offset += 4) {
+        bool match = true;
+        for (size_t i = 0; i < words && match; i++) {
+            uint32_t word;
+            memcpy(&word, rom + offset + i * 4, 4);
+            match = SET_REAL_TIME_CODE[i] ? word == SET_REAL_TIME_CODE[i] : (word >> 26) == 3;
+        }
+        if (match) return 0x80000000u | (pa + offset);
+    }
+    return 0;
+}
+
+static uint32_t find_set_real_time(const machine_t *m) {
+    uint32_t va = scan_set_real_time(m->rom, m->rom_size, m->rom_pa);
+    if (!va && m->rom2) va = scan_set_real_time(m->rom2, m->rom2_size, m->rom2_pa);
+    return va;
+}
+
+static void on_watch(void *context, uint32_t pc);
+
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
     rom_region_t regions[2] = { { 0 } };
     int region_count;
@@ -1068,6 +1095,11 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     bind_card_socket(m, NULL);
     bind_uart(m);
     machine_power_on(m);
+    m->set_time_va = find_set_real_time(m);
+    if (m->set_time_va) {
+        m->cpu.watch[m->cpu.watch_count++] = m->set_time_va;
+        m->cpu.on_watch = on_watch;
+    }
     return m;
 }
 
@@ -1538,6 +1570,10 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     return ok;
 }
 
+void machine_set_host_clock(machine_t *m, bool enabled) {
+    m->host_clock = enabled;
+}
+
 void machine_advance_clock(machine_t *m, int64_t seconds) {
     if (seconds <= 0) return;
     m->rtc_base = (m->rtc_base + (uint64_t)seconds * 32768u) & 0xFFFFFFFFFFull;
@@ -1560,7 +1596,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     int watch_count = m->cpu.watch_count;
     void (*on_watch)(void *, uint32_t) = m->cpu.on_watch;
     uint64_t cycles = m->cpu.cycles, rtc_base = m->rtc_base, rtc_anchor = m->rtc_anchor;
-    bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy;
+    bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy, host_clock = m->host_clock;
+    uint32_t set_time_va = m->set_time_va;
     uint32_t serial_tag = m->serial_tag;
     FILE *pending_card = m->pending_card;
     char pending_card_path[sizeof m->pending_card_path];
@@ -1619,6 +1656,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     memcpy(m->card_path, card_path, sizeof card_path);
     m->pccard.inserted = card.inserted;
     m->pccard.total_sectors = card.total_sectors;
+    m->host_clock = host_clock;
+    m->set_time_va = set_time_va;
     bind_card_socket(m, image);
     bind_uart(m);
     machine_power_on(m);
@@ -1729,16 +1768,70 @@ size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) {
 
 uint32_t machine_serial_baud(machine_t *m) { return uart_baud(&m->uart_port); }
 
-static void report_watch(void *context, uint32_t pc) {
-    machine_t *m = context;
+static bool guest_halfword(machine_t *m, uint32_t va, bool write, uint16_t *value) {
+    uint32_t pa, word = *value;
+    if (!mips_translate(&m->cpu, va, write, &pa)) return false;
+    if (write) return bus_write(m, pa, 2, word);
+    if (!bus_read(m, pa, 2, &word)) return false;
+    *value = (uint16_t)word;
+    return true;
+}
+
+static int64_t utc_seconds(int year, int month, int day, int hour) {
+    struct tm date = { .tm_year = year - 1900, .tm_mon = month - 1, .tm_mday = day, .tm_hour = hour };
+    return (int64_t)timegm(&date);
+}
+
+static int weekday(int year, int month, int day) {
+    time_t seconds = (time_t)utc_seconds(year, month, day, 0);
+    struct tm date;
+    gmtime_r(&seconds, &date);
+    return date.tm_wday;
+}
+
+static void first_boot_zone_time(time_t utc, struct tm *local) {
+    time_t standard = utc - 8 * 3600;
+    gmtime_r(&standard, local);
+    int year = local->tm_year + 1900;
+    int april_sunday = 1 + (7 - weekday(year, 4, 1)) % 7;
+    int october_sunday = 31 - weekday(year, 10, 31);
+    bool daylight = (int64_t)utc >= utc_seconds(year, 4, april_sunday, 10) && (int64_t)utc < utc_seconds(year, 10, october_sunday, 9);
+    if (!daylight) return;
+    time_t summer = utc - 7 * 3600;
+    gmtime_r(&summer, local);
+}
+
+static void apply_host_time(machine_t *m) {
+    uint32_t va = m->cpu.gpr[4];
+    uint16_t fields[8];
+    for (int i = 0; i < 8; i++) {
+        if (!guest_halfword(m, va + 2 * (uint32_t)i, false, &fields[i])) return;
+    }
+    bool first_boot = (fields[0] == 1996 || fields[0] == 1997) && fields[1] == 1 && fields[3] == 1 && fields[4] == 12 && !fields[5] && !fields[6];
+    if (!m->host_clock || !first_boot) return;
+    struct tm local;
+    first_boot_zone_time(time(NULL), &local);
+    uint16_t host[8] = { (uint16_t)(local.tm_year + 1900), (uint16_t)(local.tm_mon + 1), (uint16_t)local.tm_wday, (uint16_t)local.tm_mday,
+                         (uint16_t)local.tm_hour, (uint16_t)local.tm_min, (uint16_t)local.tm_sec, 0 };
+    for (int i = 0; i < 8; i++) guest_halfword(m, va + 2 * (uint32_t)i, true, &host[i]);
+    machine_logf(m, "clock: set from the host, %04u-%02u-%02u %02u:%02u:%02u in CE's default Pacific time\n", host[0], host[1], host[3], host[4], host[5], host[6]);
+}
+
+static void report_watch(machine_t *m, uint32_t pc) {
     mips_cpu_t *cpu = &m->cpu;
     machine_logf(m, "watch t=%.3f pc=%08X ra=%08X v0=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n", (double)cpu->cycles / MACHINE_CLOCK_HZ, pc,
                  cpu->gpr[31], cpu->gpr[2], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7]);
 }
 
+static void on_watch(void *context, uint32_t pc) {
+    machine_t *m = context;
+    if (pc == m->set_time_va) apply_host_time(m);
+    else report_watch(m, pc);
+}
+
 bool machine_watch_pc(machine_t *m, uint32_t va) {
     if (m->cpu.watch_count == MIPS_WATCH_MAX) return false;
     m->cpu.watch[m->cpu.watch_count++] = va;
-    m->cpu.on_watch = report_watch;
+    m->cpu.on_watch = on_watch;
     return true;
 }
