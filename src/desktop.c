@@ -1,5 +1,6 @@
 #include "desktop.h"
 #include "rapi.h"
+#include "rapiload.h"
 #include "rapisetup.h"
 #include "rapisync.h"
 
@@ -15,7 +16,7 @@
 #define CONNECT_ATTEMPTS 10
 #define PATH_SIZE        1024
 
-typedef enum { JOB_SEND, JOB_FETCH, JOB_SYNC, JOB_PROXY, JOB_BAUD } job_kind_t;
+typedef enum { JOB_SEND, JOB_FETCH, JOB_SYNC, JOB_PROXY, JOB_BAUD, JOB_LOAD } job_kind_t;
 
 struct desktop {
     char            socket_path[PATH_SIZE];
@@ -136,6 +137,11 @@ static void run_sync(desktop_t *desktop, rapi_t *rapi) {
                     result.skipped ? ", some skipped" : "");
 }
 
+static void run_load(desktop_t *desktop, rapi_t *rapi) {
+    if (rapiload_run(rapi, desktop->folder, NULL, sync_message, desktop)) set_status(desktop, "installed %s", leaf_of(desktop->folder));
+    else set_status(desktop, "%s didn't install cleanly, see velo-rapi load for details", leaf_of(desktop->folder));
+}
+
 static void run_proxy(desktop_t *desktop, rapi_t *rapi) {
     rapi_version_t version = { 0 };
     if (!rapisetup_proxy(rapi, true)) set_status(desktop, "%s", rapi_error(rapi));
@@ -162,6 +168,7 @@ static void *job_thread(void *opaque) {
         else if (desktop->kind == JOB_FETCH) run_fetch(desktop, rapi);
         else if (desktop->kind == JOB_PROXY) run_proxy(desktop, rapi);
         else if (desktop->kind == JOB_BAUD) run_baud(desktop, rapi);
+        else if (desktop->kind == JOB_LOAD) run_load(desktop, rapi);
         else run_sync(desktop, rapi);
         rapi_disconnect(rapi);
     }
@@ -251,6 +258,13 @@ bool desktop_sync(desktop_t *desktop, const char *folder) {
     if (!claim(desktop)) return false;
     desktop->kind = JOB_SYNC;
     snprintf(desktop->folder, sizeof desktop->folder, "%s", folder);
+    return start(desktop);
+}
+
+bool desktop_load(desktop_t *desktop, const char *script) {
+    if (!claim(desktop)) return false;
+    desktop->kind = JOB_LOAD;
+    snprintf(desktop->folder, sizeof desktop->folder, "%s", script);
     return start(desktop);
 }
 

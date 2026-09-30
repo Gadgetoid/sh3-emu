@@ -15,6 +15,8 @@
 #include "rapi.h"
 
 #include <fcntl.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <spawn.h>
 #include <termios.h>
 #include <unistd.h>
@@ -213,6 +215,47 @@ static void pick_done(void *userdata, const char *const *files, int filter) {
 static const char *leaf_name(const char *path) {
     const char *slash = strrchr(path, '/');
     return slash && slash[1] ? slash + 1 : path;
+}
+
+typedef struct {
+    char paths[PICK_MAX][1024];
+    int  count;
+} dropped_t;
+
+static bool has_extension(const char *path, const char *extension) {
+    const char *dot = strrchr(path, '.');
+    return dot && !strcasecmp(dot, extension);
+}
+
+static bool is_directory(const char *path) {
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t *desktop, bool online) {
+    static char message[1200];
+    int files = 0, scripts = -1, cards = -1;
+    const char *list[PICK_MAX + 1];
+    for (int i = 0; i < dropped->count; i++) {
+        const char *path = dropped->paths[i];
+        if (is_directory(path)) continue;
+        if (has_extension(path, ".img") && cards < 0) cards = i;
+        else if (has_extension(path, ".load") && scripts < 0) scripts = i;
+        list[files++] = path;
+    }
+    list[files] = NULL;
+    dropped->count = 0;
+    if (cards >= 0 && files == 1) {
+        snprintf(message, sizeof message, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", leaf_name(list[0]));
+        return message;
+    }
+    if (!files) return "drop files, a .load script or a card image";
+    if (!online) return "connect Serial > Network (PPP) to send files to the Velo";
+    if (scripts >= 0) {
+        snprintf(message, sizeof message, "installing %s", leaf_name(dropped->paths[scripts]));
+        return desktop_load(desktop, dropped->paths[scripts]) ? message : "busy with the last transfer";
+    }
+    return desktop_send(desktop, list) ? "sending to \\My Documents" : "busy with the last transfer";
 }
 
 static void log_message(const char *message) {
@@ -442,6 +485,7 @@ int main(int argc, char **argv) {
     serial_t serial = { SERIAL_OFF, NULL, -1, -1, "", settings.user_agent };
     char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
     static typer_t typer;
+    static dropped_t dropped;
     rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
     desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
@@ -477,6 +521,16 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
+            case SDL_EVENT_DROP_FILE:
+                if (event.drop.data && dropped.count < PICK_MAX) snprintf(dropped.paths[dropped.count++], sizeof dropped.paths[0], "%s", event.drop.data);
+                break;
+            case SDL_EVENT_DROP_COMPLETE:
+                if (dropped.count) {
+                    bool online = serial.gateway && netgw_online(serial.gateway);
+                    notice = handle_drop(&dropped, machine, desktop, online && !desktop_busy(desktop));
+                    notice_left = NOTICE_SECONDS * 2;
+                }
+                break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 release_keys(machine, held, -1);
                 break;

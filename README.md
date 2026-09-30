@@ -108,6 +108,7 @@ The Desktop menu uses it:
 
 - Send Files to Velo… copies files into `\My Documents`.
 - Copy My Documents to Mac… copies `\My Documents`, with its folders, into a Mac folder.
+- Dropping files on the window sends them to `\My Documents`, and a dropped `.load` script installs its package (see Installing CE 1.0 software). A single dropped `.img` is inserted as the card, with or without the connection.
 - Shared Folder… pairs a Mac folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too: on the Mac it goes to the Trash. When both sides changed a file, the Mac keeps its copy and the Velo's comes over as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped. Empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`, and the last sync's state in `sync-manifest.txt` next to `rapi.sock`.
 
 `velo-rapi` does the same from the command line, while the emulator is running with Network (PPP) connected:
