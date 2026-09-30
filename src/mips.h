@@ -53,6 +53,9 @@ typedef struct {
     uint8_t *(*fetch_page)(void *context, uint32_t pa);
 } mips_bus_t;
 
+#define MIPS_WATCH_MAX 4
+#define MIPS_SLOT_SIZE 0x02000000u
+
 struct mips_cpu {
     uint32_t gpr[32];
     uint32_t hi, lo;
@@ -74,6 +77,9 @@ struct mips_cpu {
     uint32_t last_fetch_vpn;
     uint8_t *last_fetch_page;
     bool     last_fetch_valid;
+    uint32_t watch[MIPS_WATCH_MAX];
+    int      watch_count;
+    void   (*on_watch)(void *context, uint32_t pc);
 };
 
 void mips_reset(mips_cpu_t *cpu, uint32_t entry);

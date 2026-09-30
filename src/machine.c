@@ -1510,6 +1510,10 @@ void machine_reset(machine_t *m) {
 
 static void reset_machine(machine_t *m, bool keep_ram) {
     mips_bus_t bus = m->cpu.bus;
+    uint32_t watch[MIPS_WATCH_MAX];
+    memcpy(watch, m->cpu.watch, sizeof watch);
+    int watch_count = m->cpu.watch_count;
+    void (*on_watch)(void *, uint32_t) = m->cpu.on_watch;
     uint64_t cycles = m->cpu.cycles;
     bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy;
     uint32_t serial_tag = m->serial_tag;
@@ -1574,6 +1578,9 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     bind_uart(m);
     machine_power_on(m);
     m->cpu.speed = speed;
+    memcpy(m->cpu.watch, watch, sizeof watch);
+    m->cpu.watch_count = watch_count;
+    m->cpu.on_watch = on_watch;
     if (keep_ram) {
         m->cpu.cycles = cycles;
         m->power_ctl &= ~POWER_COLDSTART;
@@ -1674,3 +1681,17 @@ size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) {
 }
 
 uint32_t machine_serial_baud(machine_t *m) { return uart_baud(&m->uart_port); }
+
+static void report_watch(void *context, uint32_t pc) {
+    machine_t *m = context;
+    mips_cpu_t *cpu = &m->cpu;
+    machine_logf(m, "watch t=%.3f pc=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n", (double)cpu->cycles / MACHINE_CLOCK_HZ, pc,
+                 cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7]);
+}
+
+bool machine_watch_pc(machine_t *m, uint32_t va) {
+    if (m->cpu.watch_count == MIPS_WATCH_MAX) return false;
+    m->cpu.watch[m->cpu.watch_count++] = va;
+    m->cpu.on_watch = report_watch;
+    return true;
+}

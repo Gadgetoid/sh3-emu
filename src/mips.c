@@ -479,6 +479,11 @@ void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
         }
         uint32_t instruction;
         if (!fetch(cpu, current_pc, &instruction)) continue;
+        for (int w = 0; w < cpu->watch_count; w++) {
+            uint32_t va = cpu->watch[w];
+            bool slot_relative = va < MIPS_SLOT_SIZE && current_pc < 0x80000000u;
+            if (slot_relative ? (current_pc & (MIPS_SLOT_SIZE - 1)) == va : current_pc == va) cpu->on_watch(cpu->bus.context, current_pc);
+        }
         cpu->pc = cpu->next_pc;
         cpu->next_pc = cpu->pc + 4;
         cpu->next_in_delay_slot = false;

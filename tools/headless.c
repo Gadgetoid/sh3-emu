@@ -90,7 +90,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -108,6 +108,8 @@ int main(int argc, char **argv) {
     double backlight_times[8];
     int backlight_count = 0;
     double serial_at = -1, net_at = -1, realtime = 0;
+    uint32_t watches[MACHINE_WATCH_MAX];
+    int watch_count = 0;
     netgw_t *gateway = NULL;
     netgw_options_t net_options = { NETGW_DEFAULT_USER_AGENT, NULL };
     double send_times[8];
@@ -125,6 +127,7 @@ int main(int argc, char **argv) {
         else if (!strncmp(argv[i], "--user-agent=", 13)) net_options.user_agent = argv[i] + 13;
         else if (!strncmp(argv[i], "--rapi=", 7)) net_options.rapi_socket = argv[i] + 7;
         else if (!strcmp(argv[i], "--realtime")) realtime = 1;
+        else if (!strncmp(argv[i], "--watch-pc=", 11) && watch_count < MACHINE_WATCH_MAX) watches[watch_count++] = (uint32_t)strtoul(argv[i] + 11, NULL, 0);
         else if (!strncmp(argv[i], "--realtime=", 11)) realtime = atof(argv[i] + 11);
         else if (!strncmp(argv[i], "--type=", 7) && type_count < 16) {
             char *colon = strchr(argv[i] + 7, ':');
@@ -161,6 +164,7 @@ int main(int argc, char **argv) {
     }
     if (load && !machine_load(machine, load, NULL)) { fprintf(stderr, "cannot load state %s\n", load); return 1; }
     if (load) machine_serial_connect(machine, false);
+    for (int w = 0; w < watch_count; w++) machine_watch_pc(machine, watches[w]);
     if (card && !machine_insert_card(machine, card)) { fprintf(stderr, "cannot open card image %s\n", card); return 1; }
 
     FILE *wav_file = wav ? fopen(wav, "wb") : NULL;

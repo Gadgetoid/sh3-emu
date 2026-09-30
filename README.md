@@ -186,6 +186,7 @@ Headless options:
 - `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key), `--user-agent=TEXT`.
 - `--rapi=SOCKET` makes the Velo's RAPI port available at SOCKET. A loaded state starts with the cable unplugged, so `--net` reconnects it.
 - `--realtime[=N]` holds the machine to N times real time (default 1). Unpaced, an idle Velo runs about 1000 times faster than real time, which outpaces anything driving it over RAPI; the tests use `--realtime=10`. SIGTERM or SIGINT ends the run early and still writes `--save`, `--pgm` and `--wav`.
+- `--watch-pc=VA` (up to four) logs the time, `ra` and `a0`-`a3` each time the CPU reaches VA. Addresses below 0x02000000 match in any process slot, so a DLL import thunk or an application address works for whichever process is running.
 
 ## What's emulated
 
