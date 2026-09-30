@@ -49,6 +49,7 @@
 
 struct rapi {
     int      socket;
+    uint32_t os_major;
     uint8_t *reply;
     size_t   reply_length, reply_offset;
     char     error[512];
@@ -310,6 +311,7 @@ rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
         rapi_disconnect(rapi);
         return NULL;
     }
+    rapi->os_major = version.major;
     return rapi;
 }
 
@@ -462,6 +464,7 @@ bool rapi_reg_open(rapi_t *rapi, uint32_t parent, const char *subkey, bool creat
 }
 
 bool rapi_reg_close(rapi_t *rapi, uint32_t key) {
+    if (rapi->os_major >= 2) return true;
     message_t message = { 0 };
     uint32_t last_error, result;
     return message_begin(&message, COMMAND_REG_CLOSE_KEY) && message_u32(&message, key) &&
