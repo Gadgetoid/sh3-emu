@@ -59,11 +59,12 @@ static void layout(view_t *view) {
     int source_w, source_h;
     view_source_size(view->display, &source_w, &source_h);
     float fit = fminf((float)output_w / source_w, (float)output_h / source_h);
-    float scale = fit >= 1.0f ? floorf(fit) : fit;
+    bool whole = fabsf(fit - roundf(fit)) < 0.01f && fit >= 1.0f;
+    float scale = whole ? roundf(fit) : fit;
 
     int texture_w = LCD_WIDTH, texture_h = LCD_HEIGHT;
     if (view->display == VIEW_SIMULATED) {
-        lcd_compose_setup(scale >= 2.0f ? (int)scale : 2);
+        lcd_compose_setup(scale >= 2.0f ? (int)ceilf(scale) : 2);
         lcd_invalidate();
         texture_w = lcd_compose_width();
         texture_h = lcd_compose_height();
@@ -71,11 +72,11 @@ static void layout(view_t *view) {
     if (!view->texture || texture_w != view->texture_w || texture_h != view->texture_h) {
         if (view->texture) SDL_DestroyTexture(view->texture);
         view->texture = SDL_CreateTexture(view->renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STREAMING, texture_w, texture_h);
-        SDL_SetTextureScaleMode(view->texture, fit >= 1.0f ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
         view->texture_w = texture_w;
         view->texture_h = texture_h;
         if (view->display == VIEW_SIMULATED) lcd_invalidate();
     }
+    SDL_SetTextureScaleMode(view->texture, whole && (view->display == VIEW_SHARP || (int)scale == lcd_compose_width() / source_w) ? SDL_SCALEMODE_NEAREST : SDL_SCALEMODE_LINEAR);
     view->dest.w = source_w * scale;
     view->dest.h = source_h * scale;
     view->dest.x = floorf((output_w - view->dest.w) / 2);

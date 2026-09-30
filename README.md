@@ -58,7 +58,7 @@ Menus:
 | Edit | Copy Screen (a PNG of the screen as shown, simulated or sharp) | Cmd-C |
 | Edit | Save Screenshot to Desktop (`Velo Screenshot DATE at TIME.png`) | Cmd-Shift-S |
 | Edit | Paste as Typing (types the Mac clipboard on the Velo keyboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
-| View | 1x, 2x, 3x, 4x (window size; the window can also be resized, and scales in whole pixels) | Cmd-1 to Cmd-4 |
+| View | 50%, 75%, Actual Size, 150%, 200%; Zoom In and Zoom Out step through them | Cmd-0, Cmd-=, Cmd-- |
 | View | Full Screen | Cmd-Ctrl-F |
 | View | Simulated LCD (the panel, with glass, ghosting and backlight) or Sharp Pixels (plain greys at 480 x 240) | |
 | Card | Insert Card Image… | Cmd-O |

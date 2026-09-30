@@ -308,7 +308,7 @@ typedef struct {
     uint32_t memory;
     uint32_t speed;
     uint32_t host_time;
-    uint32_t zoom;
+    uint32_t scale;
     uint32_t connect_at_launch;
     uint32_t display;
     char     user_agent[256];
@@ -324,8 +324,18 @@ static void settings_path(char *path, size_t size) {
     snprintf(path, size, "%s/emu.ini", base);
 }
 
+static const uint32_t SCALES[] = { 50, 75, 100, 150, 200 };
+#define SCALE_COUNT (int)(sizeof SCALES / sizeof SCALES[0])
+
+static int scale_index(uint32_t scale) {
+    for (int i = 0; i < SCALE_COUNT; i++) {
+        if (SCALES[i] == scale) return i;
+    }
+    return -1;
+}
+
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1, 1, 2, 0, VIEW_SIMULATED, NETGW_DEFAULT_USER_AGENT, "" };
+    settings_t settings = { 4, 1, 1, 100, 0, VIEW_SIMULATED, NETGW_DEFAULT_USER_AGENT, "" };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -336,7 +346,7 @@ static settings_t settings_load(void) {
         if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
-        else if (sscanf(line, "zoom=%u", &value) == 1 && value >= 1 && value <= 4) settings.zoom = value;
+        else if (sscanf(line, "scale=%u", &value) == 1 && scale_index(value) >= 0) settings.scale = value;
         else if (sscanf(line, "connect_at_launch=%u", &value) == 1) settings.connect_at_launch = value;
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
         else if (!strncmp(line, "user_agent=", 11)) {
@@ -356,8 +366,8 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nzoom=%u\ndisplay=%u\nconnect_at_launch=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
-            settings->speed, settings->host_time, settings->zoom, settings->display, settings->connect_at_launch, settings->user_agent, settings->shared_folder);
+    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
+            settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->user_agent, settings->shared_folder);
     fclose(file);
 }
 
@@ -441,11 +451,17 @@ static bool save_screenshot(view_t *view, char *path, size_t size) {
     return saved;
 }
 
-static void fit_window(SDL_Window *window, view_t *view, uint32_t zoom) {
+static void window_size(view_display_t display, uint32_t scale, int *width, int *height) {
+    view_source_size(display, width, height);
+    *width = *width * WINDOW_SCALE * (int)scale / 100;
+    *height = *height * WINDOW_SCALE * (int)scale / 100;
+}
+
+static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
     if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(window, false);
     int width, height;
-    view_source_size(view_display(view), &width, &height);
-    SDL_SetWindowSize(window, width * (int)zoom, height * (int)zoom);
+    window_size(view_display(view), scale, &width, &height);
+    SDL_SetWindowSize(window, width, height);
 }
 
 int main(int argc, char **argv) {
@@ -488,15 +504,13 @@ int main(int argc, char **argv) {
     machine_set_host_clock(machine, settings.host_time != 0);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
-    int source_width, source_height;
-    view_source_size((view_display_t)settings.display, &source_width, &source_height);
-    SDL_Window *window = SDL_CreateWindow("Philips Velo 1", source_width * (int)settings.zoom, source_height * (int)settings.zoom,
-                                          SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE);
+    int window_width, window_height;
+    window_size((view_display_t)settings.display, settings.scale, &window_width, &window_height);
+    SDL_Window *window = SDL_CreateWindow("Philips Velo 1", window_width, window_height, SDL_WINDOW_HIGH_PIXEL_DENSITY);
     SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, NULL) : NULL;
     if (!renderer) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_SetRenderVSync(renderer, 1);
 
-    SDL_SetWindowMinimumSize(window, LCD_WIDTH / 2, LCD_HEIGHT / 2);
     view_t *view = view_create(window, renderer, (view_display_t)settings.display);
 
     if (screenshot) {
@@ -647,14 +661,22 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
-            case MENU_ZOOM_1:
-            case MENU_ZOOM_2:
-            case MENU_ZOOM_3:
-            case MENU_ZOOM_4:
-                settings.zoom = (uint32_t)(item - MENU_ZOOM_1 + 1);
+            case MENU_SCALE_50:
+            case MENU_SCALE_75:
+            case MENU_SCALE_100:
+            case MENU_SCALE_150:
+            case MENU_SCALE_200:
+            case MENU_ZOOM_IN:
+            case MENU_ZOOM_OUT: {
+                int index = scale_index(settings.scale);
+                if (item == MENU_ZOOM_IN) index = index + 1 < SCALE_COUNT ? index + 1 : index;
+                else if (item == MENU_ZOOM_OUT) index = index > 0 ? index - 1 : index;
+                else index = item - MENU_SCALE_50;
+                settings.scale = SCALES[index];
                 settings_save(&settings);
-                fit_window(window, view, settings.zoom);
+                fit_window(window, view, settings.scale);
                 break;
+            }
             case MENU_FULL_SCREEN:
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
                 break;
@@ -663,7 +685,7 @@ int main(int argc, char **argv) {
                 settings.display = item == MENU_DISPLAY_SHARP ? VIEW_SHARP : VIEW_SIMULATED;
                 settings_save(&settings);
                 view_set_display(view, (view_display_t)settings.display);
-                fit_window(window, view, settings.zoom);
+                fit_window(window, view, settings.scale);
                 break;
             case MENU_COPY_SCREEN:
                 notice = copy_screen(view) ? "screen copied" : "could not copy the screen";
@@ -881,7 +903,9 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
         menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
         menu_set_checked(MENU_CONNECT_AT_LAUNCH, settings.connect_at_launch != 0);
-        for (int zoom_item = MENU_ZOOM_1; zoom_item <= MENU_ZOOM_4; zoom_item++) menu_set_checked(zoom_item, settings.zoom == (uint32_t)(zoom_item - MENU_ZOOM_1 + 1));
+        for (int scale_item = MENU_SCALE_50; scale_item <= MENU_SCALE_200; scale_item++) menu_set_checked(scale_item, settings.scale == SCALES[scale_item - MENU_SCALE_50]);
+        menu_set_enabled(MENU_ZOOM_IN, settings.scale < SCALES[SCALE_COUNT - 1]);
+        menu_set_enabled(MENU_ZOOM_OUT, settings.scale > SCALES[0]);
         menu_set_checked(MENU_FULL_SCREEN, (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0);
         menu_set_checked(MENU_DISPLAY_SIMULATED, settings.display == VIEW_SIMULATED);
         menu_set_checked(MENU_DISPLAY_SHARP, settings.display == VIEW_SHARP);
