@@ -136,6 +136,16 @@ int main(int argc, char **argv) {
             if (sscanf(argv[i] + 6, "%lf:%x", &key_times[key_count], &key_codes[key_count]) == 2) key_count++;
         }
     }
+    double latest = soft_reset_at;
+    for (int k = 0; k < key_count; k++) if (key_times[k] > latest) latest = key_times[k];
+    for (int t = 0; t < tap_count; t++) if (tap_times[t] > latest) latest = tap_times[t];
+    for (int b = 0; b < power_count; b++) if (power_times[b] > latest) latest = power_times[b];
+    for (int b = 0; b < backlight_count; b++) if (backlight_times[b] > latest) latest = backlight_times[b];
+    for (int k = 0; k < type_count; k++) if (type_times[k] > latest) latest = type_times[k];
+    for (int k = 0; k < send_count; k++) if (send_times[k] > latest) latest = send_times[k];
+    if (serial_at > latest) latest = serial_at;
+    if (net_at > latest) latest = net_at;
+    if (latest >= seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, seconds);
     size_t rom_size;
     uint8_t *rom = read_file(argv[1], &rom_size);
     if (!rom) { fprintf(stderr, "cannot read %s\n", argv[1]); return 1; }
