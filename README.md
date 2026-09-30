@@ -16,7 +16,7 @@ The Velo 1's CE 2.0 upgrade shipped as a ROM Miniature Card. CERF's `philips_vel
 
 The ROM's shortcuts and desktop icons point at `\Storage Card`, CE 2.0's name for the PC Card, where the upgrade kept the Microsoft applications. Insert a CompactFlash image holding them with `--card=IMAGE`. Reset (Start > Run, `reset`, or after an install) jumps to the MIPS reset vector at 0xBFC00000, the Velo's boot block, which isn't in either dump. The emulator's boot block does a warm reset: the machine restarts from the ROM's entry with RAM kept, so CE keeps its object store and loads newly installed drivers. The desktop connection needs `rapisrv.exe`, which the stock ROM lacks; without it CE 2.0 reports "Out of Memory" when the cable is connected. With it installed, CE 2.0 connects to port 5679 and sends its device information. It then drops the link unless the desktop pings it within about three seconds of emulated time, so the emulator answers as SynCE's dccm does and pings every emulated second. `velo-rapi` then works as with CE 1.0.
 
-`make test` runs a few CE 2.0 checks when `rom/ce2/nk.bin` exists, or with `make test CE2_ROM=PATH`.
+`make test` runs a few CE 2.0 checks when `rom/nk-ce2.bin` exists, or with `make test CE2_ROM=PATH`.
 
 ## Build
 

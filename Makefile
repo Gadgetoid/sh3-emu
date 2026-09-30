@@ -4,7 +4,7 @@ PROXYCHECK = proxycheck
 VELORAPI  = velo-rapi
 BUILD     = build
 ROM      ?= rom/nk.bin
-CE2_ROM  ?= rom/ce2/nk.bin
+CE2_ROM  ?= rom/nk-ce2.bin
 
 .DEFAULT_GOAL := all
 
