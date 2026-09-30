@@ -14,7 +14,9 @@ hdiutil convert -quiet "$work/card.dmg" -format UDTO -o "$work/card"
 mv "$work/card.cdr" "$image"
 if [ $# -gt 0 ]; then
     mount=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "$image" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
-    for dir in "$@"; do cp -R "$dir" "$mount/"; done
+    touch "$mount/.metadata_never_index"
+    for dir in "$@"; do cp -RX "$dir" "$mount/"; done
+    rm -f "$mount/.metadata_never_index"
     find "$mount" -name '._*' -delete
     rm -rf "$mount/.fseventsd" "$mount/.Spotlight-V100" "$mount/.Trashes"
     hdiutil detach -quiet "$mount"
