@@ -170,7 +170,7 @@ static void serial_pump(serial_t *serial, machine_t *machine) {
         else if (serial->pty >= 0 && write(serial->pty, buffer, count) < 0) break;
     }
     if (serial->gateway) {
-        netgw_poll(serial->gateway);
+        netgw_poll(serial->gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
         while ((count = netgw_to_guest(serial->gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
     } else if (serial->pty >= 0) {
         ssize_t got;

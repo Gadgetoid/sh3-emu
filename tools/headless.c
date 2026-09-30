@@ -242,7 +242,7 @@ int main(int argc, char **argv) {
                 uint8_t buffer[4096];
                 size_t count;
                 while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) netgw_from_guest(gateway, buffer, count);
-                netgw_poll(gateway);
+                netgw_poll(gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
                 while ((count = netgw_to_guest(gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
             }
         } else {

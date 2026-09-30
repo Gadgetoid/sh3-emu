@@ -1685,8 +1685,8 @@ uint32_t machine_serial_baud(machine_t *m) { return uart_baud(&m->uart_port); }
 static void report_watch(void *context, uint32_t pc) {
     machine_t *m = context;
     mips_cpu_t *cpu = &m->cpu;
-    machine_logf(m, "watch t=%.3f pc=%08X ra=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n", (double)cpu->cycles / MACHINE_CLOCK_HZ, pc,
-                 cpu->gpr[31], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7]);
+    machine_logf(m, "watch t=%.3f pc=%08X ra=%08X v0=%08X a0=%08X a1=%08X a2=%08X a3=%08X\n", (double)cpu->cycles / MACHINE_CLOCK_HZ, pc,
+                 cpu->gpr[31], cpu->gpr[2], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7]);
 }
 
 bool machine_watch_pc(machine_t *m, uint32_t va) {

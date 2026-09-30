@@ -57,7 +57,7 @@
 #define DESKTOP_CLIENTS 4
 #define DCCM_PING 0x12345678u
 #define DCCM_PACKET_MAX 512
-#define DCCM_PING_MS 5000
+#define DCCM_PING_MS 1000
 #define RAPI_PORT 990
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
@@ -546,9 +546,8 @@ static void handle_packets(netgw_t *gateway, desktop_client_t *client, int64_t n
     }
 }
 
-static void poll_desktop(netgw_t *gateway) {
+static void poll_desktop(netgw_t *gateway, int64_t now_ms) {
     if (gateway->desktop_listener < 0) return;
-    int64_t now_ms = slirp_clock_ns(gateway) / 1000000;
     int fd;
     while ((fd = accept(gateway->desktop_listener, NULL, NULL)) >= 0) {
         fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
@@ -729,13 +728,13 @@ static int get_revents(int index, void *opaque) {
     return events;
 }
 
-void netgw_poll(netgw_t *gateway) {
+void netgw_poll(netgw_t *gateway, uint64_t guest_ms) {
     if (gateway->arp_pending) {
         gateway->arp_pending = false;
         send_arp(gateway, gateway->arp_mac, 2, gateway->arp_mac, gateway->arp_ip);
     }
     webproxy_poll(gateway->proxy);
-    poll_desktop(gateway);
+    poll_desktop(gateway, (int64_t)guest_ms);
     int64_t now_ms = slirp_clock_ns(gateway) / 1000000;
     for (int i = 0; i < MAX_TIMERS; i++) {
         netgw_timer_t *timer = &gateway->timers[i];
