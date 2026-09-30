@@ -63,6 +63,7 @@ Menus:
 | Serial | Network (PPP) | Cmd-Shift-N |
 | Serial | Pseudo-terminal | |
 | Serial | Disconnect | |
+| Serial | Connect Network at Launch (Network (PPP) each time the emulator starts; `--serial=off` skips it once) | |
 | Desktop | Send Files to Velo… (into \My Documents) | |
 | Desktop | Copy My Documents to Mac… | |
 | Desktop | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |

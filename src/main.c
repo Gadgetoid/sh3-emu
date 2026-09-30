@@ -287,6 +287,7 @@ typedef struct {
     uint32_t speed;
     uint32_t host_time;
     uint32_t zoom;
+    uint32_t connect_at_launch;
     uint32_t display;
     char     user_agent[256];
     char     shared_folder[1024];
@@ -302,7 +303,7 @@ static void settings_path(char *path, size_t size) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1, 1, 2, VIEW_SIMULATED, NETGW_DEFAULT_USER_AGENT, "" };
+    settings_t settings = { 4, 1, 1, 2, 0, VIEW_SIMULATED, NETGW_DEFAULT_USER_AGENT, "" };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -314,6 +315,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
         else if (sscanf(line, "zoom=%u", &value) == 1 && value >= 1 && value <= 4) settings.zoom = value;
+        else if (sscanf(line, "connect_at_launch=%u", &value) == 1) settings.connect_at_launch = value;
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
         else if (!strncmp(line, "user_agent=", 11)) {
             line[strcspn(line, "\r\n")] = 0;
@@ -332,8 +334,8 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nzoom=%u\ndisplay=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory, settings->speed,
-            settings->host_time, settings->zoom, settings->display, settings->user_agent, settings->shared_folder);
+    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nzoom=%u\ndisplay=%u\nconnect_at_launch=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
+            settings->speed, settings->host_time, settings->zoom, settings->display, settings->connect_at_launch, settings->user_agent, settings->shared_folder);
     fclose(file);
 }
 
@@ -423,14 +425,15 @@ int main(int argc, char **argv) {
     bool fresh = false;
     const char *card = NULL;
     const char *state_file = NULL;
-    serial_mode_t serial_mode = SERIAL_OFF;
     settings_t settings = settings_load();
+    serial_mode_t serial_mode = settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF;
     for (int i = 1; i < argc; i++) {
         if (!strncmp(argv[i], "--memory=", 9)) { settings.memory = (uint32_t)atoi(argv[i] + 9); continue; }
         if (!strncmp(argv[i], "--speed=", 8)) { settings.speed = (uint32_t)atoi(argv[i] + 8); continue; }
         if (!strncmp(argv[i], "--user-agent=", 13)) { snprintf(settings.user_agent, sizeof settings.user_agent, "%s", argv[i] + 13); continue; }
         if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
         if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
+        if (!strcmp(argv[i], "--serial=off")) { serial_mode = SERIAL_OFF; continue; }
         if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
         if (!strncmp(argv[i], "--state=", 8)) { state_file = argv[i] + 8; continue; }
         if (!strcmp(argv[i], "--verbose")) verbose = true;
@@ -440,7 +443,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--state=FILE] [--card=IMAGE] [--serial=net|pty] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--state=FILE] [--card=IMAGE] [--serial=net|pty|off] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -646,6 +649,10 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS * 2;
                 break;
             }
+            case MENU_CONNECT_AT_LAUNCH:
+                settings.connect_at_launch = !settings.connect_at_launch;
+                settings_save(&settings);
+                break;
             case MENU_PASTE: {
                 char *clipboard = SDL_GetClipboardText();
                 size_t typed = clipboard ? typer_start(&typer, clipboard) : 0;
@@ -806,6 +813,7 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
         menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
         menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
+        menu_set_checked(MENU_CONNECT_AT_LAUNCH, settings.connect_at_launch != 0);
         for (int zoom_item = MENU_ZOOM_1; zoom_item <= MENU_ZOOM_4; zoom_item++) menu_set_checked(zoom_item, settings.zoom == (uint32_t)(zoom_item - MENU_ZOOM_1 + 1));
         menu_set_checked(MENU_FULL_SCREEN, (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0);
         menu_set_checked(MENU_DISPLAY_SIMULATED, settings.display == VIEW_SIMULATED);

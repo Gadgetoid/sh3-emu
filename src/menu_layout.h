@@ -63,6 +63,8 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SERIAL_NETWORK, "Network (PPP)", 'n', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
     { MENU_ENTRY_ITEM, MENU_SERIAL_PTY, "Pseudo-terminal", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SERIAL_OFF, "Disconnect", 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_CONNECT_AT_LAUNCH, "Connect Network at Launch", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "Desktop", 0, 0 },
