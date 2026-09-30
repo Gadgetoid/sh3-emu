@@ -34,6 +34,10 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SAVE_STATE, "Save State", 's', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_LOAD_STATE, "Load State", 'l', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_SHOW_STATE, "Show Saved State in Finder", 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SAVE_SNAPSHOT, "Save Snapshot\xe2\x80\xa6", 's', MENU_KEY_PRIMARY | MENU_KEY_CONTROL },
+    { MENU_ENTRY_ITEM, MENU_LOAD_SNAPSHOT, "Load Snapshot\xe2\x80\xa6", 'l', MENU_KEY_PRIMARY | MENU_KEY_CONTROL },
+    { MENU_ENTRY_ITEM, MENU_SHOW_SNAPSHOTS, "Show Snapshots in Finder", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "Edit", 0, 0 },

@@ -52,6 +52,9 @@ Menus:
 | Run | Save State | Cmd-S |
 | Run | Load State | Cmd-L |
 | Run | Show Saved State in Finder | |
+| Run | Save Snapshot… (a named copy of the machine, in `velo-emu/snapshots` by default) | Cmd-Ctrl-S |
+| Run | Load Snapshot… (returns to one; autosave carries on to the ROM's own state) | Cmd-Ctrl-L |
+| Run | Show Snapshots in Finder | |
 | Edit | Copy Screen (a PNG of the screen as shown, simulated or sharp) | Cmd-C |
 | Edit | Save Screenshot to Desktop (`Velo Screenshot DATE at TIME.png`) | Cmd-Shift-S |
 | Edit | Paste as Typing (types the Mac clipboard on the Velo keyboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |

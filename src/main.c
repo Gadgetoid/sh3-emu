@@ -193,7 +193,7 @@ static void card_dialog_done(void *userdata, const char *const *files, int filte
     card_chosen = true;
 }
 
-typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED } pick_kind_t;
+typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -264,12 +264,34 @@ static void log_message(const char *message) {
     if (verbose) fputs(message, stderr);
 }
 
-static void state_path(char *path, size_t size, machine_t *machine, const char *rom_path) {
+static void data_folder(char *path, size_t size) {
     const char *data_home = getenv("XDG_DATA_HOME");
+    if (data_home && data_home[0] == '/') snprintf(path, size, "%s/velo-emu", data_home);
+    else snprintf(path, size, "%s/.local/share/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
+    SDL_CreateDirectory(path);
+}
+
+static void snapshot_folder(char *path, size_t size) {
     char base[1024];
-    if (data_home && data_home[0] == '/') snprintf(base, sizeof base, "%s/velo-emu", data_home);
-    else snprintf(base, sizeof base, "%s/.local/share/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
-    SDL_CreateDirectory(base);
+    data_folder(base, sizeof base);
+    snprintf(path, size, "%s/snapshots", base);
+    SDL_CreateDirectory(path);
+}
+
+static void snapshot_default_name(char *path, size_t size) {
+    char folder[1100];
+    snapshot_folder(folder, sizeof folder);
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[64];
+    strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
+    snprintf(path, size, "%s/Snapshot %s.state", folder, stamp);
+}
+
+static void state_path(char *path, size_t size, machine_t *machine, const char *rom_path) {
+    char base[1024];
+    data_folder(base, sizeof base);
     char rom_name[256];
     snprintf(rom_name, sizeof rom_name, "%s", leaf_name(rom_path));
     char *extension = strrchr(rom_name, '.');
@@ -351,6 +373,13 @@ static bool confirm_reset(SDL_Window *window) {
     };
     int chosen = 0;
     return SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1;
+}
+
+static void open_in_finder(const char *path) {
+    extern char **environ;
+    char *arguments[] = { "open", (char *)path, NULL };
+    pid_t pid;
+    posix_spawnp(&pid, "open", NULL, NULL, arguments, environ);
 }
 
 static void reveal_in_finder(const char *path) {
@@ -684,6 +713,26 @@ int main(int argc, char **argv) {
                 break;
             case MENU_SOUND: sound = !sound; break;
             case MENU_SHOW_STATE: reveal_in_finder(state); break;
+            case MENU_SAVE_SNAPSHOT: {
+                static const SDL_DialogFileFilter filters[] = { { "Velo snapshot", "state" } };
+                static char default_snapshot[1200];
+                snapshot_default_name(default_snapshot, sizeof default_snapshot);
+                SDL_ShowSaveFileDialog(pick_done, (void *)(intptr_t)PICK_SAVE_SNAPSHOT, window, filters, 1, default_snapshot);
+                break;
+            }
+            case MENU_LOAD_SNAPSHOT: {
+                static const SDL_DialogFileFilter filters[] = { { "Velo snapshot", "state;bin" } };
+                static char folder[1100];
+                snapshot_folder(folder, sizeof folder);
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_LOAD_SNAPSHOT, window, filters, 1, folder, false);
+                break;
+            }
+            case MENU_SHOW_SNAPSHOTS: {
+                char folder[1100];
+                snapshot_folder(folder, sizeof folder);
+                open_in_finder(folder);
+                break;
+            }
             case MENU_MEMORY_4:
             case MENU_MEMORY_8:
             case MENU_MEMORY_16:
@@ -769,6 +818,24 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < picked_count; i++) files[i] = picked[i];
                 files[picked_count] = NULL;
                 desktop_send(desktop, files);
+            } else if (picked_kind == PICK_SAVE_SNAPSHOT) {
+                static char snapshot_notice[1200];
+                char path[1100];
+                snprintf(path, sizeof path, "%s%s", picked[0], has_extension(picked[0], ".state") ? "" : ".state");
+                bool saved = machine_save(machine, path, (int64_t)time(NULL));
+                snprintf(snapshot_notice, sizeof snapshot_notice, saved ? "saved snapshot %s" : "could not save %s", leaf_name(path));
+                notice = snapshot_notice;
+                notice_left = NOTICE_SECONDS * 2;
+            } else if (picked_kind == PICK_LOAD_SNAPSHOT) {
+                static char snapshot_notice[1200];
+                if (machine_load(machine, picked[0], NULL)) {
+                    serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
+                    snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", leaf_name(picked[0]));
+                } else {
+                    snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", leaf_name(picked[0]));
+                }
+                notice = snapshot_notice;
+                notice_left = NOTICE_SECONDS * 2;
             } else if (picked_kind == PICK_FETCH) {
                 desktop_fetch(desktop, picked[0]);
             } else if (picked_kind == PICK_SHARED) {
