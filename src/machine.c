@@ -49,6 +49,7 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 #define POWER_ONBUTN   (1u << 31)
 #define POWER_PWRINT   (1u << 30)
 #define POWER_PWROK    (1u << 29)
+#define POWER_VIDRF_SHIFT 27
 #define POWER_STPTIMERVAL_SHIFT 12
 #define POWER_ENSTPTIMER (1u << 11)
 #define POWER_FORCESHUTDWN (1u << 9)
@@ -346,7 +347,8 @@ static uint64_t lcd_frame_cycles(const machine_t *m) {
     uint64_t baudval = (ctl1 >> 16) & 0x1Fu;
     uint64_t vidrate = (ctl2 >> 22) & 0x3FFu;
     uint64_t lineval = ctl2 & 0x3FFu;
-    return (baudval * 2 + 2) * (vidrate + 1) * (lineval + 1);
+    uint32_t vidrf = (m->power_ctl >> POWER_VIDRF_SHIFT) & 3u;
+    return ((baudval * 2 + 2) * (vidrate + 1) * (lineval + 1)) << vidrf;
 }
 
 static void lcd_schedule(machine_t *m) {

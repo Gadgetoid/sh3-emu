@@ -150,8 +150,9 @@ if [ -f "$CE2_ROM" ]; then
     check ce2_desktop aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20
     check ce2_memory_20mb 66a2cc77cfed28615b0486c02a749163fc13755aa5cc01348fbc25e689cbaa05 --memory=20 --seconds=25
     check ce2_start_uncalibrated aa5f6f4b5de495a83c8c53ce380a80692321db5aec941043d2ec02839351d20b --tap=19:15:227:0.1 --seconds=22
+    check ce2_double_tap_slow 56b264bbdadf6f1db2f529f1327ca958870aad786d21518c320638ab8b018b07 --tap=21:30:20:0.08 --tap=21.35:30:20:0.08 --seconds=24
     ./headless "$ROM" --tap=21:15:227:0.1 --key=22:30 "--type=23.5:reset\\n" --tap=27:200:180:0.1 --seconds=60 --pgm="$OUT/ce2_warm_reset.pgm" > "$OUT/ce2_warm_reset.log" 2>&1
-    if grep -q "boot block: warm reset" "$OUT/ce2_warm_reset.log" && [ "$(shasum -a 256 "$OUT/ce2_warm_reset.pgm" | cut -d' ' -f1)" = a7d91c0a6dcc1ae386f60f761f26c7d1b8d31bcd1a424b1561a9321ee8a03930 ]; then echo "ok   ce2_warm_reset"; else echo "FAIL ce2_warm_reset"; exit 1; fi
+    if grep -q "boot block: warm reset" "$OUT/ce2_warm_reset.log" && [ "$(shasum -a 256 "$OUT/ce2_warm_reset.pgm" | cut -d' ' -f1)" = aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e ]; then echo "ok   ce2_warm_reset"; else echo "FAIL ce2_warm_reset"; exit 1; fi
     python3 -c 'import struct, sys; d = open(sys.argv[1], "rb").read(); open(sys.argv[2], "wb").write(b"B000FF\n" + struct.pack("<II", 0x90001000, len(d)) + struct.pack("<III", 0x90001000, len(d), sum(d)) + d + struct.pack("<III", 0, 0x90001000, 0))' "$CE2_ROM" "$OUT/ce2.b000ff"
     ROM="$OUT/ce2.b000ff"
     check ce2_b000ff aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20
