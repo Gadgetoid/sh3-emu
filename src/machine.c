@@ -1422,6 +1422,22 @@ static void apply_record(machine_t *m, const state_record_t *record) {
 
 static void cancel_pending_card(machine_t *m);
 
+uint64_t machine_rom_hash(machine_t *m) {
+    return m->rom_hash;
+}
+
+bool machine_state_matches(machine_t *m, const char *path) {
+    FILE *file = fopen(path, "rb");
+    if (!file) return false;
+    uint8_t header[sizeof STATE_MAGIC + sizeof(uint64_t)];
+    bool ok = fread(header, sizeof header, 1, file) == 1;
+    fclose(file);
+    if (!ok || memcmp(header, STATE_MAGIC, sizeof STATE_MAGIC) != 0) return false;
+    uint64_t rom_hash;
+    memcpy(&rom_hash, header + sizeof STATE_MAGIC, sizeof rom_hash);
+    return rom_hash == m->rom_hash;
+}
+
 bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;

@@ -218,13 +218,22 @@ static void log_message(const char *message) {
     if (verbose) fputs(message, stderr);
 }
 
-static void state_path(char *path, size_t size) {
+static void state_path(char *path, size_t size, machine_t *machine, const char *rom_path) {
     const char *data_home = getenv("XDG_DATA_HOME");
     char base[1024];
     if (data_home && data_home[0] == '/') snprintf(base, sizeof base, "%s/velo-emu", data_home);
     else snprintf(base, sizeof base, "%s/.local/share/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
     SDL_CreateDirectory(base);
-    snprintf(path, size, "%s/state.bin", base);
+    char rom_name[256];
+    snprintf(rom_name, sizeof rom_name, "%s", leaf_name(rom_path));
+    char *extension = strrchr(rom_name, '.');
+    if (extension && extension != rom_name) *extension = 0;
+    snprintf(path, size, "%s/state-%s-%08x.bin", base, rom_name, (uint32_t)machine_rom_hash(machine));
+    FILE *existing = fopen(path, "rb");
+    if (existing) { fclose(existing); return; }
+    char legacy[1100];
+    snprintf(legacy, sizeof legacy, "%s/state.bin", base);
+    if (machine_state_matches(machine, legacy)) rename(legacy, path);
 }
 
 typedef struct {
@@ -374,7 +383,7 @@ int main(int argc, char **argv) {
 
     char state[1100];
     if (state_file) snprintf(state, sizeof state, "%s", state_file);
-    else state_path(state, sizeof state);
+    else state_path(state, sizeof state, machine, rom_path);
     int64_t saved_at;
     const char *startup_notice = NULL;
     if (!fresh) {

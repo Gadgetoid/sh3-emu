@@ -54,6 +54,8 @@ uint32_t machine_memory_next(machine_t *machine);
 void     machine_set_speed(machine_t *machine, uint32_t multiplier);
 uint32_t machine_speed(machine_t *machine);
 bool machine_save(machine_t *machine, const char *path, int64_t host_time);
+uint64_t machine_rom_hash(machine_t *machine);
+bool machine_state_matches(machine_t *machine, const char *path);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);
 void machine_advance_clock(machine_t *machine, int64_t seconds);
 
