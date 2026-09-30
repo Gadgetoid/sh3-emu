@@ -158,6 +158,9 @@ struct machine {
     uint8_t *rom;
     uint32_t rom_size;
     uint32_t rom_pa;
+    uint8_t *rom2;
+    uint32_t rom2_size;
+    uint32_t rom2_pa;
     uint32_t entry_va;
     uint64_t rom_hash;
     machine_log_fn log;
@@ -788,6 +791,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     if (pa < DRAM_DECODE_END) { *value = read_host(m->dram + (pa & (m->dram_size - 1)), size); return true; }
     if ((pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) || (pa >= ROM_CARD_PA && pa < ROM_CARD_END)) {
         if (pa >= m->rom_pa && pa - m->rom_pa + (uint32_t)size <= m->rom_size) { *value = read_host(m->rom + (pa - m->rom_pa), size); return true; }
+        if (m->rom2 && pa >= m->rom2_pa && pa - m->rom2_pa + (uint32_t)size <= m->rom2_size) { *value = read_host(m->rom2 + (pa - m->rom2_pa), size); return true; }
         *value = size == 4 ? 0xFFFFFFFFu : size == 2 ? 0xFFFFu : 0xFFu;
         return true;
     }
@@ -843,6 +847,7 @@ static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     if (pa < DRAM_DECODE_END) return m->dram + (pa & (m->dram_size - 1));
     if (pa >= DRAM_DECODE_END && pa < BANK1_DECODE_END && m->card_dram_size) return m->card_dram + (pa & (m->card_dram_size - 1));
     if (pa >= m->rom_pa && pa - m->rom_pa + 4096 <= m->rom_size) return m->rom + (pa - m->rom_pa);
+    if (m->rom2 && pa >= m->rom2_pa && pa - m->rom2_pa + 4096 <= m->rom2_size) return m->rom2 + (pa - m->rom2_pa);
     return NULL;
 }
 
@@ -922,25 +927,121 @@ static bool find_image_start(const uint8_t *rom, size_t rom_size, uint32_t *star
     return false;
 }
 
+typedef struct {
+    uint32_t pa, size;
+    uint8_t *data;
+} rom_region_t;
+
+static bool rom_window(uint32_t pa, uint32_t *window_start, uint32_t *window_end) {
+    if (pa >= ROM_CARD_PA && pa < ROM_CARD_END) { *window_start = ROM_CARD_PA; *window_end = ROM_CARD_END; return true; }
+    if (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) { *window_start = ROM_WINDOW_PA; *window_end = ROM_WINDOW_END; return true; }
+    return false;
+}
+
+static int load_b000ff(const uint8_t *file, size_t size, rom_region_t regions[2], uint32_t *entry, char *error, size_t error_size) {
+    uint32_t low[2] = { UINT32_MAX, UINT32_MAX }, high[2] = { 0, 0 }, windows[2] = { 0, 0 };
+    int count = 0;
+    bool ended = false;
+    for (int pass = 0; pass < 2; pass++) {
+        size_t p = 15;
+        while (p + 12 <= size) {
+            uint32_t address = read_le32(file + p), length = read_le32(file + p + 4), checksum = read_le32(file + p + 8);
+            if (address == 0 && checksum == 0) {
+                *entry = length;
+                ended = true;
+                break;
+            }
+            if (p + 12 + length > size) break;
+            const uint8_t *data = file + p + 12;
+            uint32_t pa = address & KSEG_PA_MASK, window_start, window_end;
+            if (!rom_window(pa, &window_start, &window_end) || pa + length > window_end) {
+                snprintf(error, error_size, "B000FF record at VA %08X is outside the ROM windows", address);
+                return -1;
+            }
+            int slot = 0;
+            while (slot < count && windows[slot] != window_start) slot++;
+            if (pass == 0) {
+                uint32_t sum = 0;
+                for (uint32_t i = 0; i < length; i++) sum += data[i];
+                if (sum != checksum) {
+                    snprintf(error, error_size, "B000FF record at VA %08X has a bad checksum", address);
+                    return -1;
+                }
+                if (slot == count) {
+                    if (count == 2) {
+                        snprintf(error, error_size, "B000FF image uses more than two ROM windows");
+                        return -1;
+                    }
+                    windows[count++] = window_start;
+                }
+                if (pa < low[slot]) low[slot] = pa;
+                if (pa + length > high[slot]) high[slot] = pa + length;
+            } else {
+                memcpy(regions[slot].data + (pa - regions[slot].pa), data, length);
+            }
+            p += 12 + length;
+        }
+        if (!ended || count == 0) {
+            snprintf(error, error_size, "B000FF image has no entry record");
+            return -1;
+        }
+        if (pass == 0) {
+            for (int i = 0; i < count; i++) {
+                regions[i].pa = low[i] & ~4095u;
+                regions[i].size = ((high[i] - regions[i].pa) + 4095) & ~4095u;
+                regions[i].data = malloc(regions[i].size);
+                memset(regions[i].data, 0xFF, regions[i].size);
+            }
+        }
+    }
+    return count;
+}
+
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
-    uint32_t start = ENTRY_VA, window_end = ROM_WINDOW_END;
-    if (rom_size >= 16 && find_image_start(rom, rom_size, &start)) window_end = ROM_CARD_END;
-    uint32_t rom_pa = start & KSEG_PA_MASK;
-    bool placeable = (rom_pa >= ROM_PA && rom_pa < ROM_WINDOW_END) || (rom_pa >= ROM_CARD_PA && rom_pa < ROM_CARD_END);
-    if (rom_size < 16 || !placeable || rom_size > window_end - rom_pa) {
-        snprintf(error, error_size, "ROM size %zu is not a Velo 1 nk.bin", rom_size);
-        return NULL;
+    rom_region_t regions[2] = { { 0 } };
+    int region_count;
+    uint32_t start = ENTRY_VA;
+    if (rom_size >= 15 && !memcmp(rom, "B000FF\n", 7)) {
+        region_count = load_b000ff(rom, rom_size, regions, &start, error, error_size);
+        if (region_count < 0) {
+            for (int i = 0; i < 2; i++) free(regions[i].data);
+            return NULL;
+        }
+        uint32_t entry_pa = start & KSEG_PA_MASK;
+        if (region_count == 2 && !(entry_pa >= regions[0].pa && entry_pa < regions[0].pa + regions[0].size)) {
+            rom_region_t swap = regions[0];
+            regions[0] = regions[1];
+            regions[1] = swap;
+        }
+    } else {
+        uint32_t window_end = ROM_WINDOW_END;
+        if (rom_size >= 16 && find_image_start(rom, rom_size, &start)) window_end = ROM_CARD_END;
+        uint32_t rom_pa = start & KSEG_PA_MASK;
+        bool placeable = (rom_pa >= ROM_PA && rom_pa < ROM_WINDOW_END) || (rom_pa >= ROM_CARD_PA && rom_pa < ROM_CARD_END);
+        if (rom_size < 16 || !placeable || rom_size > window_end - rom_pa) {
+            snprintf(error, error_size, "ROM size %zu is not a Velo 1 nk.bin", rom_size);
+            return NULL;
+        }
+        regions[0].pa = rom_pa;
+        regions[0].size = (uint32_t)((rom_size + 4095) & ~(size_t)4095);
+        regions[0].data = malloc(regions[0].size);
+        memset(regions[0].data, 0xFF, regions[0].size);
+        memcpy(regions[0].data, rom, rom_size);
+        region_count = 1;
     }
     machine_t *m = calloc(1, sizeof *m);
-    m->rom_pa = rom_pa;
+    m->rom_pa = regions[0].pa;
+    m->rom_size = regions[0].size;
+    m->rom = regions[0].data;
+    if (region_count == 2) {
+        m->rom2_pa = regions[1].pa;
+        m->rom2_size = regions[1].size;
+        m->rom2 = regions[1].data;
+    }
     m->entry_va = start;
     m->dram_size = m->dram_size_next = DRAM_SIZE;
     m->eeprom_scl = m->eeprom_sda = m->eeprom_sda_out = true;
     m->dram = calloc(1, m->dram_size);
-    m->rom_size = (uint32_t)((rom_size + 4095) & ~(size_t)4095);
-    m->rom = malloc(m->rom_size);
-    memset(m->rom, 0xFF, m->rom_size);
-    memcpy(m->rom, rom, rom_size);
     m->rom_hash = 0xCBF29CE484222325ull;
     for (size_t i = 0; i < rom_size; i++) m->rom_hash = (m->rom_hash ^ rom[i]) * 0x100000001B3ull;
     apply_rom_patches(m);
@@ -961,6 +1062,7 @@ void machine_destroy(machine_t *m) {
     if (m->pending_card) fclose(m->pending_card);
     free(m->dram);
     free(m->rom);
+    free(m->rom2);
     free(m);
 }
 
@@ -1421,6 +1523,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     uint8_t *card_dram = m->card_dram;
     uint32_t card_size = m->card_dram_size, card_size_next = m->card_dram_size_next;
     uint32_t rom_size = m->rom_size, rom_pa = m->rom_pa, entry_va = m->entry_va;
+    uint8_t *rom2 = m->rom2;
+    uint32_t rom2_size = m->rom2_size, rom2_pa = m->rom2_pa;
     uint64_t rom_hash = m->rom_hash;
     machine_log_fn log = m->log;
     pccard_t card = m->pccard;
@@ -1456,6 +1560,9 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->rom = rom;
     m->rom_size = rom_size;
     m->rom_pa = rom_pa;
+    m->rom2 = rom2;
+    m->rom2_size = rom2_size;
+    m->rom2_pa = rom2_pa;
     m->entry_va = entry_va;
     m->rom_hash = rom_hash;
     m->log = log;
