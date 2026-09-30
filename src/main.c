@@ -284,6 +284,20 @@ static void settings_save(const settings_t *settings) {
     fclose(file);
 }
 
+static bool confirm_reset(SDL_Window *window) {
+    const SDL_MessageBoxButtonData buttons[] = {
+        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel" },
+        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Reset" },
+    };
+    const SDL_MessageBoxData dialog = {
+        SDL_MESSAGEBOX_WARNING, window, "Reset the Velo?",
+        "A reset is a cold boot: it clears RAM, including files, settings and installed programs. Soft Reset keeps them.",
+        (int)(sizeof buttons / sizeof buttons[0]), buttons, NULL,
+    };
+    int chosen = 0;
+    return SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1;
+}
+
 static void reveal_in_finder(const char *path) {
     extern char **environ;
     char *arguments[] = { "open", "-R", (char *)path, NULL };
@@ -499,7 +513,10 @@ int main(int argc, char **argv) {
                 power_release_at = machine_cycles(machine) + (uint64_t)(POWER_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_PAUSE: paused = !paused; break;
-            case MENU_RESET: machine_reset(machine); break;
+            case MENU_SOFT_RESET: machine_soft_reset(machine); break;
+            case MENU_RESET:
+                if (confirm_reset(window)) machine_reset(machine);
+                break;
             case MENU_SAVE_STATE:
                 notice = machine_save(machine, state, (int64_t)time(NULL)) ? "state saved" : "could not save state";
                 notice_left = NOTICE_SECONDS;

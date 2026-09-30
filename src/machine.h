@@ -47,6 +47,7 @@ size_t machine_serial_take(machine_t *machine, uint8_t *out, size_t max);
 uint32_t machine_serial_baud(machine_t *machine);
 
 void machine_reset(machine_t *machine);
+void machine_soft_reset(machine_t *machine);
 bool machine_watch_pc(machine_t *machine, uint32_t va);
 void     machine_set_memory(machine_t *machine, uint32_t megabytes);
 uint32_t machine_memory(machine_t *machine);

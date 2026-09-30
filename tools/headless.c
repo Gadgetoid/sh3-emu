@@ -90,7 +90,7 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--soft-reset=SECONDS] [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
@@ -105,6 +105,7 @@ int main(int argc, char **argv) {
     int tap_count = 0;
     double power_times[8];
     int power_count = 0;
+    double soft_reset_at = -1;
     double backlight_times[8];
     int backlight_count = 0;
     double serial_at = -1, net_at = -1, realtime = 0;
@@ -139,6 +140,7 @@ int main(int argc, char **argv) {
         }
         else if (!strncmp(argv[i], "--backlight=", 12) && backlight_count < 8) backlight_times[backlight_count++] = atof(argv[i] + 12);
         else if (!strncmp(argv[i], "--power=", 8) && power_count < 8) power_times[power_count++] = atof(argv[i] + 8);
+        else if (!strncmp(argv[i], "--soft-reset=", 13)) soft_reset_at = atof(argv[i] + 13);
         else if (!strncmp(argv[i], "--wav=", 6)) wav = argv[i] + 6;
         else if (!strncmp(argv[i], "--card=", 7)) card = argv[i] + 7;
         else if (!strncmp(argv[i], "--load=", 7)) load = argv[i] + 7;
@@ -226,6 +228,7 @@ int main(int argc, char **argv) {
                 machine_backlight_button(machine, false);
             }
         }
+        if (soft_reset_at >= 0 && (uint64_t)(soft_reset_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(soft_reset_at * MACHINE_CLOCK_HZ) < done + slice) machine_soft_reset(machine);
         for (int b = 0; b < power_count; b++) {
             uint64_t at = (uint64_t)(power_times[b] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {

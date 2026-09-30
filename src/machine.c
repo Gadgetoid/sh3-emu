@@ -1548,13 +1548,18 @@ void machine_reset(machine_t *m) {
     reset_machine(m, false);
 }
 
+void machine_soft_reset(machine_t *m) {
+    machine_logf(m, "soft reset\n");
+    reset_machine(m, true);
+}
+
 static void reset_machine(machine_t *m, bool keep_ram) {
     mips_bus_t bus = m->cpu.bus;
     uint32_t watch[MIPS_WATCH_MAX];
     memcpy(watch, m->cpu.watch, sizeof watch);
     int watch_count = m->cpu.watch_count;
     void (*on_watch)(void *, uint32_t) = m->cpu.on_watch;
-    uint64_t cycles = m->cpu.cycles;
+    uint64_t cycles = m->cpu.cycles, rtc_base = m->rtc_base, rtc_anchor = m->rtc_anchor;
     bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy;
     uint32_t serial_tag = m->serial_tag;
     FILE *pending_card = m->pending_card;
@@ -1623,6 +1628,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.on_watch = on_watch;
     if (keep_ram) {
         m->cpu.cycles = cycles;
+        m->rtc_base = rtc_base;
+        m->rtc_anchor = rtc_anchor;
         m->power_ctl &= ~POWER_COLDSTART;
         m->serial_connected = serial_connected;
         m->serial_tag = serial_tag;

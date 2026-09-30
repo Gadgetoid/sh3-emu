@@ -47,7 +47,8 @@ Menus:
 |---|---|---|
 | Run | Power Button (suspend and resume) | Cmd-Shift-P |
 | Run | Pause | Cmd-P |
-| Run | Reset (cold boot, clears RAM) | Cmd-R |
+| Run | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
+| Run | Reset (cold boot, clears RAM; asks first) | Cmd-Shift-R |
 | Run | Save State | Cmd-S |
 | Run | Load State | Cmd-L |
 | Run | Show Saved State in Finder | |
@@ -179,6 +180,7 @@ Headless options:
 - `--key=SECONDS:SCANCODE` presses a Velo scancode (hex) for 50 ms. The backlight key is 5E.
 - `--tap=SECONDS:X:Y[:HOLD]` holds the pen at a screen position, for 500 ms by default. Use 0.08 for double taps.
 - `--power=SECONDS` presses the power button for 200 ms.
+- `--soft-reset=SECONDS` soft-resets the machine (Run > Soft Reset).
 - `--wav=FILE` writes the sound output, with the silences between sounds removed.
 - `--card=IMAGE` inserts a card image, after `--load`.
 - `--net=SECONDS` connects COM1 to the PPP gateway. `--serial=SECONDS` connects a bare cable, and `--serial-send=SECONDS:TEXT` sends bytes. Anything CE transmits is printed.

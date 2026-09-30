@@ -16,6 +16,7 @@ check wizard   3a4cc79486ecf4d3329ab251349f2cfecaca43246e2f5c197eb7fc99e60d5d28 
 check desktop  2eb469a6f1f8a86900314a036e30b0e725df989e4adf0962a797091ebff39033  --seconds=44 $CALIBRATE $WIZARD
 ./headless "$ROM" --seconds=44 --save="$OUT/desktop.state" $CALIBRATE $WIZARD 2>/dev/null
 check resumed 2eb469a6f1f8a86900314a036e30b0e725df989e4adf0962a797091ebff39033 --seconds=1 --load="$OUT/desktop.state"
+check soft_reset ded10bd9062935ba803cf78c2adf05aa3865f39b8486e1f36a450a5dc6f80f99 --seconds=30 --load="$OUT/desktop.state" --soft-reset=1
 ./headless "$ROM" --pgm="$OUT/start_continuous.pgm" --seconds=47 $CALIBRATE $WIZARD --tap=45:15:227 2>/dev/null
 ./headless "$ROM" --pgm="$OUT/start_resumed.pgm" --seconds=3 --load="$OUT/desktop.state" --tap=1:15:227 2>/dev/null
 if cmp -s "$OUT/start_continuous.pgm" "$OUT/start_resumed.pgm"; then echo "ok   resume matches continuous run"; else echo "FAIL resume differs from continuous run"; exit 1; fi

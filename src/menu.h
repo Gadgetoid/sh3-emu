@@ -4,6 +4,7 @@
 enum {
     MENU_POWER,
     MENU_PAUSE,
+    MENU_SOFT_RESET,
     MENU_RESET,
     MENU_SAVE_STATE,
     MENU_LOAD_STATE,
