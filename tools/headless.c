@@ -8,6 +8,7 @@
 #include "core/lcd.h"
 #include "core/machine.h"
 #include "net/net_gateway.h"
+#include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
 
@@ -49,19 +50,6 @@ static void type_text(machine_t *machine, const char *text) {
         if (shifted) machine_key(machine, KEY_TEXT_SHIFT, true);
         machine_run(machine, MACHINE_CLOCK_HZ / 50);
     }
-}
-
-static uint8_t *read_file(const char *path, size_t *size) {
-    FILE *file = fopen(path, "rb");
-    if (!file) return NULL;
-    fseek(file, 0, SEEK_END);
-    long length = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    uint8_t *data = malloc((size_t)length);
-    if (fread(data, 1, (size_t)length, file) != (size_t)length) { free(data); fclose(file); return NULL; }
-    fclose(file);
-    *size = (size_t)length;
-    return data;
 }
 
 static bool write_panel_png(const char *path, machine_t *machine, int cell, int backlight) {
@@ -276,7 +264,7 @@ int main(int argc, char **argv) {
     if (run.net_at > latest) latest = run.net_at;
     if (latest >= run.seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, run.seconds);
     size_t rom_size;
-    uint8_t *rom = read_file(run.rom_path, &rom_size);
+    uint8_t *rom = file_read(run.rom_path, &rom_size);
     if (!rom) { fprintf(stderr, "cannot read %s\n", run.rom_path); return 1; }
     char error[256];
     machine_t *machine = machine_create(rom, rom_size, error, sizeof error);

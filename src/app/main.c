@@ -14,6 +14,7 @@
 #include "core/machine.h"
 #include "net/net_gateway.h"
 #include "rapi/rapi.h"
+#include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
 
@@ -68,19 +69,6 @@ static bool find_scancode(SDL_Keycode key, uint8_t *scancode) {
         if (key_bindings[i].key == key) { *scancode = key_bindings[i].scancode; return true; }
     }
     return false;
-}
-
-static uint8_t *read_file(const char *path, size_t *size) {
-    FILE *file = fopen(path, "rb");
-    if (!file) return NULL;
-    fseek(file, 0, SEEK_END);
-    long length = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    uint8_t *data = malloc((size_t)length);
-    if (fread(data, 1, (size_t)length, file) != (size_t)length) { free(data); fclose(file); return NULL; }
-    fclose(file);
-    *size = (size_t)length;
-    return data;
 }
 
 static bool verbose = false;
@@ -313,11 +301,6 @@ static void pick_done(void *userdata, const char *const *files, int filter) {
     picked_ready = true;
 }
 
-static const char *leaf_name(const char *path) {
-    const char *slash = strrchr(path, '/');
-    return slash && slash[1] ? slash + 1 : path;
-}
-
 typedef struct {
     char paths[PICK_MAX][1024];
     int  count;
@@ -347,13 +330,13 @@ static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t
     list[files] = NULL;
     dropped->count = 0;
     if (cards >= 0 && files == 1) {
-        snprintf(message, sizeof message, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", leaf_name(list[0]));
+        snprintf(message, sizeof message, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", file_leaf_name(list[0]));
         return message;
     }
     if (!files) return "drop files, a .load script or a card image";
     if (!online) return "connect Serial > Network (PPP) to send files to the Velo";
     if (scripts >= 0) {
-        snprintf(message, sizeof message, "installing %s", leaf_name(dropped->paths[scripts]));
+        snprintf(message, sizeof message, "installing %s", file_leaf_name(dropped->paths[scripts]));
         return desktop_load(desktop, dropped->paths[scripts]) ? message : "busy with the last transfer";
     }
     return desktop_send(desktop, list) ? "sending to \\My Documents" : "busy with the last transfer";
@@ -417,7 +400,7 @@ static void state_path(char *path, size_t size, machine_t *machine, const char *
     char base[1024];
     data_folder(base, sizeof base);
     char rom_name[256];
-    snprintf(rom_name, sizeof rom_name, "%s", leaf_name(rom_path));
+    snprintf(rom_name, sizeof rom_name, "%s", file_leaf_name(rom_path));
     char *extension = strrchr(rom_name, '.');
     if (extension && extension != rom_name) *extension = 0;
     snprintf(path, size, "%s/state-%s-%08x.bin", base, rom_name, (uint32_t)machine_rom_hash(machine));
@@ -566,7 +549,7 @@ static void rom_folder(char *path, size_t size) {
 }
 
 static int rom_system(const char *path, size_t *size) {
-    uint8_t *rom = read_file(path, size);
+    uint8_t *rom = file_read(path, size);
     if (!rom) return 0;
     char error[256];
     machine_t *machine = machine_create(rom, *size, error, sizeof error);
@@ -618,7 +601,7 @@ static machine_t *start_machine(const char *rom_path, const settings_t *settings
     static char message[1400];
     *notice = NULL;
     size_t rom_size;
-    uint8_t *rom = read_file(rom_path, &rom_size);
+    uint8_t *rom = file_read(rom_path, &rom_size);
     if (!rom) {
         snprintf(message, sizeof message, "cannot read %s", rom_path);
         *notice = message;
@@ -650,7 +633,7 @@ static machine_t *start_machine(const char *rom_path, const settings_t *settings
         char backup[1200];
         snprintf(backup, sizeof backup, "%s.old", state);
         rename(state, backup);
-        snprintf(message, sizeof message, "saved state unreadable, moved to %s", leaf_name(backup));
+        snprintf(message, sizeof message, "saved state unreadable, moved to %s", file_leaf_name(backup));
         *notice = message;
     }
     return machine;
@@ -1015,7 +998,7 @@ int main(int argc, char **argv) {
             case MENU_SAVE_SCREENSHOT: {
                 static char screenshot_notice[1200];
                 char path[1100];
-                if (save_screenshot(view, path, sizeof path)) snprintf(screenshot_notice, sizeof screenshot_notice, "saved %s", leaf_name(path));
+                if (save_screenshot(view, path, sizeof path)) snprintf(screenshot_notice, sizeof screenshot_notice, "saved %s", file_leaf_name(path));
                 else snprintf(screenshot_notice, sizeof screenshot_notice, "could not save the screenshot");
                 notice = screenshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
@@ -1143,7 +1126,7 @@ int main(int argc, char **argv) {
                 desktop_set_baud(desktop, item == MENU_BAUD_19200 ? 19200 : item == MENU_BAUD_38400 ? 38400 : item == MENU_BAUD_57600 ? 57600 : 115200);
                 break;
             case MENU_STOP_SHARING:
-                snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", leaf_name(settings.shared_folder));
+                snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", file_leaf_name(settings.shared_folder));
                 settings.shared_folder[0] = 0;
                 settings_save(&settings);
                 notice = shared_notice;
@@ -1174,16 +1157,16 @@ int main(int argc, char **argv) {
                 char path[1100];
                 snprintf(path, sizeof path, "%s%s", picked[0], has_extension(picked[0], ".state") ? "" : ".state");
                 bool saved = machine_save(machine, path, (int64_t)time(NULL));
-                snprintf(snapshot_notice, sizeof snapshot_notice, saved ? "saved snapshot %s" : "could not save %s", leaf_name(path));
+                snprintf(snapshot_notice, sizeof snapshot_notice, saved ? "saved snapshot %s" : "could not save %s", file_leaf_name(path));
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
             } else if (picked_kind == PICK_LOAD_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 if (machine_load(machine, picked[0], NULL)) {
                     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
-                    snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", leaf_name(picked[0]));
+                    snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked[0]));
                 } else {
-                    snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", leaf_name(picked[0]));
+                    snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", file_leaf_name(picked[0]));
                 }
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
@@ -1192,7 +1175,7 @@ int main(int argc, char **argv) {
             } else if (picked_kind == PICK_SHARED) {
                 snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", picked[0]);
                 settings_save(&settings);
-                snprintf(shared_notice, sizeof shared_notice, "sharing %s with \\My Documents", leaf_name(settings.shared_folder));
+                snprintf(shared_notice, sizeof shared_notice, "sharing %s with \\My Documents", file_leaf_name(settings.shared_folder));
                 notice = shared_notice;
                 notice_left = NOTICE_SECONDS * 2;
                 if (velo_online) desktop_sync(desktop, settings.shared_folder);
