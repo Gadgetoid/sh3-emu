@@ -237,34 +237,36 @@ static const uint8_t *reply_bytes(rapi_t *rapi, size_t length) {
     return p;
 }
 
+static bool connection_broken(rapi_t *rapi, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    vsnprintf(rapi->error, sizeof rapi->error, format, args);
+    va_end(args);
+    close(rapi->socket);
+    rapi->socket = -1;
+    rapi->reply_length = 0;
+    rapi->reply_offset = 0;
+    return false;
+}
+
 static bool call(rapi_t *rapi, message_t *message) {
     uint8_t size[4] = { (uint8_t)message->length, (uint8_t)(message->length >> 8), (uint8_t)(message->length >> 16), (uint8_t)(message->length >> 24) };
-    bool sent = socket_write(rapi->socket, size, 4) && socket_write(rapi->socket, message->data, message->length);
+    bool connected = rapi->socket >= 0;
+    bool sent = connected && socket_write(rapi->socket, size, 4) && socket_write(rapi->socket, message->data, message->length);
     free(message->data);
     *message = (message_t){ 0 };
-    if (!sent) {
-        set_error(rapi, "lost the connection to the Velo");
-        return false;
-    }
+    if (!connected) return false;
+    if (!sent) return connection_broken(rapi, "lost the connection to the Velo");
     uint8_t header[4];
-    if (!socket_read(rapi->socket, header, 4)) {
-        set_error(rapi, "the Velo closed the connection");
-        return false;
-    }
+    if (!socket_read(rapi->socket, header, 4)) return connection_broken(rapi, "the Velo closed the connection");
     size_t length = (size_t)header[0] | (size_t)header[1] << 8 | (size_t)header[2] << 16 | (size_t)header[3] << 24;
-    if (length > REPLY_MAX) {
-        set_error(rapi, "reply too large (%zu bytes)", length);
-        return false;
-    }
+    if (length > REPLY_MAX) return connection_broken(rapi, "reply too large (%zu bytes)", length);
     uint8_t *reply = realloc(rapi->reply, length ? length : 1);
-    if (!reply) return false;
+    if (!reply) return connection_broken(rapi, "out of memory for a %zu byte reply", length);
     rapi->reply = reply;
     rapi->reply_length = length;
     rapi->reply_offset = 0;
-    if (!socket_read(rapi->socket, rapi->reply, length)) {
-        set_error(rapi, "the Velo closed the connection");
-        return false;
-    }
+    if (!socket_read(rapi->socket, rapi->reply, length)) return connection_broken(rapi, "the Velo closed the connection");
     uint32_t status;
     if (!reply_u32(rapi, &status)) return false;
     if (status == 1) {
@@ -322,7 +324,7 @@ rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
 
 void rapi_disconnect(rapi_t *rapi) {
     if (!rapi) return;
-    close(rapi->socket);
+    if (rapi->socket >= 0) close(rapi->socket);
     free(rapi->reply);
     free(rapi);
 }
