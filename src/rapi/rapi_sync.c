@@ -2,12 +2,14 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define PATH_SIZE       1024
@@ -224,6 +226,7 @@ static void make_remote_directories(sync_t *sync, const char *relative) {
     }
 }
 
+#ifdef __APPLE__
 static bool move_to_trash(const char *path) {
     const char *home = getenv("HOME");
     const char *leaf = strrchr(path, '/');
@@ -240,6 +243,81 @@ static bool move_to_trash(const char *path) {
     }
     return false;
 }
+#else
+static void percent_encode(const char *text, char *out, size_t size) {
+    static const char hex[] = "0123456789ABCDEF";
+    size_t length = 0;
+    for (const unsigned char *p = (const unsigned char *)text; *p && length + 4 < size; p++) {
+        bool plain = (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || strchr("/-_.~", *p);
+        if (plain) {
+            out[length++] = (char)*p;
+        } else {
+            out[length++] = '%';
+            out[length++] = hex[*p >> 4];
+            out[length++] = hex[*p & 0x0F];
+        }
+    }
+    out[length] = 0;
+}
+
+static bool make_trash_folder(const char *path) {
+    return mkdir(path, 0700) == 0 || errno == EEXIST;
+}
+
+static bool write_trash_info(int descriptor, const char *path) {
+    char encoded[PATH_SIZE * 6], deleted[32];
+    time_t now = time(NULL);
+    struct tm local;
+    percent_encode(path, encoded, sizeof encoded);
+    strftime(deleted, sizeof deleted, "%Y-%m-%dT%H:%M:%S", localtime_r(&now, &local));
+    FILE *file = fdopen(descriptor, "w");
+    if (!file) {
+        close(descriptor);
+        return false;
+    }
+    fprintf(file, "[Trash Info]\nPath=%s\nDeletionDate=%s\n", encoded, deleted);
+    return fclose(file) == 0;
+}
+
+static bool fits(int length, size_t size) {
+    return length >= 0 && (size_t)length < size;
+}
+
+static bool move_to_trash(const char *path) {
+    const char *data_home = getenv("XDG_DATA_HOME");
+    const char *home = getenv("HOME");
+    const char *leaf = strrchr(path, '/');
+    if (!leaf || path[0] != '/') return false;
+    char trash[PATH_SIZE * 2], files[PATH_SIZE * 2], info[PATH_SIZE * 2];
+    int trash_length;
+    if (data_home && data_home[0] == '/') trash_length = snprintf(trash, sizeof trash, "%s/Trash", data_home);
+    else if (home) trash_length = snprintf(trash, sizeof trash, "%s/.local/share/Trash", home);
+    else return false;
+    if (!fits(trash_length, sizeof trash) || !fits(snprintf(files, sizeof files, "%s/files", trash), sizeof files) ||
+        !fits(snprintf(info, sizeof info, "%s/info", trash), sizeof info)) return false;
+    if (!make_trash_folder(trash) || !make_trash_folder(files) || !make_trash_folder(info)) return false;
+    for (int copy = 0; copy < 100; copy++) {
+        char name[PATH_SIZE], target[PATH_SIZE * 3], info_path[PATH_SIZE * 3];
+        int name_length = copy ? snprintf(name, sizeof name, "%s %d", leaf + 1, copy) : snprintf(name, sizeof name, "%s", leaf + 1);
+        if (!fits(name_length, sizeof name) || !fits(snprintf(target, sizeof target, "%s/%s", files, name), sizeof target) ||
+            !fits(snprintf(info_path, sizeof info_path, "%s/%s.trashinfo", info, name), sizeof info_path)) return false;
+        int descriptor = open(info_path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+        if (descriptor < 0) {
+            if (errno == EEXIST) continue;
+            return false;
+        }
+        if (access(target, F_OK) == 0) {
+            close(descriptor);
+            unlink(info_path);
+            continue;
+        }
+        if (write_trash_info(descriptor, path) && rename(path, target) == 0) return true;
+        unlink(info_path);
+        return false;
+    }
+    return false;
+}
+#endif
 
 static bool check_connection(sync_t *sync) {
     rapi_version_t version;

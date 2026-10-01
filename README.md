@@ -123,7 +123,7 @@ With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, as it did with Ha
 The Desktop menu uses it:
 
 - Send Files to Velo… copies files into `\My Documents`, and Copy My Documents to Mac… copies `\My Documents`, with its folders, into a host folder.
-- Shared Folder… pairs a host folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too (to the Trash on macOS). When both sides changed a file, the host keeps its copy and the Velo's arrives as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped, and empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`.
+- Shared Folder… pairs a host folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too (to the Trash). When both sides changed a file, the host keeps its copy and the Velo's arrives as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped, and empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`.
 
 `velo-rapi` does the same from the command line while the emulator is running with Network (PPP) connected:
 
