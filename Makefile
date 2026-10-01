@@ -15,35 +15,35 @@ LDFLAGS += $(shell pkg-config --libs sdl3) -lm -lz $(THREAD_LIBS)
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Darwin)
-SRC_MENU  = src/menu_macos.m
+SRC_MENU  = src/app/menu_macos.m
 LDFLAGS  += -framework Cocoa
 else
-SRC_MENU  = src/menu_none.c
+SRC_MENU  = src/app/menu_none.c
 CFLAGS   += -D_GNU_SOURCE
 endif
 
 ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
-SRC_NET  = src/netgw.c
+SRC_NET  = src/net/net_gateway.c
 CFLAGS  += $(shell pkg-config --cflags slirp)
 NET_LIBS = $(shell pkg-config --libs slirp)
 ifeq ($(shell pkg-config --exists libcurl && echo yes),yes)
-SRC_NET  += src/webproxy.c src/webimage.c src/vendor/vendor.c
+SRC_NET  += src/net/web_proxy.c src/net/web_image.c src/vendor/vendor.c
 CFLAGS   += $(shell pkg-config --cflags libcurl)
 NET_LIBS += $(shell pkg-config --libs libcurl)
 else
-SRC_NET  += src/webproxy_none.c
+SRC_NET  += src/net/web_proxy_none.c
 endif
 LDFLAGS += $(NET_LIBS)
 else
-SRC_NET  = src/netgw_none.c src/webproxy_none.c
+SRC_NET  = src/net/net_gateway_none.c src/net/web_proxy_none.c
 endif
 
-SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c src/keytext.c src/options.c
-SRC_RAPI    = src/rapi.c src/rapiload.c src/rapisetup.c src/rapisync.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/png.c src/typer.c src/view.c src/main.c $(SRC_MENU)
+SRC_MACHINE = src/core/mips.c src/core/machine.c src/core/pccard.c src/core/uart.c src/core/key_text.c src/util/options.c
+SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
-OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/lcd.o $(BUILD)/src/png.o $(BUILD)/tools/headless.o
+OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
 all: $(PROG) $(VELORAPI)
 
@@ -53,10 +53,10 @@ $(PROG): $(OBJ_APP)
 $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
-$(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxycheck.o
+$(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxy_check.o
 	$(CC) -o $@ $^ -lm $(NET_LIBS) $(THREAD_LIBS)
 
-$(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/options.o $(BUILD)/tools/velorapi.o
+$(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/velo_rapi.o
 	$(CC) -o $@ $^
 
 $(BUILD)/src/vendor/%.o: CFLAGS += -w
@@ -69,7 +69,7 @@ $(BUILD)/version.h: FORCE
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-$(BUILD)/src/options.o: $(BUILD)/version.h
+$(BUILD)/src/util/options.o: $(BUILD)/version.h
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -90,7 +90,7 @@ clean:
 
 .PHONY: all run clean test check app FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d $(BUILD)/tools/velorapi.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d
 
 check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
 	sh tests/check.sh

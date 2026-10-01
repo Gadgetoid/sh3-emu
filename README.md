@@ -242,8 +242,8 @@ Tests:
 
 ## What's emulated
 
-- CPU: MIPS-I interpreter with the TX39 CP0, 32-entry TLB and branch-likely instructions (`src/mips.c`).
-- PR31500 (`src/machine.c`):
+- CPU: MIPS-I interpreter with the TX39 CP0, 32-entry TLB and branch-likely instructions (`src/core/mips.c`).
+- PR31500 (`src/core/machine.c`):
   - interrupt controller, including the high-priority encoder
   - periodic timer, RTC and alarm
   - power, with STOPCPU idle, the stop timer and suspend (clock stop, resume in place, woken by the power button or an enabled interrupt)

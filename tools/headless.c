@@ -4,12 +4,12 @@
 #include <string.h>
 #include <time.h>
 
-#include "keytext.h"
-#include "lcd.h"
-#include "machine.h"
-#include "options.h"
-#include "png.h"
-#include "netgw.h"
+#include "core/key_text.h"
+#include "core/lcd.h"
+#include "core/machine.h"
+#include "net/net_gateway.h"
+#include "util/options.h"
+#include "util/png.h"
 
 static void log_stderr(const char *message) { fputs(message, stderr); }
 
@@ -41,12 +41,12 @@ static void type_text(machine_t *machine, const char *text) {
         if (ch == '\\' && c[1] == 'n') { ch = '\n'; c++; }
         uint8_t scancode;
         bool shifted;
-        if (!keytext_find(ch, &scancode, &shifted)) continue;
-        if (shifted) machine_key(machine, KEYTEXT_SHIFT, false);
+        if (!key_text_find(ch, &scancode, &shifted)) continue;
+        if (shifted) machine_key(machine, KEY_TEXT_SHIFT, false);
         machine_key(machine, scancode, false);
         machine_run(machine, MACHINE_CLOCK_HZ / 50);
         machine_key(machine, scancode, true);
-        if (shifted) machine_key(machine, KEYTEXT_SHIFT, true);
+        if (shifted) machine_key(machine, KEY_TEXT_SHIFT, true);
         machine_run(machine, MACHINE_CLOCK_HZ / 50);
     }
 }
@@ -109,7 +109,7 @@ typedef struct {
     double   cable_at, net_at, realtime;
     uint32_t watches[MACHINE_WATCH_MAX];
     int      watch_count;
-    netgw_options_t net_options;
+    net_gateway_options_t net_options;
     double   send_times[8];
     const char *send_text[8];
     int      send_count;
@@ -253,8 +253,8 @@ static const option_spec_t SPEC = {
 int main(int argc, char **argv) {
     static run_t run;
     run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .cable_at = -1, .net_at = -1,
-                   .net_options = { NETGW_DEFAULT_USER_AGENT, NULL } };
-    netgw_t *gateway = NULL;
+                   .net_options = { NET_GATEWAY_DEFAULT_USER_AGENT, NULL } };
+    net_gateway_t *gateway = NULL;
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&SPEC, argc, argv, parse_option, &run, positional, 1, &positional_count);
@@ -320,7 +320,7 @@ int main(int argc, char **argv) {
             }
         }
         if (run.net_at >= 0 && !gateway && (uint64_t)(run.net_at * MACHINE_CLOCK_HZ) < done + slice) {
-            gateway = netgw_create(log_stderr, &run.net_options);
+            gateway = net_gateway_create(log_stderr, &run.net_options);
             machine_serial_connect(machine, true);
         }
         if (run.cable_at >= 0 && (uint64_t)(run.cable_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(run.cable_at * MACHINE_CLOCK_HZ) < done + slice) machine_serial_connect(machine, true);
@@ -365,9 +365,9 @@ int main(int argc, char **argv) {
                 pace(machine, run.realtime, wall_start, cycles_start);
                 uint8_t buffer[4096];
                 size_t count;
-                while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) netgw_from_guest(gateway, buffer, count);
-                netgw_poll(gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
-                while ((count = netgw_to_guest(gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
+                while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) net_gateway_from_guest(gateway, buffer, count);
+                net_gateway_poll(gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
+                while ((count = net_gateway_to_guest(gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
             }
         } else {
             machine_run(machine, slice);
@@ -410,7 +410,7 @@ int main(int argc, char **argv) {
         write_pgm(run.pgm, levels);
     }
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
-    netgw_destroy(gateway);
+    net_gateway_destroy(gateway);
     machine_destroy(machine);
     free(rom);
     return 0;
