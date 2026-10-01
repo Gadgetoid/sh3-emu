@@ -69,6 +69,7 @@ static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
 static const uint8_t desktop_alias_ip[4] = { 10, 0, 2, 5 };
 
 static void retarget_desktop(uint8_t *ip, size_t length, bool outbound);
+static void reset_negotiation(net_gateway_t *gateway);
 static const uint8_t dns_ip[4] = { 10, 0, 2, 3 };
 static const char proxy_address[] = "10.0.2.4";
 static const uint8_t guest_mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
@@ -336,7 +337,7 @@ static void control_packet(net_gateway_t *gateway, uint16_t protocol, const uint
             break;
         case TERM_REQ:
             send_control(gateway, protocol, TERM_ACK, id, data, data_length);
-            if (lcp) gateway->lcp_open = gateway->ipcp_open = false;
+            if (lcp) reset_negotiation(gateway);
             else gateway->ipcp_open = false;
             gateway_log(gateway, "ppp: %s terminated by guest\n", lcp ? "LCP" : "IPCP");
             break;
@@ -701,7 +702,7 @@ void net_gateway_destroy(net_gateway_t *gateway) {
     free(gateway);
 }
 
-void net_gateway_reset(net_gateway_t *gateway) {
+static void reset_negotiation(net_gateway_t *gateway) {
     gateway->ppp = false;
     gateway->handshake_length = 0;
     gateway->frame_length = 0;
@@ -712,6 +713,10 @@ void net_gateway_reset(net_gateway_t *gateway) {
     gateway->ipcp_open = gateway->ipcp_peer_acked = gateway->ipcp_we_acked = false;
     gateway->lcp_request_id = gateway->ipcp_request_id = 0;
     gateway->next_id = 1;
+}
+
+void net_gateway_reset(net_gateway_t *gateway) {
+    reset_negotiation(gateway);
     gateway->out_head = gateway->out_count = 0;
 }
 
@@ -741,10 +746,12 @@ void net_gateway_from_guest(net_gateway_t *gateway, const uint8_t *data, size_t 
             if (!gateway->ppp || byte != HDLC_FLAG) continue;
         }
         if (byte == HDLC_FLAG) {
-            if (gateway->in_frame && !gateway->escaped && gateway->frame_length) ppp_frame(gateway, gateway->frame, gateway->frame_length);
+            bool complete = gateway->in_frame && !gateway->escaped && gateway->frame_length;
+            size_t frame_length = gateway->frame_length;
             gateway->frame_length = 0;
             gateway->in_frame = true;
             gateway->escaped = false;
+            if (complete) ppp_frame(gateway, gateway->frame, frame_length);
             continue;
         }
         if (!gateway->in_frame) {
