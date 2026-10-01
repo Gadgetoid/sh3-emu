@@ -657,12 +657,16 @@ bool rapi_upload(rapi_t *rapi, const char *local, const char *remote, rapi_progr
 }
 
 bool rapi_download(rapi_t *rapi, const char *remote, const char *local, rapi_progress_fn progress, void *context) {
+    char partial[1100];
+    int partial_length = snprintf(partial, sizeof partial, "%s.part", local);
+    if (partial_length < 0 || (size_t)partial_length >= sizeof partial) {
+        set_error(rapi, "path too long: %s", local);
+        return false;
+    }
     rapi_file_t info;
     if (!rapi_stat(rapi, remote, &info)) return false;
     uint32_t handle, last_error;
     if (!open_file(rapi, remote, false, &handle)) return false;
-    char partial[1100];
-    snprintf(partial, sizeof partial, "%s.part", local);
     FILE *file = fopen(partial, "wb");
     if (!file) {
         close_file(rapi, handle);
