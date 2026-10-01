@@ -18,6 +18,14 @@ The ROM's shortcuts and desktop icons point at `\Storage Card`, CE 2.0's name fo
 
 `make test` runs a few CE 2.0 checks when `rom/nk-ce2.bin` exists, or with `make test CE2_ROM=PATH`.
 
+### ROMs and the System menu
+
+Run without a ROM (or from the app), `velo` looks in the `roms` folder of its data folder and opens the last system used. Put the CE 1.0 `nk.bin` and the merged CE 2.0 image there under any names: each file is identified by where it loads, and the larger CE 2.0 image is preferred, so the merged one wins over the stock card ROM. Run > System switches between Windows CE 1.0 and Windows CE 2.0, saving the running machine and restoring the other one's state; a system with no ROM in the folder is greyed out. With no ROMs at all it says where to put them. A ROM given on the command line runs as before.
+
+### Data folder
+
+States, snapshots, ROMs, `emu.ini`, `rapi.sock` and the sync manifest live in `~/Library/Application Support/Velo` on macOS and `~/.local/share/velo-emu` (with `emu.ini` in `~/.config/velo-emu`) elsewhere. `XDG_DATA_HOME` and `XDG_CONFIG_HOME` override them, as the tests do. On macOS the first launch moves an existing `~/.local/share/velo-emu` and `~/.config/velo-emu/emu.ini` there.
+
 ## Build
 
 ```
@@ -47,6 +55,7 @@ Menus:
 |---|---|---|
 | Run | Power Button (suspend and resume) | Cmd-Shift-P |
 | Run | Pause | Cmd-P |
+| Run | System: Windows CE 1.0, Windows CE 2.0 (greyed out without a ROM in the `roms` folder) | |
 | Run | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
 | Run | Reset (cold boot, clears RAM; asks first) | Cmd-Shift-R |
 | Run | Save State | Cmd-S |
@@ -114,7 +123,7 @@ Without libslirp the build still works, with no Network (PPP) option.
 
 ### Desktop connection
 
-With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, sends four zero bytes and closes the connection, as CE 1.0 does with Handheld PC Explorer. The emulator answers it (with nothing listening, CE shows "Cannot start communications with the desktop computer", Error 10061, after about five minutes). The desktop then reaches the Velo with RAPI, CE's remote API, on its port 990. The emulator makes that port available on the Mac as a Unix socket, `$XDG_DATA_HOME/velo-emu/rapi.sock` (default `~/.local/share/velo-emu`), with no TCP port. The protocol follows [SynCE](https://sourceforge.net/projects/synce/)'s librapi2.
+With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, sends four zero bytes and closes the connection, as CE 1.0 does with Handheld PC Explorer. The emulator answers it (with nothing listening, CE shows "Cannot start communications with the desktop computer", Error 10061, after about five minutes). The desktop then reaches the Velo with RAPI, CE's remote API, on its port 990. The emulator makes that port available on the Mac as a Unix socket, `rapi.sock` in the data folder, with no TCP port. The protocol follows [SynCE](https://sourceforge.net/projects/synce/)'s librapi2.
 
 The Desktop menu uses it:
 
@@ -184,11 +193,11 @@ Memory sets the RAM for the next cold boot (Run > Reset, which clears the machin
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
 
-Both are remembered in `$XDG_CONFIG_HOME/velo-emu/emu.ini` (default `~/.config/velo-emu/emu.ini`), with `user_agent=` and `shared_folder=`.
+Both are remembered in `emu.ini`, with `user_agent=` and `shared_folder=`.
 
 ## Saved state
 
-The machine is saved to `$XDG_DATA_HOME/velo-emu/state-ROM-HASH.bin` (default `~/.local/share/velo-emu`), named after the ROM file and a hash of its contents, so each ROM keeps its own state. It's saved on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with; an old `state.bin` is renamed on the first launch with its ROM. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to the same name with `.old` appended. If a serial cable was connected when the state was saved, the restored machine sees it unplugged and, two seconds later, plugged back in (same mode), so CE redials rather than trusting a PPP session the Mac side no longer has. `--state=FILE` uses FILE instead, for loading, saving and autosaving.
+The machine is saved to `state-ROM-HASH.bin` in the data folder, named after the ROM file and a hash of its contents, so each ROM keeps its own state. It's saved on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with; an old `state.bin` is renamed on the first launch with its ROM. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to the same name with `.old` appended. If a serial cable was connected when the state was saved, the restored machine sees it unplugged and, two seconds later, plugged back in (same mode), so CE redials rather than trusting a PPP session the Mac side no longer has. `--state=FILE` uses FILE instead, for loading, saving and autosaving.
 
 The menus are native on macOS; other platforms build without them.
 

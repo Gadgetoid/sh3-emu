@@ -1458,6 +1458,10 @@ uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
 }
 
+int machine_rom_system(machine_t *m) {
+    return m->rom_pa == ROM_PA ? 1 : 2;
+}
+
 bool machine_state_matches(machine_t *m, const char *path) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;

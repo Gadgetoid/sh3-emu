@@ -357,10 +357,35 @@ static void log_message(const char *message) {
 }
 
 static void data_folder(char *path, size_t size) {
-    const char *data_home = getenv("XDG_DATA_HOME");
-    if (data_home && data_home[0] == '/') snprintf(path, size, "%s/velo-emu", data_home);
-    else snprintf(path, size, "%s/.local/share/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
+    rapi_data_path("", path, size);
+    size_t length = strlen(path);
+    if (length > 1 && path[length - 1] == '/') path[length - 1] = 0;
     SDL_CreateDirectory(path);
+}
+
+static void migrate_old_folders(void) {
+#ifdef __APPLE__
+    if (getenv("XDG_DATA_HOME") || getenv("XDG_CONFIG_HOME")) return;
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char folder[1024], old_data[1024], old_settings[1024], settings[1100];
+    rapi_data_path("", folder, sizeof folder);
+    folder[strlen(folder) - 1] = 0;
+    snprintf(old_data, sizeof old_data, "%s/.local/share/velo-emu", home);
+    snprintf(old_settings, sizeof old_settings, "%s/.config/velo-emu/emu.ini", home);
+    struct stat info;
+    if (stat(folder, &info) != 0 && stat(old_data, &info) == 0) {
+        char parent[1100];
+        snprintf(parent, sizeof parent, "%s/Library/Application Support", home);
+        SDL_CreateDirectory(parent);
+        if (rename(old_data, folder) == 0) fprintf(stderr, "moved %s to %s\n", old_data, folder);
+    }
+    SDL_CreateDirectory(folder);
+    snprintf(settings, sizeof settings, "%s/emu.ini", folder);
+    if (stat(settings, &info) != 0 && stat(old_settings, &info) == 0 && rename(old_settings, settings) == 0) {
+        fprintf(stderr, "moved %s to %s\n", old_settings, settings);
+    }
+#endif
 }
 
 static void snapshot_folder(char *path, size_t size) {
@@ -402,6 +427,7 @@ typedef struct {
     uint32_t host_time;
     uint32_t scale;
     uint32_t connect_at_launch;
+    uint32_t system;
     char     serial_device[1024];
     uint32_t display;
     char     user_agent[256];
@@ -412,7 +438,11 @@ static void settings_path(char *path, size_t size) {
     const char *config_home = getenv("XDG_CONFIG_HOME");
     char base[1024];
     if (config_home && config_home[0] == '/') snprintf(base, sizeof base, "%s/velo-emu", config_home);
+#ifdef __APPLE__
+    else data_folder(base, sizeof base);
+#else
     else snprintf(base, sizeof base, "%s/.config/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
+#endif
     SDL_CreateDirectory(base);
     snprintf(path, size, "%s/emu.ini", base);
 }
@@ -441,6 +471,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
         else if (sscanf(line, "scale=%u", &value) == 1 && scale_index(value) >= 0) settings.scale = value;
         else if (sscanf(line, "connect_at_launch=%u", &value) == 1) settings.connect_at_launch = value;
+        else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
         else if (!strncmp(line, "user_agent=", 11)) {
             line[strcspn(line, "\r\n")] = 0;
@@ -462,8 +493,8 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
-            settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->serial_device, settings->user_agent,
+    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nsystem=%u\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
+            settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->system, settings->serial_device, settings->user_agent,
             settings->shared_folder);
     fclose(file);
 }
@@ -496,13 +527,119 @@ static void reveal_in_finder(const char *path) {
     posix_spawnp(&pid, "open", NULL, NULL, arguments, environ);
 }
 
-static void set_title(SDL_Window *window, const char *notice, bool paused, bool suspended) {
-    char title[128];
-    if (notice) snprintf(title, sizeof title, "%s: %s", WINDOW_TITLE, notice);
-    else if (paused) snprintf(title, sizeof title, "%s (paused)", WINDOW_TITLE);
-    else if (suspended) snprintf(title, sizeof title, "%s (suspended)", WINDOW_TITLE);
-    else snprintf(title, sizeof title, "%s", WINDOW_TITLE);
-    SDL_SetWindowTitle(window, title);
+static const char *SYSTEM_NAMES[] = { "", "CE 1.0", "CE 2.0" };
+
+static void set_title(SDL_Window *window, int system, const char *notice, bool paused, bool suspended) {
+    char base[64], title[1400];
+    snprintf(base, sizeof base, "%s (%s)", WINDOW_TITLE, SYSTEM_NAMES[system]);
+    if (notice) snprintf(title, sizeof title, "%s: %s", base, notice);
+    else if (paused) snprintf(title, sizeof title, "%s, paused", base);
+    else if (suspended) snprintf(title, sizeof title, "%s, suspended", base);
+    else snprintf(title, sizeof title, "%s", base);
+    if (strcmp(SDL_GetWindowTitle(window), title)) SDL_SetWindowTitle(window, title);
+}
+
+typedef struct {
+    char   path[3][1024];
+    size_t size[3];
+} rom_set_t;
+
+static void rom_folder(char *path, size_t size) {
+    char base[1024];
+    data_folder(base, sizeof base);
+    snprintf(path, size, "%s/roms", base);
+    SDL_CreateDirectory(path);
+}
+
+static int rom_system(const char *path, size_t *size) {
+    uint8_t *rom = read_file(path, size);
+    if (!rom) return 0;
+    char error[256];
+    machine_t *machine = machine_create(rom, *size, error, sizeof error);
+    free(rom);
+    if (!machine) return 0;
+    int system = machine_rom_system(machine);
+    machine_destroy(machine);
+    return system;
+}
+
+static void find_roms(rom_set_t *roms) {
+    memset(roms, 0, sizeof *roms);
+    char folder[1100];
+    rom_folder(folder, sizeof folder);
+    DIR *dir = opendir(folder);
+    if (!dir) return;
+    struct dirent *entry;
+    while ((entry = readdir(dir))) {
+        if (entry->d_name[0] == '.') continue;
+        char path[1400];
+        snprintf(path, sizeof path, "%s/%s", folder, entry->d_name);
+        struct stat info;
+        if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < 1024 * 1024) continue;
+        size_t size;
+        int system = rom_system(path, &size);
+        if (!system || size <= roms->size[system]) continue;
+        snprintf(roms->path[system], sizeof roms->path[system], "%s", path);
+        roms->size[system] = size;
+    }
+    closedir(dir);
+}
+
+static bool no_roms_dialog(void) {
+    char folder[1100], message[1400];
+    rom_folder(folder, sizeof folder);
+    snprintf(message, sizeof message, "Put a Velo 1 ROM in %s: the CE 1.0 nk.bin, the merged CE 2.0 image, or both.", folder);
+    const SDL_MessageBoxButtonData buttons[] = {
+        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
+        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Show ROM Folder" },
+    };
+    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No Velo ROM found", message, 2, buttons, NULL };
+    int chosen = 0;
+    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_in_finder(folder);
+    return false;
+}
+
+static machine_t *start_machine(const char *rom_path, const settings_t *settings, const char *state_file, bool fresh,
+                                char *state, size_t state_size, const char **notice) {
+    static char message[1400];
+    *notice = NULL;
+    size_t rom_size;
+    uint8_t *rom = read_file(rom_path, &rom_size);
+    if (!rom) {
+        snprintf(message, sizeof message, "cannot read %s", rom_path);
+        *notice = message;
+        return NULL;
+    }
+    char error[256];
+    machine_t *machine = machine_create(rom, rom_size, error, sizeof error);
+    free(rom);
+    if (!machine) {
+        snprintf(message, sizeof message, "%s", error);
+        *notice = message;
+        return NULL;
+    }
+    machine_set_log(machine, log_message);
+    machine_set_memory(machine, settings->memory);
+    machine_set_speed(machine, settings->speed);
+    machine_set_host_clock(machine, settings->host_time != 0);
+    if (state_file) snprintf(state, state_size, "%s", state_file);
+    else state_path(state, state_size, machine, rom_path);
+    if (fresh) return machine;
+    int64_t saved_at;
+    if (machine_load(machine, state, &saved_at)) {
+        machine_advance_clock(machine, (int64_t)time(NULL) - saved_at);
+        return machine;
+    }
+    FILE *existing = fopen(state, "rb");
+    if (existing) {
+        fclose(existing);
+        char backup[1200];
+        snprintf(backup, sizeof backup, "%s.old", state);
+        rename(state, backup);
+        snprintf(message, sizeof message, "saved state unreadable, moved to %s", leaf_name(backup));
+        *notice = message;
+    }
+    return machine;
 }
 
 static const void *clipboard_png(void *userdata, const char *mime_type, size_t *size) {
@@ -567,6 +704,7 @@ int main(int argc, char **argv) {
     bool fresh = false;
     const char *card = NULL;
     const char *state_file = NULL;
+    migrate_old_folders();
     settings_t settings = settings_load();
     serial_mode_t serial_mode = settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF;
     for (int i = 1; i < argc; i++) {
@@ -587,23 +725,22 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--fresh")) fresh = true;
         else if (!strncmp(argv[i], "--screenshot=", 13)) screenshot = argv[i] + 13;
         else if (!strncmp(argv[i], "--seconds=", 10)) screenshot_seconds = atof(argv[i] + 10);
+        else if (!strncmp(argv[i], "-psn_", 5)) continue;
         else rom_path = argv[i];
     }
+    static rom_set_t roms;
+    find_roms(&roms);
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--state=FILE] [--card=IMAGE] [--serial=net|pty|off|/dev/PORT] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
-        return 2;
+        int system = settings.system == 1 || settings.system == 2 ? (int)settings.system : 0;
+        if (!system || !roms.path[system][0]) system = roms.path[2][0] ? 2 : roms.path[1][0] ? 1 : 0;
+        if (!system) return no_roms_dialog() ? 0 : 1;
+        rom_path = roms.path[system];
     }
-    size_t rom_size;
-    uint8_t *rom = read_file(rom_path, &rom_size);
-    if (!rom) { fprintf(stderr, "cannot read %s\n", rom_path); return 1; }
-    char error[256];
-    machine_t *machine = machine_create(rom, rom_size, error, sizeof error);
-    free(rom);
-    if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
-    machine_set_log(machine, log_message);
-    machine_set_memory(machine, settings.memory);
-    machine_set_speed(machine, settings.speed);
-    machine_set_host_clock(machine, settings.host_time != 0);
+    char state[1100];
+    const char *startup_notice = NULL;
+    machine_t *machine = start_machine(rom_path, &settings, state_file, fresh || screenshot, state, sizeof state, &startup_notice);
+    if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
+    int system = machine_rom_system(machine);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     int window_width, window_height;
@@ -632,27 +769,6 @@ int main(int argc, char **argv) {
         return saved ? 0 : 1;
     }
 
-    char state[1100];
-    if (state_file) snprintf(state, sizeof state, "%s", state_file);
-    else state_path(state, sizeof state, machine, rom_path);
-    int64_t saved_at;
-    const char *startup_notice = NULL;
-    if (!fresh) {
-        if (machine_load(machine, state, &saved_at)) {
-            machine_advance_clock(machine, (int64_t)time(NULL) - saved_at);
-        } else {
-            FILE *existing = fopen(state, "rb");
-            if (existing) {
-                fclose(existing);
-                char backup[sizeof state + 8];
-                static char moved_notice[sizeof backup + 64];
-                snprintf(backup, sizeof backup, "%s.old", state);
-                rename(state, backup);
-                snprintf(moved_notice, sizeof moved_notice, "saved state unreadable, moved to %s", leaf_name(backup));
-                startup_notice = moved_notice;
-            }
-        }
-    }
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
 
     menu_install();
@@ -725,6 +841,9 @@ int main(int argc, char **argv) {
                     notice_left = NOTICE_SECONDS * 2;
                 }
                 break;
+            case SDL_EVENT_WINDOW_FOCUS_GAINED:
+                find_roms(&roms);
+                break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 release_keys(machine, held, -1);
                 break;
@@ -767,6 +886,46 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
+            case MENU_SYSTEM_CE1:
+            case MENU_SYSTEM_CE2: {
+                int wanted = item == MENU_SYSTEM_CE1 ? 1 : 2;
+                if (wanted == system || !roms.path[wanted][0]) break;
+                if (desktop_busy(desktop)) {
+                    notice = "busy with a desktop transfer";
+                    notice_left = NOTICE_SECONDS;
+                    break;
+                }
+                const char *switch_notice = NULL;
+                char next_state[sizeof state];
+                machine_t *next = start_machine(roms.path[wanted], &settings, NULL, false, next_state, sizeof next_state, &switch_notice);
+                if (!next) {
+                    notice = switch_notice;
+                    notice_left = NOTICE_SECONDS * 2;
+                    break;
+                }
+                serial_mode_t mode = serial.mode;
+                serial_close(&serial, machine);
+                if (pen_down) machine_touch(machine, false, 0, 0);
+                pen_down = false;
+                typer.length = typer.position = 0;
+                machine_save(machine, state, (int64_t)time(NULL));
+                machine_destroy(machine);
+                machine = next;
+                memcpy(state, next_state, sizeof state);
+                system = wanted;
+                settings.system = (uint32_t)wanted;
+                settings_save(&settings);
+                serial_reconnect_at = 0;
+                if (mode != SERIAL_OFF) {
+                    serial_reconnect_mode = mode;
+                    serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
+                }
+                power_release_at = backlight_release_at = 0;
+                owed = 0;
+                notice = switch_notice ? switch_notice : wanted == 1 ? "switched to CE 1.0" : "switched to CE 2.0";
+                notice_left = NOTICE_SECONDS * 2;
+                break;
+            }
             case MENU_SCALE_50:
             case MENU_SCALE_75:
             case MENU_SCALE_100:
@@ -1029,6 +1188,10 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
         menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
         menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
+        menu_set_checked(MENU_SYSTEM_CE1, system == 1);
+        menu_set_checked(MENU_SYSTEM_CE2, system == 2);
+        menu_set_enabled(MENU_SYSTEM_CE1, system == 1 || roms.path[1][0]);
+        menu_set_enabled(MENU_SYSTEM_CE2, system == 2 || roms.path[2][0]);
         menu_set_checked(MENU_CONNECT_AT_LAUNCH, settings.connect_at_launch != 0);
         for (int scale_item = MENU_SCALE_50; scale_item <= MENU_SCALE_200; scale_item++) menu_set_checked(scale_item, settings.scale == SCALES[scale_item - MENU_SCALE_50]);
         menu_set_enabled(MENU_ZOOM_IN, settings.scale < SCALES[SCALE_COUNT - 1]);
@@ -1049,7 +1212,7 @@ int main(int argc, char **argv) {
             notice_left -= elapsed;
             if (notice_left <= 0) notice = NULL;
         }
-        set_title(window, notice, paused, machine_suspended(machine));
+        set_title(window, system, notice, paused, machine_suspended(machine));
         since_autosave += elapsed;
         since_port_scan -= elapsed;
         if (since_autosave >= AUTOSAVE_SECONDS) {

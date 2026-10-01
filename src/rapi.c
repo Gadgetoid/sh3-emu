@@ -282,9 +282,14 @@ static bool call_result(rapi_t *rapi, message_t *message, uint32_t *last_error, 
 
 bool rapi_data_path(const char *leaf, char *path, size_t size) {
     const char *data_home = getenv("XDG_DATA_HOME");
+    const char *home = getenv("HOME") ? getenv("HOME") : ".";
     int length;
     if (data_home && data_home[0] == '/') length = snprintf(path, size, "%s/velo-emu/%s", data_home, leaf);
-    else length = snprintf(path, size, "%s/.local/share/velo-emu/%s", getenv("HOME") ? getenv("HOME") : ".", leaf);
+#ifdef __APPLE__
+    else length = snprintf(path, size, "%s/Library/Application Support/Velo/%s", home, leaf);
+#else
+    else length = snprintf(path, size, "%s/.local/share/velo-emu/%s", home, leaf);
+#endif
     return length > 0 && (size_t)length < size;
 }
 
