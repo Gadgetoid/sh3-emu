@@ -416,6 +416,7 @@ static uint8_t read_data8(pccard_socket_t *socket) {
 static uint16_t read_data16(pccard_socket_t *socket) {
     pccard_t *card = socket->state;
     if (!(card->status & ATA_DRQ) || card->writing) return 0xFFFF;
+    if (card->buffer_position + 1 >= sizeof card->buffer) return (uint16_t)(0xFF00u | read_data8(socket));
     uint16_t value = (uint16_t)(card->buffer[card->buffer_position] | card->buffer[card->buffer_position + 1] << 8);
     card->buffer_position += 2;
     if (card->buffer_position >= 512) finish_data_block(socket);
@@ -432,6 +433,10 @@ static void write_data8(pccard_socket_t *socket, uint8_t value) {
 static void write_data16(pccard_socket_t *socket, uint16_t value) {
     pccard_t *card = socket->state;
     if (!card->writing || !(card->status & ATA_DRQ)) return;
+    if (card->buffer_position + 1 >= sizeof card->buffer) {
+        write_data8(socket, (uint8_t)value);
+        return;
+    }
     card->buffer[card->buffer_position] = (uint8_t)value;
     card->buffer[card->buffer_position + 1] = (uint8_t)(value >> 8);
     card->buffer_position += 2;
