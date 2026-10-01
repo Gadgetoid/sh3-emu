@@ -48,7 +48,7 @@ int main(int argc, char **argv) {
     }
     web_proxy_t *proxy = web_proxy_start(log_stderr, NET_GATEWAY_DEFAULT_USER_AGENT);
     if (!proxy) {
-        fprintf(stderr, "proxycheck: built without the web proxy\n");
+        fprintf(stderr, "proxycheck: the web proxy did not start (or was built without libcurl)\n");
         return 1;
     }
     bool success = true;

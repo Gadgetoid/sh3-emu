@@ -498,6 +498,7 @@ static void start_proxy(net_gateway_t *gateway, const char *user_agent) {
     struct in_addr address;
     inet_pton(AF_INET, proxy_address, &address);
     if (slirp_add_unix(gateway->slirp, web_proxy_socket_path(gateway->proxy), &address, PROXY_PORT) < 0) {
+        gateway_log(gateway, "proxy: could not forward port %d\n", PROXY_PORT);
         web_proxy_stop(gateway->proxy);
         gateway->proxy = NULL;
         return;
@@ -509,22 +510,31 @@ static void start_proxy(net_gateway_t *gateway, const char *user_agent) {
 #endif
 }
 
+bool net_gateway_socket_path(char *path, size_t size, const char *name) {
+    const char *directory = getenv("TMPDIR");
+    if (!directory || !*directory) directory = "/tmp";
+    const char *separator = directory[strlen(directory) - 1] == '/' ? "" : "/";
+    int length = snprintf(path, size, "%s%s%s-%d.sock", directory, separator, name, (int)getpid());
+    if (length >= 0 && (size_t)length < size) return true;
+    length = snprintf(path, size, "/tmp/%s-%d.sock", name, (int)getpid());
+    return length >= 0 && (size_t)length < size;
+}
+
 static void start_desktop(net_gateway_t *gateway) {
     gateway->desktop_listener = -1;
     for (int i = 0; i < DESKTOP_CLIENTS; i++) gateway->desktop_clients[i].fd = -1;
 #if SLIRP_CHECK_VERSION(4, 7, 0)
     struct sockaddr_un *address = &gateway->desktop_address;
     address->sun_family = AF_UNIX;
-    const char *directory = getenv("TMPDIR");
-    if (!directory || !*directory) directory = "/tmp";
-    const char *separator = directory[strlen(directory) - 1] == '/' ? "" : "/";
-    int length = snprintf(address->sun_path, sizeof address->sun_path, "%s%svelo-desktop-%d.sock", directory, separator, (int)getpid());
-    if (length < 0 || (size_t)length >= sizeof address->sun_path) return;
+    if (!net_gateway_socket_path(address->sun_path, sizeof address->sun_path, "velo-desktop")) {
+        gateway_log(gateway, "desktop: no usable socket path\n");
+        return;
+    }
     unlink(address->sun_path);
     int listener = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (listener < 0) return;
-    if (bind(listener, (struct sockaddr *)address, sizeof *address) != 0 || listen(listener, DESKTOP_CLIENTS) != 0) {
-        close(listener);
+    if (listener < 0 || bind(listener, (struct sockaddr *)address, sizeof *address) != 0 || listen(listener, DESKTOP_CLIENTS) != 0) {
+        gateway_log(gateway, "desktop: could not listen on %s: %s\n", address->sun_path, strerror(errno));
+        if (listener >= 0) close(listener);
         return;
     }
     fcntl(listener, F_SETFL, fcntl(listener, F_GETFL) | O_NONBLOCK);
@@ -533,6 +543,7 @@ static void start_desktop(net_gateway_t *gateway) {
     if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
         memcpy(&host, desktop_alias_ip, sizeof host);
         if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
+            gateway_log(gateway, "desktop: could not forward port %d\n", DESKTOP_PORT);
             close(listener);
             unlink(address->sun_path);
             return;

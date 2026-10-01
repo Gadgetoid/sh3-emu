@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 #include <curl/curl.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -696,19 +697,18 @@ static void *connection_thread(void *opaque) {
 web_proxy_t *web_proxy_start(net_gateway_log_fn log, const char *user_agent) {
     static bool curl_ready = false;
     if (!curl_ready) {
-        if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return NULL;
+        if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+            proxy_log(log, "proxy: could not initialise libcurl\n");
+            return NULL;
+        }
         curl_ready = true;
     }
     web_proxy_t *proxy = calloc(1, sizeof *proxy);
     proxy->log = log;
     snprintf(proxy->user_agent, sizeof proxy->user_agent, "%s", user_agent ? user_agent : "");
     proxy->address.sun_family = AF_UNIX;
-    const char *directory = getenv("TMPDIR");
-    if (!directory || !*directory) directory = "/tmp";
-    const char *separator = directory[strlen(directory) - 1] == '/' ? "" : "/";
-    int length = snprintf(proxy->address.sun_path, sizeof proxy->address.sun_path, "%s%svelo-proxy-%d.sock",
-                          directory, separator, (int)getpid());
-    if (length < 0 || (size_t)length >= sizeof proxy->address.sun_path) {
+    if (!net_gateway_socket_path(proxy->address.sun_path, sizeof proxy->address.sun_path, "velo-proxy")) {
+        proxy_log(log, "proxy: no usable socket path\n");
         free(proxy);
         return NULL;
     }
@@ -717,7 +717,7 @@ web_proxy_t *web_proxy_start(net_gateway_log_fn log, const char *user_agent) {
     if (proxy->listener < 0 ||
         bind(proxy->listener, (struct sockaddr *)&proxy->address, sizeof proxy->address) != 0 ||
         listen(proxy->listener, 16) != 0) {
-        proxy_log(log, "proxy: could not listen on %s\n", proxy->address.sun_path);
+        proxy_log(log, "proxy: could not listen on %s: %s\n", proxy->address.sun_path, strerror(errno));
         if (proxy->listener >= 0) close(proxy->listener);
         free(proxy);
         return NULL;
