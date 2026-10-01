@@ -269,36 +269,34 @@ static void serial_pump(serial_t *serial, machine_t *machine) {
         while ((got = read(serial->pty, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, (size_t)got);
     }
 }
-static char chosen_card[1024];
-static bool card_chosen = false;
-
-static void card_dialog_done(void *userdata, const char *const *files, int filter) {
-    (void)userdata;
-    (void)filter;
-    if (!files || !files[0]) return;
-    snprintf(chosen_card, sizeof chosen_card, "%s", files[0]);
-    card_chosen = true;
-}
-
-typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT } pick_kind_t;
+typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT, PICK_CARD } pick_kind_t;
 
 #define PICK_MAX 64
 
-static char picked[PICK_MAX][1024];
-static int picked_count = 0;
-static pick_kind_t picked_kind;
-static bool picked_ready = false;
+typedef struct {
+    pick_kind_t kind;
+    int         count;
+    char        paths[PICK_MAX][1024];
+} picked_t;
+
+static Uint32 pick_event_type = 0;
 
 static void pick_done(void *userdata, const char *const *files, int filter) {
     (void)filter;
-    if (!files || !files[0]) return;
-    picked_count = 0;
-    while (files[picked_count] && picked_count < PICK_MAX) {
-        snprintf(picked[picked_count], sizeof picked[0], "%s", files[picked_count]);
-        picked_count++;
+    if (!pick_event_type || !files || !files[0]) return;
+    picked_t *picked = malloc(sizeof *picked);
+    if (!picked) return;
+    picked->kind = (pick_kind_t)(intptr_t)userdata;
+    picked->count = 0;
+    while (files[picked->count] && picked->count < PICK_MAX) {
+        snprintf(picked->paths[picked->count], sizeof picked->paths[0], "%s", files[picked->count]);
+        picked->count++;
     }
-    picked_kind = (pick_kind_t)(intptr_t)userdata;
-    picked_ready = true;
+    SDL_Event event;
+    SDL_zero(event);
+    event.type = pick_event_type;
+    event.user.data1 = picked;
+    if (!SDL_PushEvent(&event)) free(picked);
 }
 
 typedef struct {
@@ -794,6 +792,7 @@ int main(int argc, char **argv) {
 
     SDL_SetAppMetadata("Velo", options_version(), "velo-emu");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    pick_event_type = SDL_RegisterEvents(1);
     int window_width, window_height;
     window_size((view_display_t)settings.display, settings.scale, &window_width, &window_height);
     SDL_Window *window = SDL_CreateWindow("Philips Velo 1", window_width, window_height, SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -831,6 +830,7 @@ int main(int argc, char **argv) {
     int port_count = 0;
     double since_port_scan = 0;
     static dropped_t dropped;
+    picked_t *picked = NULL;
     rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
     desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
@@ -911,6 +911,10 @@ int main(int argc, char **argv) {
                 }
                 break;
             default:
+                if (pick_event_type && event.type == pick_event_type) {
+                    free(picked);
+                    picked = event.user.data1;
+                }
                 break;
             }
         }
@@ -1085,7 +1089,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_INSERT_CARD: {
                 static const SDL_DialogFileFilter filters[] = { { "Card images", "img;bin;raw" }, { "All files", "*" } };
-                SDL_ShowOpenFileDialog(card_dialog_done, NULL, window, filters, 2, NULL, false);
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_CARD, window, filters, 2, NULL, false);
                 break;
             }
             default:
@@ -1139,47 +1143,46 @@ int main(int argc, char **argv) {
                 break;
             }
         }
-        if (card_chosen) {
-            card_chosen = false;
-            notice = machine_insert_card(machine, chosen_card) ? "card inserted" : "could not open card image";
-            notice_left = NOTICE_SECONDS;
-        }
         bool velo_online = serial.gateway && net_gateway_online(serial.gateway);
-        if (picked_ready) {
-            picked_ready = false;
-            if (picked_kind == PICK_SEND) {
+        if (picked) {
+            if (picked->kind == PICK_CARD) {
+                notice = machine_insert_card(machine, picked->paths[0]) ? "card inserted" : "could not open card image";
+                notice_left = NOTICE_SECONDS;
+            } else if (picked->kind == PICK_SEND) {
                 const char *files[PICK_MAX + 1];
-                for (int i = 0; i < picked_count; i++) files[i] = picked[i];
-                files[picked_count] = NULL;
+                for (int i = 0; i < picked->count; i++) files[i] = picked->paths[i];
+                files[picked->count] = NULL;
                 desktop_send(desktop, files);
-            } else if (picked_kind == PICK_SAVE_SNAPSHOT) {
+            } else if (picked->kind == PICK_SAVE_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 char path[1100];
-                snprintf(path, sizeof path, "%s%s", picked[0], has_extension(picked[0], ".state") ? "" : ".state");
+                snprintf(path, sizeof path, "%s%s", picked->paths[0], has_extension(picked->paths[0], ".state") ? "" : ".state");
                 bool saved = machine_save(machine, path, (int64_t)time(NULL));
                 snprintf(snapshot_notice, sizeof snapshot_notice, saved ? "saved snapshot %s" : "could not save %s", file_leaf_name(path));
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
-            } else if (picked_kind == PICK_LOAD_SNAPSHOT) {
+            } else if (picked->kind == PICK_LOAD_SNAPSHOT) {
                 static char snapshot_notice[1200];
-                if (machine_load(machine, picked[0], NULL)) {
+                if (machine_load(machine, picked->paths[0], NULL)) {
                     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
-                    snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked[0]));
+                    snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked->paths[0]));
                 } else {
-                    snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", file_leaf_name(picked[0]));
+                    snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", file_leaf_name(picked->paths[0]));
                 }
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
-            } else if (picked_kind == PICK_FETCH) {
-                desktop_fetch(desktop, picked[0]);
-            } else if (picked_kind == PICK_SHARED) {
-                snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", picked[0]);
+            } else if (picked->kind == PICK_FETCH) {
+                desktop_fetch(desktop, picked->paths[0]);
+            } else if (picked->kind == PICK_SHARED) {
+                snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", picked->paths[0]);
                 settings_save(&settings);
                 snprintf(shared_notice, sizeof shared_notice, "sharing %s with \\My Documents", file_leaf_name(settings.shared_folder));
                 notice = shared_notice;
                 notice_left = NOTICE_SECONDS * 2;
                 if (velo_online) desktop_sync(desktop, settings.shared_folder);
             }
+            free(picked);
+            picked = NULL;
         }
         if (serial.gateway && net_gateway_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) {
             desktop_sync(desktop, settings.shared_folder);
@@ -1297,6 +1300,7 @@ int main(int argc, char **argv) {
         SDL_RenderPresent(renderer);
     }
 
+    free(picked);
     machine_save(machine, state, (int64_t)time(NULL));
     serial_close(&serial, machine);
     desktop_destroy(desktop);
