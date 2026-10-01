@@ -81,6 +81,8 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 
 Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11, the snapshot items have no shortcut, and desktops that lock the screen with Ctrl+Alt+L take that one from Load State. Linux menus say File Manager for Finder, Computer for Mac and Pictures for Desktop, where screenshots go.
 
+CE 1.0 and 2.0 have no scroll wheel, so scrolling (a mouse wheel or two-finger scroll) presses the arrow keys instead: it scrolls Pocket IE and lists, and moves the caret in documents.
+
 Dropping files on the window sends them to `\My Documents`, a dropped `.load` script installs its package, and a single dropped `.img` is inserted as the card.
 
 The backlight is under CE's control: the backlight key toggles it, and the Backlight control panel's idle timeout turns it off (30 seconds by default, since the Velo reports external power).

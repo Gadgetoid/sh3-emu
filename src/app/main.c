@@ -2,6 +2,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,6 +75,43 @@ static bool find_scancode(SDL_Keycode key, uint8_t *scancode) {
 }
 
 static bool verbose = false;
+
+#define SCROLL_STEP    (MACHINE_CLOCK_HZ / 50)
+#define SCROLL_PENDING 8
+
+typedef struct {
+    float    vertical, horizontal;
+    int      pending;
+    uint8_t  scancode;
+    bool     pressed;
+    uint64_t next_at;
+} scroller_t;
+
+static void scroller_add(scroller_t *scroller, float vertical, float horizontal) {
+    scroller->vertical += vertical;
+    scroller->horizontal += horizontal;
+    float *axis = fabsf(scroller->vertical) >= fabsf(scroller->horizontal) ? &scroller->vertical : &scroller->horizontal;
+    if (fabsf(*axis) < 1.0f) return;
+    uint8_t scancode = axis == &scroller->vertical ? (*axis > 0 ? 0x4A : 0x49) : (*axis > 0 ? 0x32 : 0x41);
+    int steps = (int)fabsf(*axis);
+    *axis -= *axis > 0 ? (float)steps : -(float)steps;
+    if (scancode != scroller->scancode) {
+        if (scroller->pressed) return;
+        scroller->scancode = scancode;
+        scroller->pending = 0;
+    }
+    scroller->pending += steps;
+    if (scroller->pending > SCROLL_PENDING) scroller->pending = SCROLL_PENDING;
+}
+
+static void scroller_step(scroller_t *scroller, machine_t *machine) {
+    uint64_t now = machine_cycles(machine);
+    if (!scroller->pending || now < scroller->next_at) return;
+    machine_key(machine, scroller->scancode, scroller->pressed);
+    if (scroller->pressed) scroller->pending--;
+    scroller->pressed = !scroller->pressed;
+    scroller->next_at = now + SCROLL_STEP;
+}
 
 static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) {
     static const struct { uint8_t scancode; int modifier; } modifiers[] = {
@@ -885,6 +923,7 @@ int main(int argc, char **argv) {
     serial = (serial_t){ SERIAL_OFF, NULL, -1, -1, "", settings.user_agent, settings.serial_device, 0, { 0 }, 0 };
     char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
     static typer_t typer;
+    static scroller_t scroller;
     static char ports[SERIAL_PORT_MAX][64];
     int port_count = 0;
     double since_port_scan = 0;
@@ -933,6 +972,9 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
+            case SDL_EVENT_MOUSE_WHEEL:
+                scroller_add(&scroller, event.wheel.y, event.wheel.x);
+                break;
             case SDL_EVENT_DROP_FILE:
                 if (event.drop.data && dropped.count < PICK_MAX) snprintf(dropped.paths[dropped.count++], sizeof dropped.paths[0], "%s", event.drop.data);
                 break;
@@ -1332,6 +1374,7 @@ int main(int argc, char **argv) {
             machine_run(machine, cycles);
         }
         typer_step(&typer, machine);
+        scroller_step(&scroller, machine);
         serial_pump(&serial, machine);
         if (serial_reconnect_at && machine_cycles(machine) >= serial_reconnect_at) {
             serial_reconnect_at = 0;
