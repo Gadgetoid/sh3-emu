@@ -34,6 +34,15 @@ States, snapshots, ROMs, `emu.ini`, `rapi.sock` and the sync manifest live in `~
 
 On Linux (tested on Ubuntu 26.04): `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev mtools dosfstools`, then the same `make` targets. There are no menus there yet, so the GUI is limited to its command-line options; `headless`, `velo-rapi` and the tests work as on macOS. Card images are made with `mkfs.fat` and `mtools` instead of `hdiutil`.
 
+`tools/mkdeb.sh` builds a `.deb` on Debian or Ubuntu: `velo`, `velo-headless` (headless, renamed for `/usr/bin`) and `velo-rapi`, with a desktop entry and dependencies from `dpkg-shlibdeps`. In a Debian 13 container, from the source folder:
+
+```
+docker run --rm -v "$PWD":/src -w /src -e VERSION=0.1+git$(date +%Y%m%d) debian:trixie sh -c \
+  'apt-get update && apt-get install -y build-essential pkg-config dpkg-dev libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev && sh tools/mkdeb.sh dist'
+```
+
+libslirp 4.8 (Debian 13) and 4.9 both work.
+
 ```
 brew install sdl3 libslirp
 make         # velo and velo-rapi

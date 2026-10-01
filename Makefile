@@ -61,7 +61,7 @@ $(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/options.o $(BUILD)/tools/
 
 $(BUILD)/src/vendor/%.o: CFLAGS += -w
 
-VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
 $(BUILD)/version.h: FORCE
 	@mkdir -p $(BUILD)

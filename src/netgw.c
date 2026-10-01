@@ -61,6 +61,10 @@
 #define RAPI_PORT 990
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
+#if !SLIRP_CHECK_VERSION(4, 9, 0)
+typedef int slirp_os_socket;
+#endif
+
 static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
 static const uint8_t desktop_alias_ip[4] = { 10, 0, 2, 5 };
 
@@ -478,8 +482,13 @@ static const SlirpCb callbacks = {
     .timer_mod = slirp_timer_mod,
     .notify = slirp_notify,
     .timer_new_opaque = slirp_timer_new_opaque,
+#if SLIRP_CHECK_VERSION(4, 9, 0)
     .register_poll_socket = slirp_register_socket,
     .unregister_poll_socket = slirp_unregister_socket,
+#else
+    .register_poll_fd = slirp_register_socket,
+    .unregister_poll_fd = slirp_unregister_socket,
+#endif
 };
 
 static void start_proxy(netgw_t *gateway, const char *user_agent) {
@@ -650,7 +659,7 @@ netgw_t *netgw_create(netgw_log_fn log, const netgw_options_t *options) {
     netgw_t *gateway = calloc(1, sizeof *gateway);
     gateway->log = log;
     SlirpConfig config = { 0 };
-    config.version = 6;
+    config.version = SLIRP_CONFIG_VERSION_MAX < 6 ? SLIRP_CONFIG_VERSION_MAX : 6;
     config.in_enabled = true;
     inet_pton(AF_INET, "10.0.2.0", &config.vnetwork);
     inet_pton(AF_INET, "255.255.255.0", &config.vnetmask);
@@ -661,6 +670,10 @@ netgw_t *netgw_create(netgw_log_fn log, const netgw_options_t *options) {
     config.if_mtu = 1500;
     config.if_mru = 1500;
     gateway->slirp = slirp_new(&config, &callbacks, gateway);
+    if (!gateway->slirp) {
+        free(gateway);
+        return NULL;
+    }
     start_proxy(gateway, options ? options->user_agent : NULL);
     start_desktop(gateway);
     start_rapi(gateway, options ? options->rapi_socket : NULL);
@@ -784,7 +797,11 @@ void netgw_poll(netgw_t *gateway, uint64_t guest_ms) {
     }
     uint32_t timeout = 0;
     gateway->fd_count = 0;
+#if SLIRP_CHECK_VERSION(4, 9, 0)
     slirp_pollfds_fill_socket(gateway->slirp, &timeout, add_poll, gateway);
+#else
+    slirp_pollfds_fill(gateway->slirp, &timeout, add_poll, gateway);
+#endif
     int result = gateway->fd_count ? poll(gateway->fds, (nfds_t)gateway->fd_count, 0) : 0;
     slirp_pollfds_poll(gateway->slirp, result < 0, get_revents, gateway);
 }

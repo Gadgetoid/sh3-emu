@@ -242,7 +242,8 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (!strcmp(option, "--version")) {
-            printf("velo-rapi %s\n", options_version());
+            const char *slash = strrchr(argv[0], '/');
+            printf("%s %s\n", slash ? slash + 1 : argv[0], options_version());
             return 0;
         }
         if (!strncmp(option, "--socket=", 9)) snprintf(socket_path, sizeof socket_path, "%s", option + 9);

@@ -66,8 +66,14 @@ void options_usage(const option_spec_t *spec) {
     }
 }
 
-options_result_t options_parse(const option_spec_t *spec, int argc, char **argv, option_fn handle, void *context,
+options_result_t options_parse(const option_spec_t *spec_in, int argc, char **argv, option_fn handle, void *context,
                                const char **positional, int max_positional, int *positional_count) {
+    option_spec_t named = *spec_in;
+    const option_spec_t *spec = &named;
+    if (argc > 0 && argv[0] && argv[0][0]) {
+        const char *slash = strrchr(argv[0], '/');
+        named.program = slash ? slash + 1 : argv[0];
+    }
     int uses[REPEAT_MAX] = { 0 };
     *positional_count = 0;
     for (int i = 1; i < argc; i++) {
