@@ -13,9 +13,7 @@ docs/philips/
 *.state
 *.state.old
 /*.img
-!/apps.img
-/apps/*
-!/apps/PYTHON/
+/apps/
 /games/
 /hash.py
 /hash.sh
