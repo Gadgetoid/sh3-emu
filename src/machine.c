@@ -178,6 +178,8 @@ struct machine {
     FILE    *pending_card;
     char     pending_card_path[1024];
     uint64_t card_insert_at;
+    uint64_t card_lost_at;
+    bool     card_lost;
     bool     ir_cardet;
     uart_t   uart_a;
     uart_port_t uart_port;
@@ -1563,8 +1565,12 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
             fclose(image);
             image = NULL;
         }
+        bool lost = m->pccard.inserted && !image;
+        if (lost) machine_logf(m, "state: card image %s not found, so the card is out\n", m->card_path);
         pccard_rebind(&m->card_socket, image);
         if (!image) m->card_path[0] = 0;
+        m->card_lost = lost;
+        m->card_lost_at = m->cpu.cycles;
         bind_uart(m);
         m->uart_a.rx_next = NO_EVENT;
         intc_update(m);
@@ -1725,11 +1731,13 @@ bool machine_insert_card(machine_t *m, const char *path) {
     FILE *image = fopen(path, "r+b");
     if (!image) return false;
     cancel_pending_card(m);
-    if (m->pccard.inserted) {
-        machine_eject_card(m);
+    bool recently_lost = m->card_lost && m->cpu.cycles - m->card_lost_at < CARD_SWAP_CYCLES;
+    m->card_lost = false;
+    if (m->pccard.inserted || recently_lost) {
+        if (m->pccard.inserted) machine_eject_card(m);
         m->pending_card = image;
         snprintf(m->pending_card_path, sizeof m->pending_card_path, "%s", path);
-        m->card_insert_at = m->cpu.cycles + CARD_SWAP_CYCLES;
+        m->card_insert_at = (recently_lost ? m->card_lost_at : m->cpu.cycles) + CARD_SWAP_CYCLES;
         return true;
     }
     snprintf(m->card_path, sizeof m->card_path, "%s", path);

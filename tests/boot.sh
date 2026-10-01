@@ -161,6 +161,16 @@ Tool = string "\Windows\LoadTest\tool.exe"
     kill $EMULATOR
     wait $EMULATOR 2>/dev/null || true
     if echo "$SWAPPED" | grep -q "BRAVO" && ! echo "$SWAPPED" | grep -q "ALPHA"; then echo "ok   card_swap"; else echo "FAIL card_swap $SWAPPED"; exit 1; fi
+    cp "$OUT/alpha.img" "$OUT/gone.img"
+    ./headless "$ROM" --seconds=8 --load="$OUT/desktop.state" --card="$OUT/gone.img" --save="$OUT/gone.state" >/dev/null 2>&1
+    rm "$OUT/gone.img"
+    ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/gone.state" --card="$OUT/bravo.img" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
+    EMULATOR=$!
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
+    REPLACED=$(./velo-rapi --socket="$SOCKET" ls "/PC Card" 2>&1)
+    kill $EMULATOR
+    wait $EMULATOR 2>/dev/null || true
+    if echo "$REPLACED" | grep -q "BRAVO"; then echo "ok   card_missing_from_state"; else echo "FAIL card_missing_from_state $REPLACED"; exit 1; fi
 fi
 if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   backlight_button"; else echo "FAIL backlight_button"; exit 1; fi
 SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
