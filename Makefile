@@ -8,7 +8,7 @@ CE2_ROM  ?= rom/nk-ce2.bin
 
 .DEFAULT_GOAL := all
 
-CFLAGS  += -Isrc -Wall -Wextra -O2 -std=c11 -fno-common -MMD -MP
+CFLAGS  += -Isrc -I$(BUILD) -Wall -Wextra -O2 -std=c11 -fno-common -MMD -MP
 CFLAGS  += $(shell pkg-config --cflags sdl3)
 THREAD_LIBS = -lpthread
 LDFLAGS += $(shell pkg-config --libs sdl3) -lm -lz $(THREAD_LIBS)
@@ -38,7 +38,7 @@ else
 SRC_NET  = src/netgw_none.c src/webproxy_none.c
 endif
 
-SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c src/keytext.c
+SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c src/keytext.c src/options.c
 SRC_RAPI    = src/rapi.c src/rapiload.c src/rapisetup.c src/rapisync.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/png.c src/typer.c src/view.c src/main.c $(SRC_MENU)
 
@@ -56,10 +56,20 @@ $(HEADLESS): $(OBJ_HEADLESS)
 $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxycheck.o
 	$(CC) -o $@ $^ -lm $(NET_LIBS) $(THREAD_LIBS)
 
-$(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/tools/velorapi.o
+$(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/options.o $(BUILD)/tools/velorapi.o
 	$(CC) -o $@ $^
 
 $(BUILD)/src/vendor/%.o: CFLAGS += -w
+
+VERSION := $(shell git describe --always --dirty 2>/dev/null || echo unknown)
+
+$(BUILD)/version.h: FORCE
+	@mkdir -p $(BUILD)
+	@printf '#define VELO_VERSION "%s"\n' "$(VERSION)" > $@.tmp
+	@cmp -s $@.tmp $@ || mv $@.tmp $@
+	@rm -f $@.tmp
+
+$(BUILD)/src/options.o: $(BUILD)/version.h
 
 $(BUILD)/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -78,7 +88,7 @@ app: $(PROG) $(VELORAPI)
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app
 
-.PHONY: all run clean test app
+.PHONY: all run clean test app FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d $(BUILD)/tools/velorapi.d
 

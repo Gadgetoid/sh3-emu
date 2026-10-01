@@ -7,6 +7,7 @@
 #include "keytext.h"
 #include "lcd.h"
 #include "machine.h"
+#include "options.h"
 #include "png.h"
 #include "netgw.h"
 
@@ -87,107 +88,209 @@ static void write_pgm(const char *path, const uint8_t *levels) {
     fclose(file);
 }
 
+typedef struct {
+    const char *rom_path;
+    double   seconds;
+    const char *png, *pgm, *load, *save, *wav, *card;
+    int      png_cell, png_backlight;
+    bool     trace_pc, host_time;
+    double   key_times[32];
+    unsigned key_codes[32];
+    int      key_count;
+    double   tap_times[32];
+    int      tap_x[32], tap_y[32];
+    double   tap_hold[32];
+    int      tap_count;
+    double   power_times[8];
+    int      power_count;
+    double   soft_reset_at;
+    double   backlight_times[8];
+    int      backlight_count;
+    double   cable_at, net_at, realtime;
+    uint32_t watches[MACHINE_WATCH_MAX];
+    int      watch_count;
+    netgw_options_t net_options;
+    double   send_times[8];
+    const char *send_text[8];
+    int      send_count;
+    double   type_times[16];
+    const char *type_strings[16];
+    int      type_count;
+    uint32_t memory, speed;
+} run_t;
+
+enum {
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
+    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND,
+    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC,
+};
+
+static const option_t OPTIONS[] = {
+    [OPT_HEADING_RUN] = { NULL, NULL, "Running", 0 },
+    [OPT_SECONDS] = { "seconds", "N", "emulated seconds to run (default 5)", 0 },
+    [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
+    [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
+    [OPT_CARD] = { "card", "IMAGE", "insert a PC Card image, after --load", 0 },
+    [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 4, 8, 16, 20 or 32", 0 },
+    [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
+    [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for RAPI clients", 0 },
+    [OPT_HOST_TIME] = { "host-time", NULL, "set the clock from this computer at a cold boot", 0 },
+    [OPT_HEADING_INPUT] = { NULL, NULL, "Input, at emulated times in seconds", 0 },
+    [OPT_TAP] = { "tap", "SECONDS:X:Y[:HOLD]", "hold the pen at a screen position, for 0.5 s by default (0.08 for double taps)", 32 },
+    [OPT_KEY] = { "key", "SECONDS:SCANCODE", "press a Velo scancode (hex) for 50 ms; the backlight key is 5E", 32 },
+    [OPT_TYPE] = { "type", "SECONDS:TEXT", "type text, with \\n for Enter", 16 },
+    [OPT_POWER] = { "power", "SECONDS", "press the power button for 200 ms", 8 },
+    [OPT_BACKLIGHT] = { "backlight", "SECONDS", "press the backlight button for 100 ms", 8 },
+    [OPT_SOFT_RESET] = { "soft-reset", "SECONDS", "soft-reset the machine", 0 },
+    [OPT_HEADING_NET] = { NULL, NULL, "Serial and network", 0 },
+    [OPT_NET] = { "net", "SECONDS", "connect COM1 to the PPP gateway and web proxy", 0 },
+    [OPT_RAPI] = { "rapi", "SOCKET", "expose the Velo's RAPI port on a Unix socket, for velo-rapi --socket", 0 },
+    [OPT_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
+    [OPT_CABLE] = { "cable", "SECONDS", "connect a bare serial cable, with nothing at the other end", 0 },
+    [OPT_CABLE_SEND] = { "cable-send", "SECONDS:TEXT", "send bytes down the cable (\\r and \\n allowed); anything CE sends is printed", 8 },
+    [OPT_HEADING_OUTPUT] = { NULL, NULL, "Output and debugging", 0 },
+    [OPT_PGM] = { "pgm", "FILE", "save the raw 480 x 240 greyscale screen at the end", 0 },
+    [OPT_PNG] = { "png", "FILE", "save the screen through the simulated LCD at the end", 0 },
+    [OPT_PNG_CELL] = { "png-cell", "N", "device pixels per LCD pixel for --png (default 4)", 0 },
+    [OPT_PNG_BACKLIGHT] = { "png-backlight", "on|off", "draw --png lit or unlit, whatever the backlight is doing", 0 },
+    [OPT_WAV] = { "wav", "FILE", "write the sound output, with silences removed", 0 },
+    [OPT_TRACE_PC] = { "trace-pc", NULL, "print the program counter every emulated second", 0 },
+    [OPT_WATCH_PC] = { "watch-pc", "VA", "log calls reaching an address (slot-relative below 0x02000000)", MACHINE_WATCH_MAX },
+};
+
+static bool parse_option(void *context, int option, const char *value, char *error, size_t error_size) {
+    run_t *run = context;
+    double number;
+    long integer;
+    const char *rest;
+    switch (option) {
+    case OPT_SECONDS: return option_number(value, &run->seconds) && run->seconds > 0;
+    case OPT_LOAD: run->load = value; return true;
+    case OPT_SAVE: run->save = value; return true;
+    case OPT_CARD: run->card = value; return true;
+    case OPT_MEMORY:
+        if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
+        run->memory = (uint32_t)integer;
+        return true;
+    case OPT_SPEED:
+        if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
+        run->speed = (uint32_t)integer;
+        return true;
+    case OPT_REALTIME:
+        run->realtime = 1;
+        return !value || (option_number(value, &run->realtime) && run->realtime > 0);
+    case OPT_HOST_TIME: run->host_time = true; return true;
+    case OPT_TAP: {
+        int n = run->tap_count;
+        if (!option_timed(value, &run->tap_times[n], &rest)) return false;
+        char tail;
+        run->tap_hold[n] = 0.5;
+        int got = sscanf(rest, "%d:%d:%lf%c", &run->tap_x[n], &run->tap_y[n], &run->tap_hold[n], &tail);
+        if (got != 2 && got != 3) return false;
+        if (run->tap_x[n] < 0 || run->tap_x[n] >= MACHINE_SCREEN_WIDTH || run->tap_y[n] < 0 || run->tap_y[n] >= MACHINE_SCREEN_HEIGHT) {
+            snprintf(error, error_size, "--tap position %d,%d is off the 480 x 240 screen", run->tap_x[n], run->tap_y[n]);
+            return false;
+        }
+        run->tap_count++;
+        return true;
+    }
+    case OPT_KEY: {
+        int n = run->key_count;
+        if (!option_timed(value, &run->key_times[n], &rest) || !option_integer(rest, 16, &integer) || integer < 0 || integer > 0xFF) return false;
+        run->key_codes[n] = (unsigned)integer;
+        run->key_count++;
+        return true;
+    }
+    case OPT_TYPE:
+        if (!option_timed(value, &run->type_times[run->type_count], &rest)) return false;
+        run->type_strings[run->type_count++] = rest;
+        return true;
+    case OPT_POWER:
+        if (!option_number(value, &number) || number < 0) return false;
+        run->power_times[run->power_count++] = number;
+        return true;
+    case OPT_BACKLIGHT:
+        if (!option_number(value, &number) || number < 0) return false;
+        run->backlight_times[run->backlight_count++] = number;
+        return true;
+    case OPT_SOFT_RESET: return option_number(value, &run->soft_reset_at) && run->soft_reset_at >= 0;
+    case OPT_NET: return option_number(value, &run->net_at) && run->net_at >= 0;
+    case OPT_RAPI: run->net_options.rapi_socket = value; return true;
+    case OPT_USER_AGENT: run->net_options.user_agent = value; return true;
+    case OPT_CABLE: return option_number(value, &run->cable_at) && run->cable_at >= 0;
+    case OPT_CABLE_SEND:
+        if (!option_timed(value, &run->send_times[run->send_count], &rest)) return false;
+        run->send_text[run->send_count++] = rest;
+        return true;
+    case OPT_PGM: run->pgm = value; return true;
+    case OPT_PNG: run->png = value; return true;
+    case OPT_PNG_CELL:
+        if (!option_integer(value, 10, &integer) || integer < 2 || integer > 16) return false;
+        run->png_cell = (int)integer;
+        return true;
+    case OPT_PNG_BACKLIGHT:
+        if (strcmp(value, "on") && strcmp(value, "off")) return false;
+        run->png_backlight = !strcmp(value, "on");
+        return true;
+    case OPT_WAV: run->wav = value; return true;
+    case OPT_TRACE_PC: run->trace_pc = true; return true;
+    case OPT_WATCH_PC:
+        if (!option_integer(value, 0, &integer) || integer < 0) return false;
+        run->watches[run->watch_count++] = (uint32_t)integer;
+        return true;
+    }
+    return false;
+}
+
+static const option_spec_t SPEC = {
+    "headless", "ROM [OPTIONS]",
+    "Runs the Velo without a window, for tests and scripts. ROM is a CE 1.0 nk.bin, a CE 2.0 card ROM or merged image, or a B000FF image.",
+    OPTIONS, (int)(sizeof OPTIONS / sizeof OPTIONS[0]),
+    "Events at or after --seconds don't happen, and are reported. Options taking a value also accept it as the next argument.",
+};
+
 int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--png=FILE [--png-cell=N] [--png-backlight=on|off]] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--soft-reset=SECONDS] [--host-time] [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+    static run_t run;
+    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .cable_at = -1, .net_at = -1,
+                   .net_options = { NETGW_DEFAULT_USER_AGENT, NULL } };
+    netgw_t *gateway = NULL;
+    const char *positional[1];
+    int positional_count;
+    options_result_t parsed = options_parse(&SPEC, argc, argv, parse_option, &run, positional, 1, &positional_count);
+    if (parsed == OPTIONS_EXIT) return 0;
+    if (parsed == OPTIONS_ERROR) return 2;
+    if (!positional_count) {
+        fprintf(stderr, "headless: no ROM given (see --help)\n");
         return 2;
     }
-    double seconds = 5;
-    const char *png = NULL;
-    int png_cell = 4, png_backlight = -1;
-    const char *pgm = NULL, *load = NULL, *save = NULL, *wav = NULL, *card = NULL;
-    bool trace_pc = false;
-    double key_times[32];
-    unsigned key_codes[32];
-    int key_count = 0;
-    double tap_times[32];
-    int tap_x[32], tap_y[32];
-    double tap_hold[32];
-    int tap_count = 0;
-    double power_times[8];
-    int power_count = 0;
-    double soft_reset_at = -1;
-    bool host_time = false;
-    double backlight_times[8];
-    int backlight_count = 0;
-    double serial_at = -1, net_at = -1, realtime = 0;
-    uint32_t watches[MACHINE_WATCH_MAX];
-    int watch_count = 0;
-    netgw_t *gateway = NULL;
-    netgw_options_t net_options = { NETGW_DEFAULT_USER_AGENT, NULL };
-    double send_times[8];
-    const char *send_text[8];
-    int send_count = 0;
-    double type_times[16];
-    const char *type_strings[16];
-    int type_count = 0;
-    for (int i = 2; i < argc; i++) {
-        if (!strncmp(argv[i], "--seconds=", 10)) seconds = atof(argv[i] + 10);
-        else if (!strncmp(argv[i], "--pgm=", 6)) pgm = argv[i] + 6;
-        else if (!strncmp(argv[i], "--png=", 6)) png = argv[i] + 6;
-        else if (!strncmp(argv[i], "--png-cell=", 11)) png_cell = atoi(argv[i] + 11);
-        else if (!strcmp(argv[i], "--png-backlight=on")) png_backlight = 1;
-        else if (!strcmp(argv[i], "--png-backlight=off")) png_backlight = 0;
-        else if (!strcmp(argv[i], "--trace-pc")) trace_pc = true;
-        else if (!strncmp(argv[i], "--serial=", 9)) serial_at = atof(argv[i] + 9);
-        else if (!strncmp(argv[i], "--net=", 6)) net_at = atof(argv[i] + 6);
-        else if (!strncmp(argv[i], "--user-agent=", 13)) net_options.user_agent = argv[i] + 13;
-        else if (!strncmp(argv[i], "--rapi=", 7)) net_options.rapi_socket = argv[i] + 7;
-        else if (!strcmp(argv[i], "--realtime")) realtime = 1;
-        else if (!strncmp(argv[i], "--watch-pc=", 11) && watch_count < MACHINE_WATCH_MAX) watches[watch_count++] = (uint32_t)strtoul(argv[i] + 11, NULL, 0);
-        else if (!strncmp(argv[i], "--realtime=", 11)) realtime = atof(argv[i] + 11);
-        else if (!strncmp(argv[i], "--type=", 7) && type_count < 16) {
-            char *colon = strchr(argv[i] + 7, ':');
-            if (colon) { type_times[type_count] = atof(argv[i] + 7); type_strings[type_count++] = colon + 1; }
-        }
-        else if (!strncmp(argv[i], "--serial-send=", 14) && send_count < 8) {
-            char *colon = strchr(argv[i] + 14, ':');
-            if (colon) { send_times[send_count] = atof(argv[i] + 14); send_text[send_count++] = colon + 1; }
-        }
-        else if (!strncmp(argv[i], "--backlight=", 12) && backlight_count < 8) backlight_times[backlight_count++] = atof(argv[i] + 12);
-        else if (!strncmp(argv[i], "--power=", 8) && power_count < 8) power_times[power_count++] = atof(argv[i] + 8);
-        else if (!strncmp(argv[i], "--soft-reset=", 13)) soft_reset_at = atof(argv[i] + 13);
-        else if (!strcmp(argv[i], "--host-time")) host_time = true;
-        else if (!strncmp(argv[i], "--wav=", 6)) wav = argv[i] + 6;
-        else if (!strncmp(argv[i], "--card=", 7)) card = argv[i] + 7;
-        else if (!strncmp(argv[i], "--load=", 7)) load = argv[i] + 7;
-        else if (!strncmp(argv[i], "--save=", 7)) save = argv[i] + 7;
-        else if (!strncmp(argv[i], "--tap=", 6) && tap_count < 32) {
-            tap_hold[tap_count] = 0.5;
-            if (sscanf(argv[i] + 6, "%lf:%d:%d:%lf", &tap_times[tap_count], &tap_x[tap_count], &tap_y[tap_count], &tap_hold[tap_count]) >= 3) tap_count++;
-        }
-        else if (!strncmp(argv[i], "--key=", 6) && key_count < 32) {
-            if (sscanf(argv[i] + 6, "%lf:%x", &key_times[key_count], &key_codes[key_count]) == 2) key_count++;
-        }
-    }
-    double latest = soft_reset_at;
-    for (int k = 0; k < key_count; k++) if (key_times[k] > latest) latest = key_times[k];
-    for (int t = 0; t < tap_count; t++) if (tap_times[t] > latest) latest = tap_times[t];
-    for (int b = 0; b < power_count; b++) if (power_times[b] > latest) latest = power_times[b];
-    for (int b = 0; b < backlight_count; b++) if (backlight_times[b] > latest) latest = backlight_times[b];
-    for (int k = 0; k < type_count; k++) if (type_times[k] > latest) latest = type_times[k];
-    for (int k = 0; k < send_count; k++) if (send_times[k] > latest) latest = send_times[k];
-    if (serial_at > latest) latest = serial_at;
-    if (net_at > latest) latest = net_at;
-    if (latest >= seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, seconds);
+    run.rom_path = positional[0];
+    double latest = run.soft_reset_at;
+    for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
+    for (int t = 0; t < run.tap_count; t++) if (run.tap_times[t] > latest) latest = run.tap_times[t];
+    for (int b = 0; b < run.power_count; b++) if (run.power_times[b] > latest) latest = run.power_times[b];
+    for (int b = 0; b < run.backlight_count; b++) if (run.backlight_times[b] > latest) latest = run.backlight_times[b];
+    for (int k = 0; k < run.type_count; k++) if (run.type_times[k] > latest) latest = run.type_times[k];
+    for (int k = 0; k < run.send_count; k++) if (run.send_times[k] > latest) latest = run.send_times[k];
+    if (run.cable_at > latest) latest = run.cable_at;
+    if (run.net_at > latest) latest = run.net_at;
+    if (latest >= run.seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, run.seconds);
     size_t rom_size;
-    uint8_t *rom = read_file(argv[1], &rom_size);
-    if (!rom) { fprintf(stderr, "cannot read %s\n", argv[1]); return 1; }
+    uint8_t *rom = read_file(run.rom_path, &rom_size);
+    if (!rom) { fprintf(stderr, "cannot read %s\n", run.rom_path); return 1; }
     char error[256];
     machine_t *machine = machine_create(rom, rom_size, error, sizeof error);
     if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
     machine_set_log(machine, log_stderr);
-    for (int i = 2; i < argc; i++) {
-        if (!strncmp(argv[i], "--memory=", 9)) machine_set_memory(machine, (uint32_t)atoi(argv[i] + 9));
-        else if (!strncmp(argv[i], "--speed=", 8)) machine_set_speed(machine, (uint32_t)atoi(argv[i] + 8));
-    }
-    machine_set_host_clock(machine, host_time);
-    if (load && !machine_load(machine, load, NULL)) { fprintf(stderr, "cannot load state %s\n", load); return 1; }
-    if (load) machine_serial_connect(machine, false);
-    for (int w = 0; w < watch_count; w++) machine_watch_pc(machine, watches[w]);
-    if (card && !machine_insert_card(machine, card)) { fprintf(stderr, "cannot open card image %s\n", card); return 1; }
+    if (run.memory) machine_set_memory(machine, run.memory);
+    if (run.speed) machine_set_speed(machine, run.speed);
+    machine_set_host_clock(machine, run.host_time);
+    if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
+    if (run.load) machine_serial_connect(machine, false);
+    for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
+    if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
 
-    FILE *wav_file = wav ? fopen(wav, "wb") : NULL;
+    FILE *wav_file = run.wav ? fopen(run.wav, "wb") : NULL;
     uint32_t wav_rate = 0;
     size_t wav_samples = 0;
     static int16_t audio[65536];
@@ -197,36 +300,36 @@ int main(int argc, char **argv) {
     signal(SIGINT, request_stop);
     double wall_start = wall_seconds();
     uint64_t cycles_start = machine_cycles(machine);
-    uint64_t total = (uint64_t)(seconds * MACHINE_CLOCK_HZ);
+    uint64_t total = (uint64_t)(run.seconds * MACHINE_CLOCK_HZ);
     uint64_t slice = MACHINE_CLOCK_HZ / 10;
     for (uint64_t done = 0; done < total && !machine_halted(machine) && !stop_requested; done += slice) {
-        for (int k = 0; k < key_count; k++) {
-            uint64_t at = (uint64_t)(key_times[k] * MACHINE_CLOCK_HZ);
+        for (int k = 0; k < run.key_count; k++) {
+            uint64_t at = (uint64_t)(run.key_times[k] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
-                machine_key(machine, (uint8_t)key_codes[k], false);
+                machine_key(machine, (uint8_t)run.key_codes[k], false);
                 machine_run(machine, MACHINE_CLOCK_HZ / 20);
-                machine_key(machine, (uint8_t)key_codes[k], true);
+                machine_key(machine, (uint8_t)run.key_codes[k], true);
             }
         }
-        for (int t = 0; t < tap_count; t++) {
-            uint64_t at = (uint64_t)(tap_times[t] * MACHINE_CLOCK_HZ);
+        for (int t = 0; t < run.tap_count; t++) {
+            uint64_t at = (uint64_t)(run.tap_times[t] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
-                machine_touch(machine, true, tap_x[t], tap_y[t]);
-                machine_run(machine, (uint64_t)(tap_hold[t] * MACHINE_CLOCK_HZ));
-                machine_touch(machine, false, tap_x[t], tap_y[t]);
+                machine_touch(machine, true, run.tap_x[t], run.tap_y[t]);
+                machine_run(machine, (uint64_t)(run.tap_hold[t] * MACHINE_CLOCK_HZ));
+                machine_touch(machine, false, run.tap_x[t], run.tap_y[t]);
             }
         }
-        if (net_at >= 0 && !gateway && (uint64_t)(net_at * MACHINE_CLOCK_HZ) < done + slice) {
-            gateway = netgw_create(log_stderr, &net_options);
+        if (run.net_at >= 0 && !gateway && (uint64_t)(run.net_at * MACHINE_CLOCK_HZ) < done + slice) {
+            gateway = netgw_create(log_stderr, &run.net_options);
             machine_serial_connect(machine, true);
         }
-        if (serial_at >= 0 && (uint64_t)(serial_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(serial_at * MACHINE_CLOCK_HZ) < done + slice) machine_serial_connect(machine, true);
-        for (int k = 0; k < send_count; k++) {
-            uint64_t at = (uint64_t)(send_times[k] * MACHINE_CLOCK_HZ);
+        if (run.cable_at >= 0 && (uint64_t)(run.cable_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(run.cable_at * MACHINE_CLOCK_HZ) < done + slice) machine_serial_connect(machine, true);
+        for (int k = 0; k < run.send_count; k++) {
+            uint64_t at = (uint64_t)(run.send_times[k] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 char text[512];
                 size_t length = 0;
-                for (const char *c = send_text[k]; *c && length < sizeof text - 1; c++) {
+                for (const char *c = run.send_text[k]; *c && length < sizeof text - 1; c++) {
                     if (c[0] == '\\' && c[1] == 'r') { text[length++] = '\r'; c++; }
                     else if (c[0] == '\\' && c[1] == 'n') { text[length++] = '\n'; c++; }
                     else text[length++] = *c;
@@ -234,21 +337,21 @@ int main(int argc, char **argv) {
                 machine_serial_send(machine, (const uint8_t *)text, length);
             }
         }
-        for (int k = 0; k < type_count; k++) {
-            uint64_t at = (uint64_t)(type_times[k] * MACHINE_CLOCK_HZ);
-            if (at >= done && at < done + slice) type_text(machine, type_strings[k]);
+        for (int k = 0; k < run.type_count; k++) {
+            uint64_t at = (uint64_t)(run.type_times[k] * MACHINE_CLOCK_HZ);
+            if (at >= done && at < done + slice) type_text(machine, run.type_strings[k]);
         }
-        for (int b = 0; b < backlight_count; b++) {
-            uint64_t at = (uint64_t)(backlight_times[b] * MACHINE_CLOCK_HZ);
+        for (int b = 0; b < run.backlight_count; b++) {
+            uint64_t at = (uint64_t)(run.backlight_times[b] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 machine_backlight_button(machine, true);
                 machine_run(machine, MACHINE_CLOCK_HZ / 10);
                 machine_backlight_button(machine, false);
             }
         }
-        if (soft_reset_at >= 0 && (uint64_t)(soft_reset_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(soft_reset_at * MACHINE_CLOCK_HZ) < done + slice) machine_soft_reset(machine);
-        for (int b = 0; b < power_count; b++) {
-            uint64_t at = (uint64_t)(power_times[b] * MACHINE_CLOCK_HZ);
+        if (run.soft_reset_at >= 0 && (uint64_t)(run.soft_reset_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(run.soft_reset_at * MACHINE_CLOCK_HZ) < done + slice) machine_soft_reset(machine);
+        for (int b = 0; b < run.power_count; b++) {
+            uint64_t at = (uint64_t)(run.power_times[b] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 machine_power_button(machine, true);
                 machine_run(machine, MACHINE_CLOCK_HZ / 5);
@@ -259,7 +362,7 @@ int main(int argc, char **argv) {
             uint64_t step = MACHINE_CLOCK_HZ / 100;
             for (uint64_t ran = 0; ran < slice; ran += step) {
                 machine_run(machine, step);
-                pace(machine, realtime, wall_start, cycles_start);
+                pace(machine, run.realtime, wall_start, cycles_start);
                 uint8_t buffer[4096];
                 size_t count;
                 while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) netgw_from_guest(gateway, buffer, count);
@@ -268,7 +371,7 @@ int main(int argc, char **argv) {
             }
         } else {
             machine_run(machine, slice);
-            pace(machine, realtime, wall_start, cycles_start);
+            pace(machine, run.realtime, wall_start, cycles_start);
         }
         {
             uint8_t tx[4096];
@@ -286,7 +389,7 @@ int main(int argc, char **argv) {
             fwrite(audio, sizeof audio[0], count, wav_file);
             wav_samples += count;
         }
-        if (trace_pc) fprintf(stderr, "t=%.1fs pc=%08X lcd=%d backlight=%d\n", (double)machine_cycles(machine) / MACHINE_CLOCK_HZ, machine_pc(machine), machine_lcd_enabled(machine), machine_backlight(machine));
+        if (run.trace_pc) fprintf(stderr, "t=%.1fs pc=%08X lcd=%d backlight=%d\n", (double)machine_cycles(machine) / MACHINE_CLOCK_HZ, machine_pc(machine), machine_lcd_enabled(machine), machine_backlight(machine));
     }
     machine_dump_state(machine);
     if (wav_file) {
@@ -300,13 +403,13 @@ int main(int argc, char **argv) {
         fclose(wav_file);
         fprintf(stderr, "wav: %zu samples at %u Hz\n", wav_samples, rate);
     }
-    if (save && !machine_save(machine, save, 0)) { fprintf(stderr, "cannot save state %s\n", save); return 1; }
-    if (pgm) {
+    if (run.save && !machine_save(machine, run.save, 0)) { fprintf(stderr, "cannot save state %s\n", run.save); return 1; }
+    if (run.pgm) {
         static uint8_t levels[MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT];
         machine_screen(machine, levels);
-        write_pgm(pgm, levels);
+        write_pgm(run.pgm, levels);
     }
-    if (png && !write_panel_png(png, machine, png_cell, png_backlight)) { fprintf(stderr, "cannot write %s\n", png); return 1; }
+    if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     netgw_destroy(gateway);
     machine_destroy(machine);
     free(rom);

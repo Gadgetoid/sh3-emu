@@ -99,7 +99,7 @@ if pkg-config --exists slirp; then
     PROXY=$(./velo-rapi --socket="$SOCKET" reg get HKCU/Software/Apps/PocketIE ProxyServer)
     kill -TERM $EMULATOR
     wait $EMULATOR
-    if [ "$PROXY" = 'string "10.0.2.4"' ] && ./headless "$ROM" --load="$OUT/setup.state" --serial=2 --seconds=6 2>&1 | grep -q "at 115200 baud"; then echo "ok   rapi_setup"; else echo "FAIL rapi_setup"; exit 1; fi
+    if [ "$PROXY" = 'string "10.0.2.4"' ] && ./headless "$ROM" --load="$OUT/setup.state" --cable=2 --seconds=6 2>&1 | grep -q "at 115200 baud"; then echo "ok   rapi_setup"; else echo "FAIL rapi_setup"; exit 1; fi
     ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done

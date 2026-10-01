@@ -47,12 +47,15 @@ make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card
 
 ```
 ./velo rom/nk.bin
-./velo --screenshot=out.bmp --seconds=8 rom/nk.bin
+./velo --help
 ./velo --state=powertoys.bin rom/nk.bin
 ./headless rom/nk.bin --seconds=12 --key=8:4B --tap=12:240:120 --pgm=out.pgm
 ./headless rom/nk.bin --seconds=3 --load=state.bin --save=state.bin
 ./headless rom/nk.bin --seconds=10 --load=state.bin --power=2 --power=6 --wav=out.wav
+./headless rom/nk.bin --seconds=4 --load=state.bin --png=screen.png --png-backlight=off
 ```
+
+All three tools take `--help` and `--version`. Unknown options, malformed values and events past the end of a headless run are errors or warnings, rather than being ignored. Options that take a value accept `--name=VALUE` or `--name VALUE`.
 
 The mouse is the stylus. The touch panel reports what a real Velo does, so CE 2.0's built-in calibration is right before it is recalibrated; states saved by older builds keep the readings they were calibrated with. Hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. `--verbose` logs unmodelled register accesses and dumps CPU state on exit.
 
@@ -218,7 +221,7 @@ Headless options:
 - `--host-time` sets the clock from the Mac at a cold boot (Emulation > Use Host Date/Time).
 - `--wav=FILE` writes the sound output, with the silences between sounds removed.
 - `--card=IMAGE` inserts a card image, after `--load`.
-- `--net=SECONDS` connects COM1 to the PPP gateway. `--serial=SECONDS` connects a bare cable, and `--serial-send=SECONDS:TEXT` sends bytes. Anything CE transmits is printed.
+- `--net=SECONDS` connects COM1 to the PPP gateway. `--cable=SECONDS` connects a bare cable, and `--cable-send=SECONDS:TEXT` sends bytes down it. Anything CE transmits is printed.
 - `--type=SECONDS:TEXT` types text (US layout, `\n` for Enter).
 - `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key), `--user-agent=TEXT`.
 - `--rapi=SOCKET` makes the Velo's RAPI port available at SOCKET. A loaded state starts with the cable unplugged, so `--net` reconnects it.

@@ -11,6 +11,7 @@
 #include "machine.h"
 #include "menu.h"
 #include "netgw.h"
+#include "options.h"
 #include "png.h"
 #include "typer.h"
 #include "view.h"
@@ -698,36 +699,87 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
     SDL_SetWindowSize(window, width, height);
 }
 
+typedef struct {
+    settings_t   *settings;
+    serial_mode_t serial_mode;
+    const char   *card, *state_file;
+    bool          fresh;
+} launch_t;
+
+enum {
+    LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED,
+    LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
+    LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE,
+};
+
+static const option_t LAUNCH_OPTIONS[] = {
+    [LAUNCH_HEADING_MACHINE] = { NULL, NULL, "Machine", 0 },
+    [LAUNCH_STATE] = { "state", "FILE", "load, save and autosave FILE instead of the ROM's own state", 0 },
+    [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
+    [LAUNCH_CARD] = { "card", "IMAGE", "insert a PC Card image", 0 },
+    [LAUNCH_MEMORY] = { "memory", "MB", "RAM for the next cold boot: 4, 8, 16, 20 or 32", 0 },
+    [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
+    [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
+    [LAUNCH_SERIAL] = { "serial", "net|pty|off|PORT", "COM1 on the PPP network, a pseudo-terminal, nothing, or a host serial port such as /dev/cu.usbserial-1", 0 },
+    [LAUNCH_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
+    [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
+    [LAUNCH_VERBOSE] = { "verbose", NULL, "log hardware, network and proxy activity to stderr", 0 },
+};
+
+static bool launch_option(void *context, int option, const char *value, char *error, size_t error_size) {
+    launch_t *launch = context;
+    settings_t *settings = launch->settings;
+    long integer;
+    (void)error;
+    (void)error_size;
+    switch (option) {
+    case LAUNCH_STATE: launch->state_file = value; return true;
+    case LAUNCH_FRESH: launch->fresh = true; return true;
+    case LAUNCH_CARD: launch->card = value; return true;
+    case LAUNCH_MEMORY:
+        if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
+        settings->memory = (uint32_t)integer;
+        return true;
+    case LAUNCH_SPEED:
+        if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
+        settings->speed = (uint32_t)integer;
+        return true;
+    case LAUNCH_SERIAL:
+        if (!strcmp(value, "net")) launch->serial_mode = SERIAL_NETWORK;
+        else if (!strcmp(value, "pty")) launch->serial_mode = SERIAL_PTY;
+        else if (!strcmp(value, "off")) launch->serial_mode = SERIAL_OFF;
+        else if (value[0] == '/') {
+            snprintf(settings->serial_device, sizeof settings->serial_device, "%s", value);
+            launch->serial_mode = SERIAL_DEVICE;
+        } else return false;
+        return true;
+    case LAUNCH_USER_AGENT: snprintf(settings->user_agent, sizeof settings->user_agent, "%s", value); return true;
+    case LAUNCH_VERBOSE: verbose = true; return true;
+    }
+    return false;
+}
+
+static const option_spec_t LAUNCH_SPEC = {
+    "velo", "[OPTIONS] [ROM]",
+    "Emulates a Philips Velo 1. With no ROM it opens the last system used from the roms folder in its data folder; Run > System switches between Windows CE 1.0 and 2.0.",
+    LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
+    "headless runs the machine without a window, for tests and scripts, and velo-rapi talks to a running Velo.",
+};
+
 int main(int argc, char **argv) {
-    const char *rom_path = NULL, *screenshot = NULL;
-    double screenshot_seconds = 12;
-    bool fresh = false;
-    const char *card = NULL;
-    const char *state_file = NULL;
+    const char *rom_path = NULL;
     migrate_old_folders();
     settings_t settings = settings_load();
-    serial_mode_t serial_mode = settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF;
-    for (int i = 1; i < argc; i++) {
-        if (!strncmp(argv[i], "--memory=", 9)) { settings.memory = (uint32_t)atoi(argv[i] + 9); continue; }
-        if (!strncmp(argv[i], "--speed=", 8)) { settings.speed = (uint32_t)atoi(argv[i] + 8); continue; }
-        if (!strncmp(argv[i], "--user-agent=", 13)) { snprintf(settings.user_agent, sizeof settings.user_agent, "%s", argv[i] + 13); continue; }
-        if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
-        if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
-        if (!strcmp(argv[i], "--serial=off")) { serial_mode = SERIAL_OFF; continue; }
-        if (!strncmp(argv[i], "--serial=/", 10)) {
-            snprintf(settings.serial_device, sizeof settings.serial_device, "%s", argv[i] + 9);
-            serial_mode = SERIAL_DEVICE;
-            continue;
-        }
-        if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
-        if (!strncmp(argv[i], "--state=", 8)) { state_file = argv[i] + 8; continue; }
-        if (!strcmp(argv[i], "--verbose")) verbose = true;
-        else if (!strcmp(argv[i], "--fresh")) fresh = true;
-        else if (!strncmp(argv[i], "--screenshot=", 13)) screenshot = argv[i] + 13;
-        else if (!strncmp(argv[i], "--seconds=", 10)) screenshot_seconds = atof(argv[i] + 10);
-        else if (!strncmp(argv[i], "-psn_", 5)) continue;
-        else rom_path = argv[i];
-    }
+    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, false };
+    const char *positional[1];
+    int positional_count;
+    options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
+    if (parsed == OPTIONS_EXIT) return 0;
+    if (parsed == OPTIONS_ERROR) return 2;
+    if (positional_count) rom_path = positional[0];
+    serial_mode_t serial_mode = launch.serial_mode;
+    const char *card = launch.card, *state_file = launch.state_file;
+    bool fresh = launch.fresh;
     static rom_set_t roms;
     find_roms(&roms);
     if (!rom_path) {
@@ -738,7 +790,7 @@ int main(int argc, char **argv) {
     }
     char state[1100];
     const char *startup_notice = NULL;
-    machine_t *machine = start_machine(rom_path, &settings, state_file, fresh || screenshot, state, sizeof state, &startup_notice);
+    machine_t *machine = start_machine(rom_path, &settings, state_file, fresh, state, sizeof state, &startup_notice);
     if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
     int system = machine_rom_system(machine);
 
@@ -752,23 +804,6 @@ int main(int argc, char **argv) {
 
     view_t *view = view_create(window, renderer, (view_display_t)settings.display);
 
-    if (screenshot && card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
-    if (screenshot) {
-        lcd_compose_setup((int)(WINDOW_SCALE * SDL_GetWindowPixelDensity(window) + 0.5f));
-        machine_run(machine, (uint64_t)(screenshot_seconds * MACHINE_CLOCK_HZ));
-        lcd_set_power(machine_lcd_enabled(machine));
-        lcd_set_backlight(machine_backlight(machine));
-        machine_screen(machine, lcd_framebuffer);
-        lcd_compose(10.0f);
-        SDL_Surface *surface = SDL_CreateSurfaceFrom(lcd_compose_width(), lcd_compose_height(), SDL_PIXELFORMAT_RGBA32,
-                                                     lcd_compose_pixels(), lcd_compose_width() * 4);
-        bool saved = surface && SDL_SaveBMP(surface, screenshot);
-        if (!saved) fprintf(stderr, "screenshot: %s\n", SDL_GetError());
-        SDL_DestroySurface(surface);
-        SDL_Quit();
-        machine_destroy(machine);
-        return saved ? 0 : 1;
-    }
 
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
 

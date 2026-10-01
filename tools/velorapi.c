@@ -1,3 +1,4 @@
+#include "options.h"
 #include "rapi.h"
 #include "rapiload.h"
 #include "rapisetup.h"
@@ -13,7 +14,9 @@
 #define REMOTE_HOME "\\My Documents"
 
 static const char *usage =
-    "usage: velo-rapi [--socket=PATH] COMMAND\n"
+    "usage: velo-rapi [--socket=PATH] COMMAND [ARGUMENTS]\n"
+    "Talks to a running Velo over RAPI (the emulator with Network (PPP) connected, or headless --net --rapi).\n"
+    "\n"
     "  info                     OS version and storage\n"
     "  ls [PATH]                list a folder (default \\My Documents)\n"
     "  get PATH [LOCAL]         copy a file from the Velo\n"
@@ -22,14 +25,16 @@ static const char *usage =
     "  mkdir PATH | rmdir PATH  create or remove a folder\n"
     "  mv FROM TO               move or rename\n"
     "  run PROGRAM [ARGUMENTS]  start a program\n"
-    "  sync FOLDER              sync a Mac folder with \\My Documents\n"
-    "  load SCRIPT [DEST]       run an H/PC Explorer .load install script (DEST defaults to \\Program Files\\Accessories)\n"
+    "  sync FOLDER              sync a local folder with \\My Documents\n"
+    "  load SCRIPT [DEST]       run an H/PC Explorer .load install script (DEST from its Install.inf, or \\Program Files\\Accessories)\n"
     "  proxy on|off             point Pocket IE at the emulator's web proxy\n"
     "  baud 19200|38400|57600|115200  desktop connection speed, from the next connection\n"
     "  reg ls|dump KEY          list a registry key, or everything under it\n"
     "  reg get KEY NAME         read a value\n"
     "  reg set KEY NAME dword|string VALUE\n"
-    "Velo paths are relative to \\My Documents unless they start with / or \\; / and \\ both separate folders.\n";
+    "\n"
+    "Velo paths are relative to \\My Documents unless they start with / or \\; / and \\ both separate folders.\n"
+    "--socket=PATH picks another RAPI socket (default rapi.sock in the data folder); --help and --version as usual.\n";
 
 static void velo_path(const char *path, char *out, size_t size) {
     if (path[0] == '/' || path[0] == '\\') snprintf(out, size, "%s", path);
@@ -228,12 +233,24 @@ static int sync_folder(rapi_t *rapi, const char *folder) {
 
 int main(int argc, char **argv) {
     char socket_path[1024];
+    rapi_data_path("rapi.sock", socket_path, sizeof socket_path);
     int first = 1;
-    if (argc > 1 && !strncmp(argv[1], "--socket=", 9)) {
-        snprintf(socket_path, sizeof socket_path, "%s", argv[1] + 9);
-        first = 2;
-    } else {
-        rapi_data_path("rapi.sock", socket_path, sizeof socket_path);
+    for (; first < argc && argv[first][0] == '-'; first++) {
+        const char *option = argv[first];
+        if (!strcmp(option, "--help") || !strcmp(option, "-h")) {
+            fputs(usage, stdout);
+            return 0;
+        }
+        if (!strcmp(option, "--version")) {
+            printf("velo-rapi %s\n", options_version());
+            return 0;
+        }
+        if (!strncmp(option, "--socket=", 9)) snprintf(socket_path, sizeof socket_path, "%s", option + 9);
+        else if (!strcmp(option, "--socket") && first + 1 < argc) snprintf(socket_path, sizeof socket_path, "%s", argv[++first]);
+        else {
+            fprintf(stderr, "velo-rapi: unknown option %s (see --help)\n", option);
+            return 2;
+        }
     }
     if (argc <= first) {
         fputs(usage, stderr);
