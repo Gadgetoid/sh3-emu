@@ -1450,7 +1450,7 @@ static void apply_record(machine_t *m, const state_record_t *record) {
         return;
     }
     if (!strcmp(record->name, "dram_card")) {
-        if (record->size == m->card_dram_size) memcpy(m->card_dram, record->data, m->card_dram_size);
+        if (record->size && record->size == m->card_dram_size) memcpy(m->card_dram, record->data, m->card_dram_size);
         return;
     }
     machine_logf(m, "state: ignoring unknown record %s\n", record->name);
