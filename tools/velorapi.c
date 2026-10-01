@@ -3,6 +3,7 @@
 #include "rapisetup.h"
 #include "rapisync.h"
 
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -212,7 +213,7 @@ static int registry(rapi_t *rapi, int count, char **args) {
 }
 
 static int sync_folder(rapi_t *rapi, const char *folder) {
-    char manifest[1100], absolute[1024];
+    char manifest[1100], absolute[PATH_MAX];
     if (!realpath(folder, absolute)) {
         fprintf(stderr, "velo-rapi: no folder %s\n", folder);
         return 1;

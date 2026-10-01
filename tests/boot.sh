@@ -53,7 +53,7 @@ if pkg-config --exists slirp libcurl; then
     PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
     python3 -m http.server "$PORT" --bind 127.0.0.1 --directory tests/web >/dev/null 2>&1 &
     SERVER=$!
-    trap 'kill $SERVER 2>/dev/null' EXIT
+    trap 'kill $SERVER 2>/dev/null || true' EXIT
     sleep 1
     PAGE=$(./proxycheck "http://127.0.0.1:$PORT/page.html" 2>/dev/null | iconv -f WINDOWS-1252 -t UTF-8)
     if echo "$PAGE" | grep -q 'Café “quoted” — dash</p><a href="http://example.com/next">next</a></body>' && ! echo "$PAGE" | grep -qiE 'script|style|svg|hidden'; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; exit 1; fi
@@ -68,7 +68,7 @@ if pkg-config --exists slirp; then
     SOCKET="${TMPDIR:-/tmp}/velo-test-$$.sock"
     ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
-    trap 'kill $SERVER $EMULATOR 2>/dev/null' EXIT
+    trap 'kill $SERVER $EMULATOR 2>/dev/null || true' EXIT
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
     head -c 20000 /dev/urandom > "$OUT/blob.bin"
     rm -f "$OUT/blob.back"

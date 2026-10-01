@@ -62,6 +62,9 @@
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
 static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
+static const uint8_t desktop_alias_ip[4] = { 10, 0, 2, 5 };
+
+static void retarget_desktop(uint8_t *ip, size_t length, bool outbound);
 static const uint8_t dns_ip[4] = { 10, 0, 2, 3 };
 static const char proxy_address[] = "10.0.2.4";
 static const uint8_t guest_mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
@@ -86,6 +89,7 @@ struct netgw {
     Slirp   *slirp;
     webproxy_t *proxy;
     int      desktop_listener;
+    bool     desktop_aliased;
     desktop_client_t desktop_clients[DESKTOP_CLIENTS];
     struct sockaddr_un desktop_address;
     bool     desktop_connected;
@@ -370,6 +374,7 @@ static void ppp_frame(netgw_t *gateway, const uint8_t *frame, size_t length) {
         memcpy(ethernet + 6, guest_mac, 6);
         put16(ethernet + 12, ETH_IPV4);
         memcpy(ethernet + ETH_HEADER, frame, length);
+        if (gateway->desktop_aliased) retarget_desktop(ethernet + ETH_HEADER, length, true);
         slirp_input(gateway->slirp, ethernet, (int)(length + ETH_HEADER));
     } else if (gateway->lcp_open) {
         uint8_t reject[FRAME_MAX];
@@ -379,6 +384,31 @@ static void ppp_frame(netgw_t *gateway, const uint8_t *frame, size_t length) {
         memcpy(reject + 2, frame, length);
         send_control(gateway, PROTO_LCP, PROTO_REJ, gateway->next_id++, reject, length + 2);
     }
+}
+
+static void adjust_checksum(uint8_t *checksum, const uint8_t *old_address, const uint8_t *new_address) {
+    uint32_t sum = (uint16_t)~(checksum[0] << 8 | checksum[1]);
+    for (int i = 0; i < 4; i += 2) {
+        sum += (uint16_t)~(old_address[i] << 8 | old_address[i + 1]);
+        sum += (uint16_t)(new_address[i] << 8 | new_address[i + 1]);
+    }
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    sum = ~sum & 0xFFFF;
+    checksum[0] = (uint8_t)(sum >> 8);
+    checksum[1] = (uint8_t)sum;
+}
+
+static void retarget_desktop(uint8_t *ip, size_t length, bool outbound) {
+    if (length < 20 || (ip[0] >> 4) != 4 || ip[9] != 6) return;
+    size_t header = (size_t)(ip[0] & 15) * 4;
+    if (length < header + 18) return;
+    uint8_t *address = ip + (outbound ? 16 : 12);
+    const uint8_t *port = ip + header + (outbound ? 2 : 0);
+    const uint8_t *from = outbound ? gateway_ip : desktop_alias_ip, *to = outbound ? desktop_alias_ip : gateway_ip;
+    if (memcmp(address, from, 4) || ((port[0] << 8) | port[1]) != DESKTOP_PORT) return;
+    adjust_checksum(ip + 10, address, to);
+    adjust_checksum(ip + header + 16, address, to);
+    memcpy(address, to, 4);
 }
 
 static slirp_ssize_t slirp_send_packet(const void *buffer, size_t length, void *opaque) {
@@ -393,6 +423,11 @@ static slirp_ssize_t slirp_send_packet(const void *buffer, size_t length, void *
             memcpy(gateway->arp_ip, arp + 14, 4);
             gateway->arp_pending = true;
         }
+    } else if (type == ETH_IPV4 && gateway->ipcp_open && gateway->desktop_aliased && length <= FRAME_MAX) {
+        uint8_t packet[FRAME_MAX];
+        memcpy(packet, ethernet + ETH_HEADER, length - ETH_HEADER);
+        retarget_desktop(packet, length - ETH_HEADER, false);
+        send_ppp(gateway, PROTO_IP, packet, length - ETH_HEADER);
     } else if (type == ETH_IPV4 && gateway->ipcp_open) {
         send_ppp(gateway, PROTO_IP, ethernet + ETH_HEADER, length - ETH_HEADER);
     }
@@ -487,9 +522,13 @@ static void start_desktop(netgw_t *gateway) {
     struct in_addr host;
     memcpy(&host, gateway_ip, sizeof host);
     if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
-        close(listener);
-        unlink(address->sun_path);
-        return;
+        memcpy(&host, desktop_alias_ip, sizeof host);
+        if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
+            close(listener);
+            unlink(address->sun_path);
+            return;
+        }
+        gateway->desktop_aliased = true;
     }
     gateway->desktop_listener = listener;
 #endif
