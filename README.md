@@ -1,176 +1,150 @@
 # velo-emu
 
-A minimal emulator for the Philips Velo 1 (1997, Windows CE 1.0 Handheld PC), in a screen-only window with the SHAM-7X0 green backlit LCD simulation.
+An emulator for the Philips Velo 1 (1997), a Windows CE Handheld PC. It runs the stock CE 1.0 ROM and the CE 2.0 upgrade, with a simulated backlit LCD, PC Card images, a PPP network with a web proxy for Pocket IE, and the desktop connection tools of the day. Unlike [CERF](https://github.com/gweslab/cerf), which it draws on, it runs on macOS and Linux.
 
-It boots the stock CE 1.0 ROM through the setup wizard (touch calibration, time zone, owner details) to the desktop.
+![Windows CE 1.0 desktop](docs/screenshots/ce1-desktop.png)
+![Windows CE 2.0 desktop](docs/screenshots/ce2-desktop.png)
+![Pocket IE 2.0 browsing through the proxy](docs/screenshots/ce2-pocket-ie.png)
 
-## ROM
+With the CE 2.0 upgrade's applications, a library of period software on a PC Card, and Microsoft Entertainment Pack 2.0 installed from it:
 
-Not included. It expects the 7,799,876-byte `nk.bin` from CERF's `philips_velo_1_ce1` bundle (VA 0x9F400000-0x9FB70444). Link or copy it to `rom/nk.bin`.
+![A software library running from the PC Card](docs/screenshots/ce2-library.png)
+![Start > Programs > Games with the Entertainment Pack](docs/screenshots/ce2-games-menu.png)
+![Chess from the Entertainment Pack](docs/screenshots/ce2-chess.png)
 
-The emulator patches one instruction in the loaded ROM, not the file. In CE 1.0's `fatfs.dll`, the function that sizes a direct multi-sector write computes the bytes left in a contiguous cluster run as `run_end - (pos - run_start)` instead of `run_end - pos` (`subu $2, $25, $3` at 0x9F5B4FCC). A large write into a fragmented card then runs past the end of the run, over other files' clusters. The patch uses `pos` (`subu $2, $25, $5`), and only applies if the original word is there.
+## Getting started
 
-### Windows CE 2.0
+### Install
 
-The Velo 1's CE 2.0 upgrade shipped as a ROM Miniature Card. CERF's `philips_velo_1_ce2` bundle has its `nk.bin` (4,185,248 bytes): pass it in place of the CE 1.0 ROM. An `nk.bin` whose single ROM header spans the whole file is mapped at the header's `physfirst` (0x90001000, the card window at physical 0x10000000) and started there, as the Velo's boot block would hand off to the card; the first 4 KB of the card, missing from the dump, reads as erased flash. A B000FF image (`B000FF\n`, then records of address, length, byte-sum checksum and data, ending with the entry) also loads, with records in the card window and the internal ROM window at 0x1F400000. It reaches the CE 2.0 desktop in about 20 seconds, with the LCD in 16 greys (4 bpp). The upgrade asks for 12 MB, so use `--memory=20` (4 MB and the 16 MB DRAM card).
+- **macOS (Apple silicon):** `Velo.app`, from a release or `make app` (see Building). It isn't notarised, so macOS blocks a downloaded copy the first time it opens: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine Velo.app`. A copy built with `make app` opens normally.
+- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `velo`, `velo-headless` and `velo-rapi`.
+- **From source:** see Building.
 
-The ROM's shortcuts and desktop icons point at `\Storage Card`, CE 2.0's name for the PC Card, where the upgrade kept the Microsoft applications. Insert a CompactFlash image holding them with `--card=IMAGE`. Reset (Start > Run, `reset`, or after an install) jumps to the MIPS reset vector at 0xBFC00000, the Velo's boot block, which isn't in either dump. The emulator's boot block does a warm reset: the machine restarts from the ROM's entry with RAM kept, so CE keeps its object store and loads newly installed drivers. The desktop connection needs `rapisrv.exe`, which the stock ROM lacks; without it CE 2.0 reports "Out of Memory" when the cable is connected. With it installed, CE 2.0 connects to port 5679 and sends its device information. It then drops the link unless the desktop pings it within about three seconds of emulated time, so the emulator answers as SynCE's dccm does and pings every emulated second. `velo-rapi` then works as with CE 1.0.
+### ROMs
 
-`make test` runs a few CE 2.0 checks when `rom/nk-ce2.bin` exists, or with `make test CE2_ROM=PATH`.
+No ROMs are included. Put them in the `roms` folder of the data folder, under any names:
 
-### Velo.app
+- macOS: `~/Library/Application Support/Velo/roms`
+- Linux: `~/.local/share/velo-emu/roms`
 
-`make app` builds `Velo.app` with `velo` and `velo-rapi` in `Contents/MacOS` and the Homebrew libraries they use (SDL3, libslirp, GLib, libintl, PCRE2) in `Contents/Frameworks`, so it runs without Homebrew. It's ad-hoc signed and built for this Mac's architecture, so on another Mac it needs right-click > Open the first time. Put the ROMs in `~/Library/Application Support/Velo/roms` (see below).
+Two systems are supported:
 
-### ROMs and the System menu
+- **Windows CE 1.0:** the 7,799,876-byte `nk.bin` from CERF's `philips_velo_1_ce1` bundle.
+- **Windows CE 2.0:** the Velo's CE 2.0 upgrade was a ROM Miniature Card, with its applications (Pocket Word, Pocket Excel and the rest) on a CompactFlash card in the PC Card slot. A merged image puts those applications in ROM too, which leaves the PC Card slot free for apps and games. The upgrade's ROM on its own, from CERF's `philips_velo_1_ce2` bundle (4,185,248 bytes), also runs, with the applications on a CompactFlash card image (see PC Card storage).
 
-Run without a ROM (or from the app), `velo` looks in the `roms` folder of its data folder and opens the last system used. Put the CE 1.0 `nk.bin` and the merged CE 2.0 image there under any names: each file is identified by where it loads, and the larger CE 2.0 image is preferred, so the merged one wins over the stock card ROM. Run > System switches between Windows CE 1.0 and Windows CE 2.0, saving the running machine and restoring the other one's state; a system with no ROM in the folder is greyed out. With no ROMs at all it says where to put them. A ROM given on the command line runs as before.
+Each file is identified by its contents, and if there are two CE 2.0 images the larger is used, so a merged image wins over the upgrade's ROM on its own. With no ROMs in the folder, a dialog shows its location, with a button to open it.
 
-### Data folder
+### First run
 
-States, snapshots, ROMs, `emu.ini`, `rapi.sock` and the sync manifest live in `~/Library/Application Support/Velo` on macOS and `~/.local/share/velo-emu` (with `emu.ini` in `~/.config/velo-emu`) elsewhere. `XDG_DATA_HOME` and `XDG_CONFIG_HOME` override them, as the tests do. On macOS the first launch moves an existing `~/.local/share/velo-emu` and `~/.config/velo-emu/emu.ini` there.
-
-## Build
-
-On Linux (tested on Ubuntu 26.04): `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev mtools dosfstools`, then the same `make` targets. There are no menus there yet, so the GUI is limited to its command-line options; `headless`, `velo-rapi` and the tests work as on macOS. Card images are made with `mkfs.fat` and `mtools` instead of `hdiutil`.
-
-`tools/mkdeb.sh` builds a `.deb` on Debian or Ubuntu: `velo`, `velo-headless` (headless, renamed for `/usr/bin`) and `velo-rapi`, with a desktop entry and dependencies from `dpkg-shlibdeps`. In a Debian 13 container, from the source folder:
-
-```
-docker run --rm -v "$PWD":/src -w /src -e VERSION=0.1+git$(date +%Y%m%d) debian:trixie sh -c \
-  'apt-get update && apt-get install -y build-essential pkg-config dpkg-dev libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev && sh tools/mkdeb.sh dist'
-```
-
-libslirp 4.8 (Debian 13) and 4.9 both work.
+Open the app, or run `velo`. It starts the last system used (CE 2.0 if there's a choice) and Run > System switches between Windows CE 1.0 and Windows CE 2.0; a system with no ROM is greyed out. A ROM on the command line runs that ROM instead:
 
 ```
-brew install sdl3 libslirp
-make         # velo and velo-rapi
-make run
-make headless
-make app     # Velo.app, with its Homebrew libraries bundled and an ad-hoc signature
-make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync, the proxy and 115200 setup and a `.load` script over RAPI; a large write to a fragmented card; backlight key
+velo
+velo ~/roms/nk.bin
+velo --memory=32 --serial=net --card=apps.img nk-ce2-merged.bin
+velo --help
 ```
 
-## Use
+A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Emulation > Use Host Date/Time (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
 
-```
-./velo rom/nk.bin
-./velo --help
-./velo --state=powertoys.bin rom/nk.bin
-./headless rom/nk.bin --seconds=12 --key=8:4B --tap=12:240:120 --pgm=out.pgm
-./headless rom/nk.bin --seconds=3 --load=state.bin --save=state.bin
-./headless rom/nk.bin --seconds=10 --load=state.bin --power=2 --power=6 --wav=out.wav
-./headless rom/nk.bin --seconds=4 --load=state.bin --png=screen.png --png-backlight=off
-```
+The menus are native on macOS. Linux has no menus yet, so its GUI is driven by the command line options.
 
-All three tools take `--help` and `--version`. Unknown options, malformed values and events past the end of a headless run are errors or warnings, rather than being ignored. Options that take a value accept `--name=VALUE` or `--name VALUE`.
-
-The mouse is the stylus. The touch panel reports what a real Velo does, so CE 2.0's built-in calibration is right before it is recalibrated; states saved by older builds keep the readings they were calibrated with. Hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. `--verbose` logs unmodelled register accesses and dumps CPU state on exit.
-
-Menus:
+## Using it
 
 | Menu | Item | Shortcut |
 |---|---|---|
 | Run | Power Button (suspend and resume) | Cmd-Shift-P |
 | Run | Pause | Cmd-P |
-| Run | System: Windows CE 1.0, Windows CE 2.0 (greyed out without a ROM in the `roms` folder) | |
+| Run | System: Windows CE 1.0, Windows CE 2.0 | |
 | Run | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
-| Run | Reset (cold boot, clears RAM; asks first) | Cmd-Shift-R |
-| Run | Save State | Cmd-S |
-| Run | Load State | Cmd-L |
-| Run | Show Saved State in Finder | |
-| Run | Save Snapshot… (a named copy of the machine, in `velo-emu/snapshots` by default) | Cmd-Ctrl-S |
-| Run | Load Snapshot… (returns to one; autosave carries on to the ROM's own state) | Cmd-Ctrl-L |
-| Run | Show Snapshots in Finder | |
-| Edit | Copy Screen (a PNG of the screen as shown, simulated or sharp) | Cmd-C |
-| Edit | Save Screenshot to Desktop (`Velo Screenshot DATE at TIME.png`) | Cmd-Shift-S |
-| Edit | Paste as Typing (types the Mac clipboard on the Velo keyboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
-| View | 50%, 75%, Actual Size, 150%, 200%; Zoom In and Zoom Out step through them | Cmd-0, Cmd-=, Cmd-- |
+| Run | Reset… (cold boot, clears RAM; confirmed in a dialog) | Cmd-Shift-R |
+| Run | Save State, Load State, Show Saved State in Finder | Cmd-S, Cmd-L |
+| Run | Save Snapshot…, Load Snapshot…, Show Snapshots in Finder | Cmd-Ctrl-S, Cmd-Ctrl-L |
+| Edit | Copy Screen (a PNG of the screen as shown) | Cmd-C |
+| Edit | Paste as Typing (types the clipboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
+| Edit | Save Screenshot to Desktop | Cmd-Shift-S |
+| View | 50%, 75%, Actual Size, 150%, 200%; Zoom In and Zoom Out | Cmd-0, Cmd-=, Cmd-- |
 | View | Full Screen | Cmd-Ctrl-F |
-| View | Simulated LCD (the panel, with glass, ghosting and backlight) or Sharp Pixels (plain greys at 480 x 240) | |
-| Card | Insert Card Image… | Cmd-O |
-| Card | Eject Card | Cmd-E |
-| Serial | Network (PPP) | Cmd-Shift-N |
-| Serial | Pseudo-terminal | |
-| Serial | Host Serial Port: the detected ports | |
-| Serial | Disconnect | |
-| Serial | Connect Network at Launch (Network (PPP) each time the emulator starts; `--serial=off` skips it once) | |
-| Desktop | Send Files to Velo… (into \My Documents) | |
-| Desktop | Copy My Documents to Mac… | |
+| View | Simulated LCD (glass, ghosting and backlight) or Sharp Pixels (plain greys at 480 x 240) | |
+| Card | Insert Card Image…, Eject Card | Cmd-O, Cmd-E |
+| Serial | Network (PPP), Pseudo-terminal, Host Serial Port (the detected ports), Disconnect | Cmd-Shift-N |
+| Serial | Connect Network at Launch | |
+| Desktop | Send Files to Velo…, Copy My Documents to Mac… | |
 | Desktop | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |
 | Desktop | Set Up Pocket IE Proxy | |
 | Desktop | Desktop Connection Speed: 19200 (original), 38400, 57600, 115200 | |
 | Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Emulation | Sound | |
-| Emulation | Use Host Date/Time (after Reset; on by default) | |
-| Emulation | Memory (after Reset): 4 MB (original), 8 MB, 16 MB, 20 MB (4 MB + 16 MB DRAM card), 32 MB (16 MB + 16 MB DRAM card) | |
+| Emulation | Use Host Date/Time (at the next cold boot) | |
+| Emulation | Memory (at the next cold boot): 4 MB (original), 8, 16, 20 or 32 MB | |
 | Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
 
-The backlight is under CE's control: the Backlight key toggles it, and the Backlight control panel's idle timeout turns it off (30 seconds by default, since the Velo reports external power). The checkmark shows its state.
+Dropping files on the window sends them to `\My Documents`, a dropped `.load` script installs its package, and a single dropped `.img` is inserted as the card.
+
+The backlight is under CE's control: the backlight key toggles it, and the Backlight control panel's idle timeout turns it off (30 seconds by default, since the Velo reports external power).
+
+## Saved state and snapshots
+
+Each ROM has its own saved machine, `state-ROM-HASH.bin` in the data folder. It's saved on quit, every minute and by Save State, and restored on launch with the clock advanced by the time away; `--fresh` cold boots instead, and `--state=FILE` uses FILE for loading, saving and autosaving. Load State returns to the last save. A state only loads with the ROM it was made with, and states from older builds load, with any new fields at their defaults; one that can't be read is renamed with `.old` appended.
+
+Snapshots are named copies of the machine, in `snapshots` in the data folder by default. Loading one is a restore point: autosave carries on to the ROM's own state.
+
+If a serial cable was connected when the state was saved, the restored machine starts with it unplugged and plugs it back in two seconds later, so CE dials again instead of reusing a PPP session that no longer exists. If the state's card image has gone, the card starts out ejected and a newly inserted one goes in a second later, so CE registers the removal first.
+
+The data folder also holds `emu.ini` (settings), `rapi.sock` and the shared folder's sync manifest. `XDG_DATA_HOME` and `XDG_CONFIG_HOME` override its location, as the tests do; on Linux `emu.ini` is in `~/.config/velo-emu`. On macOS the first launch moves an older `~/.local/share/velo-emu` and `~/.config/velo-emu/emu.ini` into `~/Library/Application Support/Velo`.
 
 ## PC Card storage
 
-The PC Card slot takes a CompactFlash (ATA) card backed by a raw disk image. CE mounts it as `\PC Card`. Make one, optionally copying folders onto it:
+The PC Card slot takes a CompactFlash (ATA) card backed by a raw disk image. CE 1.0 mounts it as `\PC Card` and CE 2.0 as `\Storage Card`. Make one, optionally copying folders onto it:
 
 ```
-tools/mkcard.sh card.img 32 ~/Downloads/PYTHON
-./velo --card=card.img rom/nk.bin
+tools/mkcard.sh card.img 32 ~/Downloads/SOFTWARE
+velo --card=card.img
 ```
 
-Insert it with Card > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later, so CE sees the change. To change its contents on the Mac, eject it first, then `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img`.
-
-To install Python CE 1.0b1, copy `Python.exe` and `PYTHON15.DLL` from the card to `\Windows` in Explorer (View > Options > Show all files to see the DLL), then run `python` from Start > Run.
+It uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. Insert it with Card > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later. To change its contents on the host, eject it first; on macOS `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` mounts it, and on Linux `mcopy -i card.img@@512` copies to and from it.
 
 ## Serial and networking
 
-Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator answers `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the Mac at 10.0.2.2 and DNS at 10.0.2.3. The connection icon appears in the taskbar and CE's sockets reach the Mac and the internet (outgoing only). For example, in Python CE:
+Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator responds with `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the host at 10.0.2.2 and DNS at 10.0.2.3. CE's sockets reach the host and the internet (outgoing only); 10.0.2.2 is the host's loopback.
 
-```
-import socket
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(('10.0.2.2', 47123))
-```
+Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its path in the title bar and on stderr, for a terminal or PPP tools.
 
-connects to port 47123 on the Mac's loopback.
-
-Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its path (for example `/dev/ttys002`) on stderr and in the title bar, for your own terminal or PPP tools.
-
-Serial > Host Serial Port (a list of the Mac's `/dev/cu.*` ports, or `/dev/ttyUSB*` and `/dev/ttyACM*` on Linux, refreshed as devices come and go), or `--serial=/dev/cu.usbserial-XXXX`, connects COM1 to a real port on the Mac, such as a USB serial adapter wired to another machine or a modem. The port is raw, with no flow control and modem lines ignored, and follows the baud rate CE sets on COM1 (nearest standard rate). The choice is kept as `serial_device=` in `emu.ini`.
+Serial > Host Serial Port, or `--serial=/dev/cu.usbserial-XXXX`, connects COM1 to a real port: the menu lists `/dev/cu.*` on macOS and `/dev/ttyUSB*` and `/dev/ttyACM*` on Linux, refreshed as devices come and go. The port is raw, with no flow control and modem lines ignored, and follows the baud rate CE sets (nearest standard rate). It's kept as `serial_device=` in `emu.ini`.
 
 Without libslirp the build still works, with no Network (PPP) option.
 
 ### Desktop connection
 
-With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, sends four zero bytes and closes the connection, as CE 1.0 does with Handheld PC Explorer. The emulator answers it (with nothing listening, CE shows "Cannot start communications with the desktop computer", Error 10061, after about five minutes). The desktop then reaches the Velo with RAPI, CE's remote API, on its port 990. The emulator makes that port available on the Mac as a Unix socket, `rapi.sock` in the data folder, with no TCP port. The protocol follows [SynCE](https://sourceforge.net/projects/synce/)'s librapi2.
+With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, as it did with Handheld PC Explorer, and the emulator accepts the connection, sending the ping CE 2.0 requires every few seconds. The desktop then reaches the Velo with RAPI, CE's remote API, on its port 990, which the emulator makes available as `rapi.sock` in the data folder, with no TCP port. The protocol follows [SynCE](https://sourceforge.net/projects/synce/)'s librapi2.
 
 The Desktop menu uses it:
 
-- Send Files to Velo… copies files into `\My Documents`.
-- Copy My Documents to Mac… copies `\My Documents`, with its folders, into a Mac folder.
-- Dropping files on the window sends them to `\My Documents`, and a dropped `.load` script installs its package (see Installing CE 1.0 software). A single dropped `.img` is inserted as the card, with or without the connection.
-- Shared Folder… pairs a Mac folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too: on the Mac it goes to the Trash. When both sides changed a file, the Mac keeps its copy and the Velo's comes over as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped. Empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`, and the last sync's state in `sync-manifest.txt` next to `rapi.sock`.
+- Send Files to Velo… copies files into `\My Documents`, and Copy My Documents to Mac… copies `\My Documents`, with its folders, into a host folder.
+- Shared Folder… pairs a host folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too (to the Trash on macOS). When both sides changed a file, the host keeps its copy and the Velo's arrives as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped, and empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`.
 
-`velo-rapi` does the same from the command line, while the emulator is running with Network (PPP) connected:
+`velo-rapi` does the same from the command line while the emulator is running with Network (PPP) connected:
 
 ```
-./velo-rapi info
-./velo-rapi ls
-./velo-rapi put notes.txt
-./velo-rapi get Samples/Letter.pwd
-./velo-rapi run /Windows/pword.exe
-./velo-rapi sync ~/Velo
+velo-rapi info
+velo-rapi ls
+velo-rapi put notes.txt
+velo-rapi get Samples/Letter.pwd
+velo-rapi run /Windows/pword.exe
+velo-rapi sync ~/Velo
+velo-rapi reg dump HKCU/Software/Apps/PocketIE
+velo-rapi --help
 ```
 
-Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. It also has `rm`, `mkdir`, `rmdir`, `mv`, `load SCRIPT [DEST]`, `proxy on|off`, `baud RATE`, and `reg ls|dump|get|set` for the registry (keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`, for example `./velo-rapi reg dump HKCU/Software/Apps/PocketIE`). `--socket=PATH` picks another socket, for headless runs with `--rapi=PATH`.
+Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. Registry keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`. `--socket=PATH` picks another socket, such as one from `velo-headless --rapi=PATH`. CE 2.0's stock ROM lacks `rapisrv.exe`, the RAPI server; without it CE 2.0 reports "Out of Memory" when the cable is connected.
 
-CE's desktop connection runs at 19200 baud, about 1.6 KB/s. Desktop > Desktop Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. 19200 goes back to CE's own. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x (8x is no faster).
+CE's desktop connection runs at 19200 baud, about 1.6 KB/s. Desktop > Desktop Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x.
 
 ### Installing CE 1.0 software
 
-CE 1.0 programs were installed from Windows by H/PC Explorer, which ran a `.load` script for each package over RAPI. `velo-rapi load SCRIPT [DEST]` does the same: it copies files (taking the `.mips` build where there is one), creates folders, shortcuts and registry keys, writes registry strings and numbers and starts programs. `.` in the script is the script's folder as a source, and DEST as a destination; `%P` is DEST, and `~ ~` is `HKEY_LOCAL_MACHINE\Software\Apps\APPNAME`. DEST and APPNAME come from an `Install.inf` beside the script (`InstallDir` and `AppName`), otherwise DEST is `\Program Files\Accessories` and APPNAME the script's name. `execOnUnload` is skipped, as there's no uninstall.
+CE 1.0 programs were installed from Windows by H/PC Explorer, which ran a `.load` script for each package over RAPI. `velo-rapi load SCRIPT [DEST]`, or dropping the script on the window, does the same: it copies files (taking the `.mips` build where there is one), creates folders, shortcuts and registry keys, writes registry strings and numbers and starts programs. `.` in the script is the script's folder as a source and DEST as a destination; `%P` is DEST, and `~ ~` is `HKEY_LOCAL_MACHINE\Software\Apps\APPNAME`. DEST and APPNAME come from an `Install.inf` beside the script (`InstallDir` and `AppName`), otherwise DEST is `\Program Files\Accessories` and APPNAME the script's name. `execOnUnload` is skipped, as there's no uninstall.
 
-For example, Microsoft's Power Toys 1.0 for CE 1.0 (Cascading Menus, Mute, Pocket Paint, sound schemes, wallpapers, control panel annunciators and Remote Control). `powtoy.exe` is in archive.org's [Windows CE 1.0 Programs](https://archive.org/details/windowsce1.0) collection. It is an InstallShield 3 package: extract the two embedded archives with [unshieldv3](https://github.com/wfr/unshieldv3), then run each component's script:
+For example, Microsoft's Power Toys 1.0 for CE 1.0 (Cascading Menus, Mute, Pocket Paint, sound schemes, wallpapers, control panel annunciators and Remote Control). `powtoy.exe` is in archive.org's [Windows CE 1.0 Programs](https://archive.org/details/windowsce1.0) collection. It's an InstallShield 3 package: extract the two embedded archives with [unshieldv3](https://github.com/wfr/unshieldv3), then run each component's script:
 
 ```
 python3 -c 'import struct,sys; d=open("powtoy.exe","rb").read(); p=0xcc00
@@ -182,7 +156,7 @@ while True:
 mkdir powertoys
 unshieldv3 extract "$(ls -S part*.Z | head -1)" powertoys
 for s in annun/Annunciator cascade/Cascade mute/Mute ppaint/Ppaint rcontrol/remotecontrol sound1/Analog sound2/Metallic sound3/Organic wall/Wallpaper; do
-    ./velo-rapi load powertoys/$s.load
+    velo-rapi load powertoys/$s.load
 done
 ```
 
@@ -190,7 +164,7 @@ Cascading Menus and Mute start straight away in the taskbar, Paint is in Program
 
 ### Web proxy
 
-Pocket IE can't talk to modern HTTPS. The network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the Mac. Desktop > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 keeps the old setting until a soft reset (Run > Soft Reset). By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`, and press Enter. Either way it's kept in the saved state. Only Pocket IE's requests use it; other traffic is unaffected, and it opens no port on the Mac.
+Pocket IE doesn't support modern HTTPS, so the network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the host. Desktop > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 picks it up after a soft reset. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`. Only Pocket IE's requests use it, and it opens no port on the host.
 
 Type addresses as `http://`: Pocket IE makes `https://` connections itself, not through the proxy, and they fail. For `http://` addresses without a port the proxy tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
 
@@ -198,44 +172,73 @@ Type addresses as `http://`: Pocket IE makes `https://` connections itself, not 
 - removes `<script>`, `<style>`, `<svg>` and comments, which Pocket IE would show as text
 - converts UTF-8 text to Windows-1252 and drops the charset
 - drops `Secure` from cookies and maps 303, 307 and 308 redirects to 301 and 302
-- turns PNG, JPEG, GIF, BMP and SVG images into four-grey dithered GIFs, drawn at the size the page's `<img width height>` gives (it remembers these from the page) and at most 436 pixels wide, the widest Pocket IE shows unscaled. SVG `<use>` references are expanded. Other formats, such as WebP, pass through unchanged.
+- turns PNG, JPEG, GIF, BMP and SVG images into four-grey dithered GIFs, at the size the page's `<img width height>` gives and at most 436 pixels wide, the widest Pocket IE shows unscaled. Other formats, such as WebP, pass through unchanged.
 
-It sends a Lynx user agent upstream in place of Pocket IE's `Mozilla/1.1 (compatible; MSPIE 1.1; Windows CE)`, which some sites block (Cloudflare error 1010). Sites generally serve text browsers their simplest pages, such as Google's basic HTML results. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT` (also in headless); an empty value passes Pocket IE's own through.
+It sends a Lynx user agent upstream in place of Pocket IE's, which some sites block, and sites generally serve text browsers their simplest pages. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT`; an empty value passes Pocket IE's own through. Through the proxy, `127.0.0.1` is the host's loopback.
 
-Through the proxy, `127.0.0.1` is the Mac's loopback. It needs libcurl (part of macOS).
+## Clock, memory and speed
 
-## Memory and speed
+Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator gives it the host's time in Pacific time, so once you pick your home city the clock is right. After that the clock keeps running while the emulator is closed, and survives a soft reset.
 
-Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator replaces that with the Mac's time in Pacific time, so once you pick your home city (in the setup wizard or World Clock) the clock is right. After that the clock keeps running while the emulator is closed, as a saved machine's clock is advanced by the time away.
+Memory sets the RAM for the next cold boot (Run > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
 
-Memory sets the RAM for the next cold boot (Run > Reset, which clears the machine) or `--memory=`. CE sizes the built-in RAM at boot and uses at most 16 MB of it. Beyond that, 20 MB and 32 MB add a 16 MB DRAM Miniature Card in slot 1, the Velo's own memory expansion: CE reads its ID EEPROM and maps it as a second RAM region, reporting 20,348 KB and 32,636 KB, split between storage and programs in Control Panel > System > Memory. A saved machine keeps the memory it was booted with (a 32 MB save is about 33 MB).
+CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD, sound and serial stay on the real clock, so only the CPU gets faster.
 
-CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD frame rate, sound and serial stay on the real clock, so only the CPU gets faster: at 4x CE reaches the setup wizard in 2 seconds instead of 4. At 1x one instruction takes one clock.
+## Headless
 
-Both are remembered in `emu.ini`, with `user_agent=` and `shared_folder=`.
+`velo-headless` (`headless` in a source build) runs the machine without a window, for tests and scripts. Input happens at emulated times, and runs are deterministic: the same ROM, state and options give the same screen.
 
-## Saved state
+```
+velo-headless nk.bin --seconds=12 --key=8:4B --tap=12:240:120 --pgm=out.pgm
+velo-headless nk.bin --seconds=3 --load=state.bin --save=state.bin
+velo-headless nk.bin --seconds=10 --load=state.bin --power=2 --power=6 --wav=out.wav
+velo-headless nk-ce2-merged.bin --load=state.bin --tap=4:120:40 --png=screen.png --png-backlight=on
+velo-headless --help
+```
 
-The machine is saved to `state-ROM-HASH.bin` in the data folder, named after the ROM file and a hash of its contents, so each ROM keeps its own state. It's saved on quit, every minute, and by Save State. On launch it is restored with the RTC advanced by the time away; `--fresh` ignores it. Load State returns to the last save. A state only loads with the ROM it was made with; an old `state.bin` is renamed on the first launch with its ROM. States are stored as named records, so ones from older builds load, with any new fields at their power-on defaults. A state that can't be read is moved to the same name with `.old` appended. If a serial cable was connected when the state was saved, the restored machine sees it unplugged and, two seconds later, plugged back in (same mode), so CE redials rather than trusting a PPP session the Mac side no longer has. `--state=FILE` uses FILE instead, for loading, saving and autosaving.
+`--help` lists every option. Some details:
 
-The menus are native on macOS; other platforms build without them.
+- `--tap=SECONDS:X:Y[:HOLD]` holds the pen for 0.5 s by default; use 0.08 for double taps. `--key` takes a Velo scancode in hex (the backlight key is 5E), and `--type` types text with `\n` for Enter.
+- `--pgm=FILE` saves the raw greyscale screen, and `--png=FILE` saves it through the simulated LCD, as the GUI draws it.
+- `--net=SECONDS` connects the PPP network, `--rapi=SOCKET` makes the Velo's RAPI port available for `velo-rapi --socket`, and `--realtime[=N]` paces the run at N times real time for anything driving it over RAPI (unpaced, an idle Velo runs about 1000 times faster). `--cable` and `--cable-send` connect a bare serial cable and send bytes down it.
+- `--watch-pc=VA` logs registers each time the CPU reaches an address; below 0x02000000 it matches in any process slot.
+- SIGTERM or SIGINT ends a run early and still writes `--save`, `--pgm`, `--png` and `--wav`.
 
-Headless options:
+Unknown options, malformed values and events past the end of a run are errors or warnings, rather than being ignored. All three tools take `--help` and `--version`, and options that take a value accept `--name=VALUE` or `--name VALUE`.
 
-- `--key=SECONDS:SCANCODE` presses a Velo scancode (hex) for 50 ms. The backlight key is 5E.
-- `--tap=SECONDS:X:Y[:HOLD]` holds the pen at a screen position, for 500 ms by default. Use 0.08 for double taps.
-- `--png=FILE` saves the screen as the GUI draws it, through the simulated LCD, as a PNG. `--png-cell=N` sets the device pixels per LCD pixel (default 4, the GUI's Actual Size on a Retina screen), and `--png-backlight=on|off` draws it lit or unlit whatever the machine's backlight is doing.
-- `--power=SECONDS` presses the power button for 200 ms.
-- `--soft-reset=SECONDS` soft-resets the machine (Run > Soft Reset).
-- `--host-time` sets the clock from the Mac at a cold boot (Emulation > Use Host Date/Time).
-- `--wav=FILE` writes the sound output, with the silences between sounds removed.
-- `--card=IMAGE` inserts a card image, after `--load`.
-- `--net=SECONDS` connects COM1 to the PPP gateway. `--cable=SECONDS` connects a bare cable, and `--cable-send=SECONDS:TEXT` sends bytes down it. Anything CE transmits is printed.
-- `--type=SECONDS:TEXT` types text (US layout, `\n` for Enter).
-- `--memory=MB`, `--speed=N`, `--backlight=SECONDS` (press the backlight key), `--user-agent=TEXT`.
-- `--rapi=SOCKET` makes the Velo's RAPI port available at SOCKET. A loaded state starts with the cable unplugged, so `--net` reconnects it.
-- `--realtime[=N]` holds the machine to N times real time (default 1). Unpaced, an idle Velo runs about 1000 times faster than real time, which outpaces anything driving it over RAPI; the tests use `--realtime=10`. SIGTERM or SIGINT ends the run early and still writes `--save`, `--pgm` and `--wav`.
-- `--watch-pc=VA` (up to four) logs the time, `ra`, `v0` and `a0`-`a3` each time the CPU reaches VA. Addresses below 0x02000000 match in any process slot, so a DLL import thunk or an application address works for whichever process is running.
+## Windows CE 2.0 details
+
+The Velo 1's CE 2.0 upgrade shipped as a ROM Miniature Card. An `nk.bin` whose single ROM header spans the whole file is mapped at the header's `physfirst` (0x90001000, the card window at physical 0x10000000) and started there, as the Velo's boot block would hand off to the card; the first 4 KB of the card, missing from the dump, reads as erased flash. A B000FF image also loads, with records in the card window and the internal ROM window at 0x1F400000. CE 2.0 runs the LCD in 16 greys.
+
+Reset (Start > Run, `reset`, or after an install) jumps to the Velo's boot block, which isn't in either dump. The emulator's boot block does a warm reset: CE restarts from the ROM's entry with RAM kept, so it keeps its object store and loads newly installed drivers.
+
+In CE 1.0's `fatfs.dll`, the function that sizes a direct multi-sector write computes the bytes left in a contiguous cluster run as `run_end - (pos - run_start)` instead of `run_end - pos`, so a large write into a fragmented card runs over other files. The emulator patches that instruction in the loaded ROM (0x9F5B4FCC), not the file, and only if the original is there.
+
+## Building
+
+macOS:
+
+```
+brew install sdl3 libslirp
+make            # velo and velo-rapi
+make headless
+make app        # Velo.app, with its Homebrew libraries bundled and an ad-hoc signature
+```
+
+Debian 13 or Ubuntu:
+
+```
+sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev mtools dosfstools fdisk
+make && make headless
+sh tools/mkdeb.sh dist    # the .deb, with dependencies from dpkg-shlibdeps
+```
+
+libslirp 4.8 and 4.9 both work. GitHub Actions builds `Velo.app` and the Debian 13 `.deb` for each push to `main` and each pull request, runs `make check`, and attaches both to a release for each `v*` tag.
+
+Tests:
+
+- `make check` needs no ROMs: the command lines, and the web proxy's rewriting and image conversion.
+- `make test` runs the full suite against `rom/nk.bin` (CE 1.0) and `rom/nk-ce2.bin` (the CE 2.0 upgrade's ROM on its own, optional), or `make test ROM=PATH CE2_ROM=PATH`. It boots both systems through the wizard to the desktop and compares framebuffer hashes at each step, and tests saved states, suspend and resume, cards, memory sizes, the clock, PPP, the web proxy in Pocket IE, RAPI file transfer, sync, registry setup and `.load` scripts.
 
 ## What's emulated
 
@@ -244,26 +247,25 @@ Headless options:
   - interrupt controller, including the high-priority encoder
   - periodic timer, RTC and alarm
   - power, with STOPCPU idle, the stop timer and suspend (clock stop, resume in place, woken by the power button or an enabled interrupt)
-  - LCD controller (2bpp and VIDEO_CTL7 shade map), with the frame and DF interrupts and the power controller's VIDRF video clock divider
+  - LCD controller (2 and 4 bpp, VIDEO_CTL7 shade map), with the frame and DF interrupts and the power controller's VIDRF video clock divider
   - SPI
   - SIB subframe 0 and sound transmit DMA (half and end interrupts, 16-bit high byte first)
   - I/O and MFIO
 - Velo 1 board:
-  - 4MB DRAM
+  - 4 to 16 MB DRAM, and the 16 MB DRAM Miniature Card in slot 1 with its I2C ID EEPROM (MFIO 18/20)
   - keyboard controller enable packet and scancodes
   - UCB1100 touch and battery ADC
   - debug module probe
   - M-Module (IT8368) ID
-  - Miniature Card slot 2 empty; slot 1 empty or a 16 MB DRAM card with its I2C ID EEPROM (MFIO 18/20)
   - LCD panel power on MFIO 17 (active low) and the backlight on MFIO 25
   - M-Module IT8368E PC Card socket (card detect, power, reset, interrupt to the IR block's CARDET) and the PR31500 card windows
   - CompactFlash card in ATA mode (CIS, task file, PIO read and write)
   - UART A (COM1) with its circular receive DMA, CTS on MFIO 30 and DCD on IO 4 (active low)
 
-Guest time is the instruction count at 36.864 MHz, so headless runs are deterministic. Registers that aren't modelled read back the last value written.
+Guest time is the instruction count at 36.864 MHz. Registers that aren't modelled read back the last value written; `--verbose` logs accesses to them.
 
-Not emulated: sound input, UART B, IrDA, other PC Cards, and Miniature Cards.
+Not emulated: sound input, UART B, IrDA, PC Cards other than CompactFlash, and Miniature Cards other than the DRAM card and the CE 2.0 ROM card.
 
 ## Credits
 
-Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The LCD simulation is from SHAM-7X0. The web proxy decodes images with [stb_image](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).
+Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The web proxy decodes images with [stb_image](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).
