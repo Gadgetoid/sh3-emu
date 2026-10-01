@@ -65,6 +65,7 @@ Menus:
 | Card | Eject Card | Cmd-E |
 | Serial | Network (PPP) | Cmd-Shift-N |
 | Serial | Pseudo-terminal | |
+| Serial | Host Serial Port… (a real port on the Mac) | |
 | Serial | Disconnect | |
 | Serial | Connect Network at Launch (Network (PPP) each time the emulator starts; `--serial=off` skips it once) | |
 | Desktop | Send Files to Velo… (into \My Documents) | |
@@ -106,6 +107,8 @@ s.connect(('10.0.2.2', 47123))
 connects to port 47123 on the Mac's loopback.
 
 Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its path (for example `/dev/ttys002`) on stderr and in the title bar, for your own terminal or PPP tools.
+
+Serial > Host Serial Port…, or `--serial=/dev/cu.usbserial-XXXX`, connects COM1 to a real port on the Mac, such as a USB serial adapter wired to another machine or a modem. The port is raw, with no flow control and modem lines ignored, and follows the baud rate CE sets on COM1 (nearest standard rate). The choice is kept as `serial_device=` in `emu.ini`.
 
 Without libslirp the build still works, with no Network (PPP) option.
 

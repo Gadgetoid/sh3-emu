@@ -99,7 +99,9 @@ static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) 
     }
 }
 
-typedef enum { SERIAL_OFF, SERIAL_NETWORK, SERIAL_PTY } serial_mode_t;
+typedef enum { SERIAL_OFF, SERIAL_NETWORK, SERIAL_PTY, SERIAL_DEVICE } serial_mode_t;
+
+#define SERIAL_QUEUE 65536
 
 typedef struct {
     serial_mode_t mode;
@@ -108,7 +110,37 @@ typedef struct {
     int      pty_slave;
     char     pty_name[128];
     const char *user_agent;
+    const char *device;
+    uint32_t baud;
+    uint8_t  queue[SERIAL_QUEUE];
+    size_t   queued;
 } serial_t;
+
+static speed_t speed_for(uint32_t baud) {
+    static const struct { uint32_t baud; speed_t speed; } speeds[] = {
+        { 300, B300 }, { 1200, B1200 }, { 2400, B2400 }, { 4800, B4800 }, { 9600, B9600 },
+        { 19200, B19200 }, { 38400, B38400 }, { 57600, B57600 }, { 115200, B115200 },
+    };
+    speed_t best = B9600;
+    uint32_t best_error = UINT32_MAX;
+    for (size_t i = 0; i < sizeof speeds / sizeof speeds[0]; i++) {
+        uint32_t error = speeds[i].baud > baud ? speeds[i].baud - baud : baud - speeds[i].baud;
+        if (error < best_error) { best_error = error; best = speeds[i].speed; }
+    }
+    return best;
+}
+
+static void device_follow_baud(serial_t *serial, machine_t *machine) {
+    uint32_t baud = machine_serial_baud(machine);
+    if (serial->mode != SERIAL_DEVICE || !baud || baud == serial->baud) return;
+    struct termios settings;
+    if (tcgetattr(serial->pty, &settings) != 0) return;
+    cfsetispeed(&settings, speed_for(baud));
+    cfsetospeed(&settings, speed_for(baud));
+    tcsetattr(serial->pty, TCSANOW, &settings);
+    serial->baud = baud;
+    if (verbose) fprintf(stderr, "serial: %s at %u baud\n", serial->device, baud);
+}
 
 static void serial_log(const char *message) {
     if (verbose) fputs(message, stderr);
@@ -121,6 +153,8 @@ static void serial_close(serial_t *serial, machine_t *machine) {
     serial->gateway = NULL;
     serial->pty = -1;
     serial->pty_slave = -1;
+    serial->queued = 0;
+    serial->baud = 0;
     serial->mode = SERIAL_OFF;
     machine_serial_connect(machine, false);
 }
@@ -149,11 +183,29 @@ static const char *serial_open(serial_t *serial, machine_t *machine, serial_mode
         serial->pty = fd;
         serial->pty_slave = slave;
         fprintf(stderr, "serial: COM1 on %s\n", serial->pty_name);
+    } else if (mode == SERIAL_DEVICE) {
+        if (!serial->device || !serial->device[0]) return "choose a host serial port first";
+        int fd = open(serial->device, O_RDWR | O_NOCTTY | O_NONBLOCK);
+        struct termios settings;
+        if (fd < 0 || tcgetattr(fd, &settings) != 0) {
+            if (fd >= 0) close(fd);
+            snprintf(serial->pty_name, sizeof serial->pty_name, "could not open %s", serial->device);
+            return serial->pty_name;
+        }
+        cfmakeraw(&settings);
+        settings.c_cflag |= CLOCAL | CREAD;
+        settings.c_cflag &= ~(tcflag_t)CRTSCTS;
+        cfsetispeed(&settings, B19200);
+        cfsetospeed(&settings, B19200);
+        tcsetattr(fd, TCSANOW, &settings);
+        serial->pty = fd;
+        snprintf(serial->pty_name, sizeof serial->pty_name, "COM1 on %s", serial->device);
     }
     serial->mode = mode;
     machine_set_serial_tag(machine, (uint32_t)mode);
     if (mode != SERIAL_OFF) machine_serial_connect(machine, true);
-    return mode == SERIAL_NETWORK ? "network cable connected" : mode == SERIAL_PTY ? serial->pty_name : "serial disconnected";
+    if (mode == SERIAL_DEVICE) device_follow_baud(serial, machine);
+    return mode == SERIAL_NETWORK ? "network cable connected" : mode != SERIAL_OFF ? serial->pty_name : "serial disconnected";
 }
 
 static void serial_restored(serial_t *serial, machine_t *machine, uint64_t *reconnect_at, serial_mode_t *reconnect_mode) {
@@ -161,7 +213,7 @@ static void serial_restored(serial_t *serial, machine_t *machine, uint64_t *reco
     serial_mode_t mode = (serial_mode_t)machine_serial_tag(machine);
     serial_close(serial, machine);
     *reconnect_at = 0;
-    if (was_connected && (mode == SERIAL_NETWORK || mode == SERIAL_PTY)) {
+    if (was_connected && (mode == SERIAL_NETWORK || mode == SERIAL_PTY || (mode == SERIAL_DEVICE && serial->device && serial->device[0]))) {
         *reconnect_mode = mode;
         *reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
     }
@@ -170,9 +222,23 @@ static void serial_restored(serial_t *serial, machine_t *machine, uint64_t *reco
 static void serial_pump(serial_t *serial, machine_t *machine) {
     uint8_t buffer[4096];
     size_t count;
+    device_follow_baud(serial, machine);
     while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) {
         if (serial->gateway) netgw_from_guest(serial->gateway, buffer, count);
+        else if (serial->mode == SERIAL_DEVICE) {
+            size_t room = sizeof serial->queue - serial->queued;
+            if (count > room) count = room;
+            memcpy(serial->queue + serial->queued, buffer, count);
+            serial->queued += count;
+        }
         else if (serial->pty >= 0 && write(serial->pty, buffer, count) < 0) break;
+    }
+    if (serial->mode == SERIAL_DEVICE && serial->queued) {
+        ssize_t written = write(serial->pty, serial->queue, serial->queued);
+        if (written > 0) {
+            memmove(serial->queue, serial->queue + written, serial->queued - (size_t)written);
+            serial->queued -= (size_t)written;
+        }
     }
     if (serial->gateway) {
         netgw_poll(serial->gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
@@ -193,7 +259,7 @@ static void card_dialog_done(void *userdata, const char *const *files, int filte
     card_chosen = true;
 }
 
-typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT } pick_kind_t;
+typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT, PICK_SERIAL_DEVICE } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -310,6 +376,7 @@ typedef struct {
     uint32_t host_time;
     uint32_t scale;
     uint32_t connect_at_launch;
+    char     serial_device[1024];
     uint32_t display;
     char     user_agent[256];
     char     shared_folder[1024];
@@ -335,7 +402,7 @@ static int scale_index(uint32_t scale) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { 4, 1, 1, 100, 0, VIEW_SIMULATED, NETGW_DEFAULT_USER_AGENT, "" };
+    settings_t settings = { .memory = 4, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .user_agent = NETGW_DEFAULT_USER_AGENT };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -352,6 +419,9 @@ static settings_t settings_load(void) {
         else if (!strncmp(line, "user_agent=", 11)) {
             line[strcspn(line, "\r\n")] = 0;
             snprintf(settings.user_agent, sizeof settings.user_agent, "%s", line + 11);
+        } else if (!strncmp(line, "serial_device=", 14)) {
+            line[strcspn(line, "\r\n")] = 0;
+            snprintf(settings.serial_device, sizeof settings.serial_device, "%s", line + 14);
         } else if (!strncmp(line, "shared_folder=", 14)) {
             line[strcspn(line, "\r\n")] = 0;
             snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", line + 14);
@@ -366,8 +436,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
-            settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->user_agent, settings->shared_folder);
+    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
+            settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->serial_device, settings->user_agent,
+            settings->shared_folder);
     fclose(file);
 }
 
@@ -479,6 +550,11 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--serial=net")) { serial_mode = SERIAL_NETWORK; continue; }
         if (!strcmp(argv[i], "--serial=pty")) { serial_mode = SERIAL_PTY; continue; }
         if (!strcmp(argv[i], "--serial=off")) { serial_mode = SERIAL_OFF; continue; }
+        if (!strncmp(argv[i], "--serial=/", 10)) {
+            snprintf(settings.serial_device, sizeof settings.serial_device, "%s", argv[i] + 9);
+            serial_mode = SERIAL_DEVICE;
+            continue;
+        }
         if (!strncmp(argv[i], "--card=", 7)) { card = argv[i] + 7; continue; }
         if (!strncmp(argv[i], "--state=", 8)) { state_file = argv[i] + 8; continue; }
         if (!strcmp(argv[i], "--verbose")) verbose = true;
@@ -488,7 +564,7 @@ int main(int argc, char **argv) {
         else rom_path = argv[i];
     }
     if (!rom_path) {
-        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--state=FILE] [--card=IMAGE] [--serial=net|pty|off] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
+        fprintf(stderr, "usage: velo [--verbose] [--fresh] [--state=FILE] [--card=IMAGE] [--serial=net|pty|off|/dev/PORT] [--memory=4|8|16|20|32] [--speed=1|2|4|8] [--user-agent=TEXT] [--screenshot=FILE.bmp [--seconds=N]] nk.bin\n");
         return 2;
     }
     size_t rom_size;
@@ -570,7 +646,8 @@ int main(int argc, char **argv) {
     uint64_t power_release_at = 0, backlight_release_at = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
-    serial_t serial = { SERIAL_OFF, NULL, -1, -1, "", settings.user_agent };
+    static serial_t serial;
+    serial = (serial_t){ SERIAL_OFF, NULL, -1, -1, "", settings.user_agent, settings.serial_device, 0, { 0 }, 0 };
     char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
     static typer_t typer;
     static dropped_t dropped;
@@ -784,6 +861,11 @@ int main(int argc, char **argv) {
                 SDL_ShowOpenFileDialog(card_dialog_done, NULL, window, filters, 2, NULL, false);
                 break;
             }
+            case MENU_SERIAL_DEVICE: {
+                static const SDL_DialogFileFilter filters[] = { { "Serial ports", "*" } };
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SERIAL_DEVICE, window, filters, 1, "/dev", false);
+                break;
+            }
             case MENU_SERIAL_NETWORK:
             case MENU_SERIAL_PTY:
             case MENU_SERIAL_OFF:
@@ -840,6 +922,12 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < picked_count; i++) files[i] = picked[i];
                 files[picked_count] = NULL;
                 desktop_send(desktop, files);
+            } else if (picked_kind == PICK_SERIAL_DEVICE) {
+                snprintf(settings.serial_device, sizeof settings.serial_device, "%s", picked[0]);
+                settings_save(&settings);
+                serial_reconnect_at = 0;
+                notice = serial_open(&serial, machine, SERIAL_DEVICE);
+                notice_left = NOTICE_SECONDS * 3;
             } else if (picked_kind == PICK_SAVE_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 char path[1100];
@@ -892,6 +980,7 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
         menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
+        menu_set_checked(MENU_SERIAL_DEVICE, serial.mode == SERIAL_DEVICE);
         menu_set_enabled(MENU_SERIAL_OFF, serial.mode != SERIAL_OFF);
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
