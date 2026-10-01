@@ -21,14 +21,14 @@
 #define MENU_MIN_WIDTH   160.0f
 #define SUBMENU_OVERLAP  3.0f
 #define FONT_SIZE        13.0f
-#define FALLBACK_ADVANCE 7.0f
+#define FALLBACK_ADVANCE ((float)SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE)
 
 #define MENU_QUEUE  32
 #define MAX_MENUS   16
 #define MAX_ITEMS   192
 #define MENU_ITEMS  48
 #define MAX_DEPTH   4
-#define ATLAS_SIZE  1024
+#define ATLAS_SIZE  512
 #define ASCII_FIRST 32
 #define ASCII_COUNT 95
 
@@ -92,6 +92,7 @@ static struct {
     stbtt_packedchar extra[GLYPH_EXTRA_COUNT];
     bool             has_extra[GLYPH_EXTRA_COUNT];
     unsigned char   *atlas;
+    Uint32          *atlas_pixels;
     float            density;
     float            ascent, line_height;
     int              generation;
@@ -156,15 +157,16 @@ static void load_font(void) {
 }
 
 static float window_density(void) {
-    float density = main_window ? SDL_GetWindowPixelDensity(main_window) : 1.0f;
-    return density > 0 ? density : 1.0f;
+    float pixel_density = main_window ? SDL_GetWindowPixelDensity(main_window) : 1.0f;
+    return pixel_density > 0 ? pixel_density : 1.0f;
 }
 
 static void bake_font(void) {
     density = window_density();
     if (!font.loaded || (font.baked && font.density == density)) return;
     if (!font.atlas) font.atlas = malloc(ATLAS_SIZE * ATLAS_SIZE);
-    if (!font.atlas) return;
+    if (!font.atlas_pixels) font.atlas_pixels = malloc((size_t)ATLAS_SIZE * ATLAS_SIZE * 4);
+    if (!font.atlas || !font.atlas_pixels) return;
     float size = FONT_SIZE * density;
     stbtt_pack_context pack;
     stbtt_pack_range ranges[2] = {
@@ -172,8 +174,13 @@ static void bake_font(void) {
         { STBTT_POINT_SIZE(size), 0, EXTRA_CODEPOINTS, GLYPH_EXTRA_COUNT, font.extra, 0, 0 },
     };
     if (!stbtt_PackBegin(&pack, font.atlas, ATLAS_SIZE, ATLAS_SIZE, 0, 1, NULL)) return;
-    stbtt_PackFontRanges(&pack, font.data, stbtt_GetFontOffsetForIndex(font.data, 0), ranges, 2);
+    bool packed = stbtt_PackFontRanges(&pack, font.data, 0, ranges, 2) != 0;
     stbtt_PackEnd(&pack);
+    if (!packed) {
+        font.loaded = false;
+        return;
+    }
+    for (int i = 0; i < ATLAS_SIZE * ATLAS_SIZE; i++) font.atlas_pixels[i] = 0x00ffffffu | (Uint32)font.atlas[i] << 24;
     float scale = stbtt_ScaleForMappingEmToPixels(&font.info, size);
     int ascent, descent, gap;
     stbtt_GetFontVMetrics(&font.info, &ascent, &descent, &gap);
@@ -190,11 +197,7 @@ static bool ensure_glyphs(canvas_t *canvas) {
     if (canvas->glyphs) SDL_DestroyTexture(canvas->glyphs);
     canvas->glyphs = SDL_CreateTexture(canvas->renderer, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, ATLAS_SIZE, ATLAS_SIZE);
     if (!canvas->glyphs) return false;
-    Uint32 *pixels = malloc((size_t)ATLAS_SIZE * ATLAS_SIZE * 4);
-    if (!pixels) return false;
-    for (int i = 0; i < ATLAS_SIZE * ATLAS_SIZE; i++) pixels[i] = 0x00ffffffu | (Uint32)font.atlas[i] << 24;
-    SDL_UpdateTexture(canvas->glyphs, NULL, pixels, ATLAS_SIZE * 4);
-    free(pixels);
+    SDL_UpdateTexture(canvas->glyphs, NULL, font.atlas_pixels, ATLAS_SIZE * 4);
     SDL_SetTextureBlendMode(canvas->glyphs, SDL_BLENDMODE_BLEND);
     SDL_SetTextureScaleMode(canvas->glyphs, SDL_SCALEMODE_NEAREST);
     canvas->glyph_generation = font.generation;
@@ -335,7 +338,19 @@ static void set_shortcut(item_t *item, const menu_entry_t *entry) {
     snprintf(item->shortcut, sizeof item->shortcut, "%sCtrl+Alt+%c", shift ? "Shift+" : "", toupper((unsigned char)entry->key));
 }
 
+static void skip_menu(int *cursor) {
+    for (int nesting = 1; *cursor < MENU_ENTRY_COUNT && nesting > 0; (*cursor)++) {
+        menu_entry_kind_t kind = MENU_ENTRIES[*cursor].kind;
+        if (kind == MENU_ENTRY_SUBMENU) nesting++;
+        else if (kind == MENU_ENTRY_END) nesting--;
+    }
+}
+
 static int parse_menu(int *cursor, const char *title) {
+    if (menu_count >= MAX_MENUS) {
+        skip_menu(cursor);
+        return -1;
+    }
     item_t local[MENU_ITEMS];
     int local_count = 0;
     int index = menu_count++;
@@ -350,6 +365,7 @@ static int parse_menu(int *cursor, const char *title) {
             item.kind = ITEM_SUBMENU;
             snprintf(item.title, sizeof item.title, "%s", entry->title);
             item.submenu = parse_menu(cursor, entry->title);
+            if (item.submenu < 0) continue;
         } else if (entry->kind == MENU_ENTRY_ITEM) {
             item.tag = entry->tag;
             snprintf(item.title, sizeof item.title, "%s", entry->title);
@@ -573,10 +589,11 @@ static bool mouse_event(const SDL_Event *event) {
     bool motion = event->type == SDL_EVENT_MOUSE_MOTION;
     SDL_WindowID id = motion ? event->motion.windowID : event->button.windowID;
     float event_x = motion ? event->motion.x : event->button.x, event_y = motion ? event->motion.y : event->button.y;
-    if (!to_main_point(id, event_x, event_y, &x, &y)) return false;
-    bool in_popup = level_of_window(id) >= 0;
+    bool in_main = main_window && id == SDL_GetWindowID(main_window);
+    if (!to_main_point(id, event_x, event_y, &x, &y)) return !in_main;
     if (!depth) {
-        if (event->type != SDL_EVENT_MOUSE_BUTTON_DOWN || y >= BAR_HEIGHT || in_popup) return in_popup;
+        if (!in_main) return true;
+        if (event->type != SDL_EVENT_MOUSE_BUTTON_DOWN || y >= BAR_HEIGHT) return false;
         int top = bar_hit(x, y);
         if (top >= 0) open_top_menu(top, false);
         return true;
@@ -633,8 +650,10 @@ static bool key_event(const SDL_Event *event) {
         break;
     case SDLK_UP:
     case SDLK_DOWN: {
-        int from = level->hover >= 0 ? level->hover : event->key.key == SDLK_DOWN ? menus[level->menu].first - 1 : menus[level->menu].first;
-        int next = first_selectable(level->menu, from, event->key.key == SDLK_DOWN ? 1 : -1);
+        bool down = event->key.key == SDLK_DOWN;
+        int from = level->hover;
+        if (from < 0) from = down ? menus[level->menu].first - 1 : menus[level->menu].first;
+        int next = first_selectable(level->menu, from, down ? 1 : -1);
         if (next >= 0) level->hover = next;
         close_levels((int)(level - levels) + 1);
         break;
@@ -666,7 +685,9 @@ void menu_install(SDL_Window *window) {
     }
     for (int cursor = 0; cursor < MENU_ENTRY_COUNT;) {
         const menu_entry_t *entry = &MENU_ENTRIES[cursor++];
-        if (entry->kind == MENU_ENTRY_MENU && top_count < MAX_MENUS && menu_count < MAX_MENUS) top_menus[top_count++] = parse_menu(&cursor, entry->title);
+        if (entry->kind != MENU_ENTRY_MENU) continue;
+        int menu = parse_menu(&cursor, entry->title);
+        if (menu >= 0) top_menus[top_count++] = menu;
     }
     load_font();
     bake_font();
@@ -759,9 +780,32 @@ static bool focus_is_ours(void) {
     return focus && (focus == main_window || level_of_window(SDL_GetWindowID(focus)) >= 0);
 }
 
+static bool inside(float x, float y, float left, float top, float width, float height) {
+    return x >= left && y >= top && x < left + width && y < top + height;
+}
+
+static bool clicked_elsewhere(void) {
+    const char *driver = SDL_GetCurrentVideoDriver();
+    if (!driver || strcmp(driver, "x11")) return false;
+    float x, y;
+    if (!SDL_GetGlobalMouseState(&x, &y)) return false;
+    int window_x, window_y, width, height;
+    SDL_GetWindowPosition(main_window, &window_x, &window_y);
+    SDL_GetWindowSize(main_window, &width, &height);
+    x -= (float)window_x;
+    y -= (float)window_y;
+    if (inside(x, y, 0, 0, (float)width, (float)height)) return false;
+    for (int level = 0; level < depth; level++) {
+        float origin_x, origin_y;
+        level_origin(level, &origin_x, &origin_y);
+        if (inside(x, y, origin_x, origin_y, levels[level].width, levels[level].height)) return false;
+    }
+    return true;
+}
+
 void menu_draw(SDL_Renderer *renderer) {
     if (!main_window) return;
-    if (depth && !focus_is_ours()) close_levels(0);
+    if (depth && (!focus_is_ours() || clicked_elsewhere())) close_levels(0);
     bake_font();
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     draw_bar(renderer);

@@ -79,7 +79,7 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 | Emulation | Memory (at the next cold boot): 4 MB (original), 8, 16, 20 or 32 MB | |
 | Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
 
-Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11 and the snapshot items have no shortcut. Linux menus say File Manager for Finder, Computer for Mac and Pictures for Desktop, where screenshots go.
+Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11, the snapshot items have no shortcut, and desktops that lock the screen with Ctrl+Alt+L take that one from Load State. Linux menus say File Manager for Finder, Computer for Mac and Pictures for Desktop, where screenshots go.
 
 Dropping files on the window sends them to `\My Documents`, a dropped `.load` script installs its package, and a single dropped `.img` is inserted as the card.
 

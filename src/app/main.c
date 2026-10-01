@@ -1,6 +1,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -503,8 +504,13 @@ static bool confirm_reset(SDL_Window *window) {
 }
 
 static void open_folder(const char *path) {
-    char url[2048];
-    snprintf(url, sizeof url, "file://%s", path);
+    char url[4096] = "file://";
+    size_t length = strlen(url);
+    for (const unsigned char *at = (const unsigned char *)path; *at && length + 4 < sizeof url; at++) {
+        if (isalnum(*at) || strchr("/-_.~", *at)) url[length++] = (char)*at;
+        else length += (size_t)snprintf(url + length, sizeof url - length, "%%%02X", *at);
+    }
+    url[length] = 0;
     SDL_OpenURL(url);
 }
 
@@ -901,7 +907,11 @@ int main(int argc, char **argv) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (menu_event(&event)) {
-                if (menu_active()) release_keys(machine, held, -1);
+                if (menu_active()) {
+                    release_keys(machine, held, -1);
+                    if (pen_down) machine_touch(machine, false, 0, 0);
+                    pen_down = false;
+                }
                 continue;
             }
             switch (event.type) {

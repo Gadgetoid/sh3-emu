@@ -8,6 +8,7 @@ root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
 make -s all headless velo-rapi icons
+icons=${BUILD:-build}/icons
 
 install -D -m 755 velo "$root/usr/bin/velo"
 install -D -m 755 headless "$root/usr/bin/velo-headless"
@@ -15,7 +16,7 @@ install -D -m 755 velo-rapi "$root/usr/bin/velo-rapi"
 install -D -m 644 README.md "$root/usr/share/doc/$package/README.md"
 install -D -m 644 LICENSE "$root/usr/share/doc/$package/LICENSE"
 install -D -m 644 assets/velo.svg "$root/usr/share/icons/hicolor/scalable/apps/$package.svg"
-for size in 16 32 64 128 256 512; do install -D -m 644 "build/icons/velo-$size.png" "$root/usr/share/icons/hicolor/${size}x${size}/apps/$package.png"; done
+for size in 16 32 64 128 256 512; do install -D -m 644 "$icons/velo-$size.png" "$root/usr/share/icons/hicolor/${size}x${size}/apps/$package.png"; done
 for licence in licences/*; do install -D -m 644 "$licence" "$root/usr/share/doc/$package/licences/$(basename "$licence")"; done
 
 cat > "$root/usr/share/doc/$package/copyright" <<EOF

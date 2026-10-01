@@ -98,7 +98,7 @@ run: $(PROG)
 	./$(PROG) $(ROM)
 
 app: $(PROG) $(VELORAPI) icons
-	sh tools/mkapp.sh Velo.app
+	ICONS=$(BUILD)/icons sh tools/mkapp.sh Velo.app
 
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app
