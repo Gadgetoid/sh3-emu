@@ -46,6 +46,7 @@ void     pccard_reset(pccard_socket_t *socket);
 bool     pccard_insert(pccard_socket_t *socket, FILE *image);
 void     pccard_eject(pccard_socket_t *socket);
 void     pccard_rebind(pccard_socket_t *socket, FILE *image);
+void     pccard_sanitize(pccard_t *card);
 
 uint16_t pccard_it8368_read(pccard_socket_t *socket, uint32_t offset);
 void     pccard_it8368_write(pccard_socket_t *socket, uint32_t offset, uint16_t value);

@@ -55,6 +55,7 @@
 #define ATA_IDLE     0x97u
 
 #define HEAD_LBA 0x40u
+#define ATA_MAX_SECTORS 256u
 
 #define REG_DATA     0
 #define REG_FEATURE  1
@@ -221,6 +222,17 @@ void pccard_rebind(pccard_socket_t *socket, FILE *image) {
         socket->state->powered = false;
         latch_edges(socket);
     }
+}
+
+void pccard_sanitize(pccard_t *card) {
+    bool transferring = (card->status & ATA_DRQ) != 0;
+    bool position_valid = transferring ? card->buffer_position < sizeof card->buffer : card->buffer_position <= sizeof card->buffer;
+    bool count_valid = card->sectors_left <= ATA_MAX_SECTORS && (!transferring || card->sectors_left > 0);
+    if (position_valid && count_valid) return;
+    card->status &= (uint8_t)~ATA_DRQ;
+    card->buffer_position = 0;
+    card->sectors_left = 0;
+    card->writing = false;
 }
 
 uint16_t pccard_it8368_read(pccard_socket_t *socket, uint32_t offset) {
@@ -454,7 +466,7 @@ static void command(pccard_socket_t *socket, uint8_t value) {
         card->status = ATA_READY | ATA_SEEK | ATA_DRQ;
         irq_assert(socket);
     } else if (value == ATA_READ) {
-        card->sectors_left = card->sector_count ? card->sector_count : 256;
+        card->sectors_left = card->sector_count ? card->sector_count : ATA_MAX_SECTORS;
         card->writing = false;
         if (read_sector(socket, current_lba(card), card->buffer)) {
             card->buffer_position = 0;
@@ -466,7 +478,7 @@ static void command(pccard_socket_t *socket, uint8_t value) {
         }
         irq_assert(socket);
     } else if (value == ATA_WRITE) {
-        card->sectors_left = card->sector_count ? card->sector_count : 256;
+        card->sectors_left = card->sector_count ? card->sector_count : ATA_MAX_SECTORS;
         card->writing = true;
         card->buffer_position = 0;
         card->status = ATA_READY | ATA_SEEK | ATA_DRQ;

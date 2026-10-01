@@ -19,6 +19,8 @@
 #define CTL1_ENUART   (1u << 0)
 #define CTL1_WRITABLE 0x0000FFEFu
 
+#define CTL2_BAUDRATE 0x000007FFu
+
 #define UART_CLOCK_OVER_16 230400u
 
 #define STATUS2_RX       (1u << 31)
@@ -65,7 +67,7 @@ void uart_write(uart_port_t *port, uint32_t offset, uint32_t value, uint64_t now
             if (!receiving(port)) uart->rx_next = NO_EVENT;
             return;
         }
-        case OFFSET_CTL2: uart->baud_divisor = value & 0x7FF; return;
+        case OFFSET_CTL2: uart->baud_divisor = value & CTL2_BAUDRATE; return;
         case OFFSET_DMA_CTL1: uart->dma_buffer = value & ~3u; return;
         case OFFSET_DMA_CTL2: uart->dma_length = (value & 0xFFFF) + 1; return;
         case OFFSET_DATA:
@@ -119,6 +121,10 @@ void uart_event(uart_port_t *port, uint64_t now) {
     }
     if (!uart->wire_count) uart->rx_next = NO_EVENT;
     if (bits) port->raise(port->context, bits);
+}
+
+void uart_sanitize(uart_t *uart) {
+    uart->baud_divisor &= CTL2_BAUDRATE;
 }
 
 uint32_t uart_take_tx(uart_port_t *port, uint8_t *out, uint32_t max) {

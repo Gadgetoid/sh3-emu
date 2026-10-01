@@ -44,6 +44,7 @@ static const char STATE_MAGIC[16] = "VELO1 STATE v2";
 #define MFIO_EEPROM_SCL        (1u << 18)
 #define MFIO_EEPROM_SDA        (1u << 20)
 #define EEPROM_ADDRESS         0x50
+#define CARD_DRAM_MIN          0x00100000u
 #define CARD_DRAM_MAX          0x01000000u
 #define IODIN_MINICARD2_ABSENT (1u << 6)
 
@@ -1476,6 +1477,22 @@ bool machine_state_matches(machine_t *m, const char *path) {
     return rom_hash == m->rom_hash;
 }
 
+static bool valid_card_dram_size(uint32_t size) {
+    if (size == 0) return true;
+    return size >= CARD_DRAM_MIN && size <= CARD_DRAM_MAX && !(size & (size - 1));
+}
+
+static void sanitize_state(machine_t *m) {
+    m->card_path[sizeof m->card_path - 1] = 0;
+    if (m->key_head < 0 || m->key_head >= KEY_QUEUE_SIZE || m->key_count < 0 || m->key_count > KEY_QUEUE_SIZE) {
+        machine_logf(m, "state: keyboard queue out of range, so it is emptied\n");
+        m->key_head = 0;
+        m->key_count = 0;
+    }
+    uart_sanitize(&m->uart_a);
+    pccard_sanitize(&m->pccard);
+}
+
 bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *file = fopen(path, "rb");
     if (!file) return false;
@@ -1495,7 +1512,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         memcpy(&saved_at, contents + sizeof STATE_MAGIC + sizeof rom_hash, sizeof saved_at);
         ok = rom_hash == m->rom_hash;
     }
-    bool has_dram = false;
+    bool has_dram = false, bad_card = false;
     uint32_t saved_card = 0;
     if (ok) {
         const uint8_t *cursor = contents + header, *end = contents + length;
@@ -1507,9 +1524,13 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
                 has_dram = true;
                 saved_dram = record.size;
             }
-            if (!strcmp(record.name, "dram_card") && record.size <= CARD_DRAM_MAX && !(record.size & (record.size - 1))) saved_card = record.size;
+            if (!strcmp(record.name, "dram_card")) {
+                if (valid_card_dram_size(record.size)) saved_card = record.size;
+                else bad_card = true;
+            }
         }
-        ok = has_dram;
+        if (bad_card) machine_logf(m, "state: card DRAM has an unsupported size\n");
+        ok = has_dram && !bad_card;
         if (ok && saved_dram != m->dram_size) {
             uint8_t *dram = calloc(1, saved_dram);
             if (!dram) ok = false;
@@ -1555,6 +1576,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
             m->sib_dma_ctl = m->regs[0x090 / 4];
             machine_logf(m, "state: sound DMA rebuilt from registers\n");
         }
+        sanitize_state(m);
         m->cpu.last_fetch_valid = false;
         m->cpu.last_fetch_page = NULL;
         bind_card_socket(m, NULL);

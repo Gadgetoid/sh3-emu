@@ -34,3 +34,4 @@ uint64_t uart_next_event(const uart_port_t *port);
 void     uart_event(uart_port_t *port, uint64_t now);
 uint32_t uart_take_tx(uart_port_t *port, uint8_t *out, uint32_t max);
 uint32_t uart_baud(const uart_port_t *port);
+void     uart_sanitize(uart_t *uart);
