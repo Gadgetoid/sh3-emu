@@ -752,6 +752,7 @@ int main(int argc, char **argv) {
 
     view_t *view = view_create(window, renderer, (view_display_t)settings.display);
 
+    if (screenshot && card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
     if (screenshot) {
         lcd_compose_setup((int)(WINDOW_SCALE * SDL_GetWindowPixelDensity(window) + 0.5f));
         machine_run(machine, (uint64_t)(screenshot_seconds * MACHINE_CLOCK_HZ));

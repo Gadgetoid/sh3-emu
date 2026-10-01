@@ -43,7 +43,7 @@ SRC_RAPI    = src/rapi.c src/rapiload.c src/rapisetup.c src/rapisync.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/desktop.c src/lcd.c src/png.c src/typer.c src/view.c src/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
-OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/headless.o
+OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/lcd.o $(BUILD)/src/png.o $(BUILD)/tools/headless.o
 
 all: $(PROG) $(VELORAPI)
 
@@ -51,7 +51,7 @@ $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 $(HEADLESS): $(OBJ_HEADLESS)
-	$(CC) -o $@ $^ -lm $(NET_LIBS) $(THREAD_LIBS)
+	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
 $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxycheck.o
 	$(CC) -o $@ $^ -lm $(NET_LIBS) $(THREAD_LIBS)

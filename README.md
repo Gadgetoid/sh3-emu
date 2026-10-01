@@ -212,6 +212,7 @@ Headless options:
 
 - `--key=SECONDS:SCANCODE` presses a Velo scancode (hex) for 50 ms. The backlight key is 5E.
 - `--tap=SECONDS:X:Y[:HOLD]` holds the pen at a screen position, for 500 ms by default. Use 0.08 for double taps.
+- `--png=FILE` saves the screen as the GUI draws it, through the simulated LCD, as a PNG. `--png-cell=N` sets the device pixels per LCD pixel (default 4, the GUI's Actual Size on a Retina screen), and `--png-backlight=on|off` draws it lit or unlit whatever the machine's backlight is doing.
 - `--power=SECONDS` presses the power button for 200 ms.
 - `--soft-reset=SECONDS` soft-resets the machine (Run > Soft Reset).
 - `--host-time` sets the clock from the Mac at a cold boot (Emulation > Use Host Date/Time).

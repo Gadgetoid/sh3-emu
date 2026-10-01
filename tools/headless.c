@@ -5,7 +5,9 @@
 #include <time.h>
 
 #include "keytext.h"
+#include "lcd.h"
 #include "machine.h"
+#include "png.h"
 #include "netgw.h"
 
 static void log_stderr(const char *message) { fputs(message, stderr); }
@@ -61,6 +63,22 @@ static uint8_t *read_file(const char *path, size_t *size) {
     return data;
 }
 
+static bool write_panel_png(const char *path, machine_t *machine, int cell, int backlight) {
+    lcd_compose_setup(cell);
+    lcd_set_power(machine_lcd_enabled(machine));
+    lcd_set_backlight(backlight < 0 ? machine_backlight(machine) : backlight != 0);
+    machine_screen(machine, lcd_framebuffer);
+    lcd_compose(10.0f);
+    uint8_t *png;
+    size_t length;
+    if (!png_encode(lcd_compose_pixels(), lcd_compose_width(), lcd_compose_height(), &png, &length)) return false;
+    FILE *file = fopen(path, "wb");
+    bool written = file && fwrite(png, 1, length, file) == length;
+    if (file) fclose(file);
+    free(png);
+    return written;
+}
+
 static void write_pgm(const char *path, const uint8_t *levels) {
     FILE *file = fopen(path, "wb");
     if (!file) return;
@@ -71,10 +89,12 @@ static void write_pgm(const char *path, const uint8_t *levels) {
 
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--soft-reset=SECONDS] [--host-time] [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
+        fprintf(stderr, "usage: headless ROM [--seconds=N] [--pgm=FILE] [--png=FILE [--png-cell=N] [--png-backlight=on|off]] [--trace-pc] [--key=SECONDS:SCANCODE]... [--tap=SECONDS:X:Y[:HOLD]]... [--power=SECONDS]... [--soft-reset=SECONDS] [--host-time] [--backlight=SECONDS]... [--load=STATE] [--save=STATE] [--wav=FILE] [--memory=4|8|16|20|32] [--speed=N] [--card=IMAGE] [--serial=SECONDS] [--net=SECONDS] [--user-agent=TEXT] [--rapi=SOCKET] [--realtime[=N]] [--watch-pc=VA]... [--type=SECONDS:TEXT]... [--serial-send=SECONDS:TEXT]...\n");
         return 2;
     }
     double seconds = 5;
+    const char *png = NULL;
+    int png_cell = 4, png_backlight = -1;
     const char *pgm = NULL, *load = NULL, *save = NULL, *wav = NULL, *card = NULL;
     bool trace_pc = false;
     double key_times[32];
@@ -104,6 +124,10 @@ int main(int argc, char **argv) {
     for (int i = 2; i < argc; i++) {
         if (!strncmp(argv[i], "--seconds=", 10)) seconds = atof(argv[i] + 10);
         else if (!strncmp(argv[i], "--pgm=", 6)) pgm = argv[i] + 6;
+        else if (!strncmp(argv[i], "--png=", 6)) png = argv[i] + 6;
+        else if (!strncmp(argv[i], "--png-cell=", 11)) png_cell = atoi(argv[i] + 11);
+        else if (!strcmp(argv[i], "--png-backlight=on")) png_backlight = 1;
+        else if (!strcmp(argv[i], "--png-backlight=off")) png_backlight = 0;
         else if (!strcmp(argv[i], "--trace-pc")) trace_pc = true;
         else if (!strncmp(argv[i], "--serial=", 9)) serial_at = atof(argv[i] + 9);
         else if (!strncmp(argv[i], "--net=", 6)) net_at = atof(argv[i] + 6);
@@ -282,6 +306,7 @@ int main(int argc, char **argv) {
         machine_screen(machine, levels);
         write_pgm(pgm, levels);
     }
+    if (png && !write_panel_png(png, machine, png_cell, png_backlight)) { fprintf(stderr, "cannot write %s\n", png); return 1; }
     netgw_destroy(gateway);
     machine_destroy(machine);
     free(rom);
