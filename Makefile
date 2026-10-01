@@ -88,9 +88,12 @@ app: $(PROG) $(VELORAPI)
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app
 
-.PHONY: all run clean test app FORCE
+.PHONY: all run clean test check app FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d $(BUILD)/tools/velorapi.d
+
+check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
+	sh tests/check.sh
 
 test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
 	sh tests/boot.sh $(ROM) $(CE2_ROM)

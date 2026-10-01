@@ -1,0 +1,78 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install dependencies
+        run: brew install sdl3 libslirp pkgconf
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else echo "VERSION=0.1+git$(date +%Y%m%d).$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"; fi
+      - name: Build
+        run: make all headless proxycheck velo-rapi
+      - name: Check
+        run: make check
+      - name: App
+        run: |
+          make app
+          ditto -c -k --keepParent Velo.app "Velo-${VERSION}-macos-$(uname -m).zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: velo-macos
+          path: Velo-*.zip
+
+  debian:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config dpkg-dev git ca-certificates python3 \
+            libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Version
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else echo "VERSION=0.1+git$(date +%Y%m%d).$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"; fi
+      - name: Build
+        run: make all headless proxycheck velo-rapi
+      - name: Check
+        run: make check
+      - name: Package
+        run: sh tools/mkdeb.sh dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: velo-debian-13
+          path: dist/*.deb
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [macos, debian]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            *.zip
+            *.deb

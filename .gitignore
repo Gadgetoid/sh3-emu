@@ -7,3 +7,16 @@ proxycheck
 velo-rapi
 Velo.app/
 dist/
+.DS_Store
+.claude/
+docs/philips/
+*.state
+*.state.old
+/*.img
+!/apps.img
+/apps/*
+!/apps/PYTHON/
+/games/
+/hash.py
+/hash.sh
+/Windows_CE_Files.txt
