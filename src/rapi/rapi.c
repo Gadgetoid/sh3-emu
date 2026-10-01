@@ -521,7 +521,7 @@ bool rapi_reg_value(rapi_t *rapi, uint32_t key, uint32_t index, char *name, size
     return true;
 }
 
-bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, uint8_t *data, uint32_t *length) {
+bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, uint8_t *data, uint32_t capacity, uint32_t *length) {
     message_t message = { 0 };
     uint32_t last_error, result;
     if (!message_begin(&message, COMMAND_REG_QUERY_VALUE) || !message_u32(&message, key) || !message_optional_string(&message, name) ||
@@ -536,6 +536,7 @@ bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, 
     *type = type_data && type_length >= 4 ? decode_u32(type_data) : 0;
     uint32_t actual = size_data && size_length >= 4 ? decode_u32(size_data) : value_length;
     if (actual > value_length) actual = value_length;
+    if (actual > capacity) actual = capacity;
     if (value_data) memcpy(data, value_data, actual);
     *length = value_data ? actual : 0;
     return true;

@@ -197,7 +197,7 @@ static int registry(rapi_t *rapi, int count, char **args) {
         uint8_t data[RAPI_REG_DATA_MAX];
         uint32_t type, length;
         char value[RAPI_REG_DATA_MAX * 3 + 32];
-        if (!rapi_reg_get(rapi, key, args[2], &type, data, &length)) status = fail(rapi);
+        if (!rapi_reg_get(rapi, key, args[2], &type, data, sizeof data, &length)) status = fail(rapi);
         else {
             format_value(type, data, length, value, sizeof value);
             printf("%s\n", value);

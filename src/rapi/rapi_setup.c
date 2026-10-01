@@ -59,7 +59,7 @@ bool rapi_setup_connection(rapi_t *rapi, uint32_t baud) {
     uint32_t key, type, length;
     uint8_t entry[RAPI_REG_DATA_MAX];
     if (!rapi_reg_open(rapi, RAPI_HKEY_CURRENT_USER, RAS_BOOK "\\" DEFAULT_ENTRY, false, &key)) return false;
-    bool read = rapi_reg_get(rapi, key, "Entry", &type, entry, &length);
+    bool read = rapi_reg_get(rapi, key, "Entry", &type, entry, sizeof entry, &length);
     rapi_reg_close(rapi, key);
     if (!read) return false;
 

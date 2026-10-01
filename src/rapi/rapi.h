@@ -54,7 +54,7 @@ bool rapi_reg_open(rapi_t *rapi, uint32_t parent, const char *subkey, bool creat
 bool rapi_reg_close(rapi_t *rapi, uint32_t key);
 bool rapi_reg_subkey(rapi_t *rapi, uint32_t key, uint32_t index, char *name, size_t size, bool *found);
 bool rapi_reg_value(rapi_t *rapi, uint32_t key, uint32_t index, char *name, size_t size, uint32_t *type, uint8_t *data, uint32_t *length, bool *found);
-bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, uint8_t *data, uint32_t *length);
+bool rapi_reg_get(rapi_t *rapi, uint32_t key, const char *name, uint32_t *type, uint8_t *data, uint32_t capacity, uint32_t *length);
 bool rapi_reg_set(rapi_t *rapi, uint32_t key, const char *name, uint32_t type, const uint8_t *data, uint32_t length);
 void rapi_reg_text(const uint8_t *data, uint32_t length, char *out, size_t size);
 uint32_t rapi_reg_encode(const char *text, uint8_t *out, size_t size);
