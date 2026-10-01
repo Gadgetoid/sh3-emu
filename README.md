@@ -17,7 +17,7 @@ With the CE 2.0 upgrade's applications, a library of period software on a PC Car
 ### Install
 
 - **macOS (Apple silicon):** `Velo.app`, from a release or `make app` (see Building). It isn't notarised, so macOS blocks a downloaded copy the first time it opens: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine Velo.app`. A copy built with `make app` opens normally.
-- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `velo`, `velo-headless` and `velo-rapi`.
+- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `velo`, `velo-headless` and `velo-rapi`, with a desktop entry.
 - **From source:** see Building.
 
 ### ROMs
@@ -47,7 +47,7 @@ velo --help
 
 A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Emulation > Use Host Date/Time (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
 
-The menus are native on macOS. Linux has no menus yet, so its GUI is driven by the command line options.
+On macOS the menus are in the menu bar. On Linux they're in a bar along the top of the window, F10 opens it, and the arrow keys, Enter and Escape move through it.
 
 ## Using it
 
@@ -78,6 +78,8 @@ The menus are native on macOS. Linux has no menus yet, so its GUI is driven by t
 | Emulation | Use Host Date/Time (at the next cold boot) | |
 | Emulation | Memory (at the next cold boot): 4 MB (original), 8, 16, 20 or 32 MB | |
 | Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
+
+Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11 and the snapshot items have no shortcut. Linux menus say File Manager for Finder, Computer for Mac and Pictures for Desktop, where screenshots go.
 
 Dropping files on the window sends them to `\My Documents`, a dropped `.load` script installs its package, and a single dropped `.img` is inserted as the card.
 
@@ -222,7 +224,7 @@ macOS:
 brew install sdl3 libslirp
 make            # velo and velo-rapi
 make headless
-make app        # Velo.app, with its Homebrew libraries bundled and an ad-hoc signature
+make app        # Velo.app, with its icon, its Homebrew libraries bundled and an ad-hoc signature
 ```
 
 Debian 13 or Ubuntu:
@@ -272,4 +274,4 @@ MIT, see `LICENSE`. ROMs and Windows CE software are not included.
 
 ## Credits
 
-Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The web proxy decodes images with [stb_image](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).
+Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The web proxy decodes images with [stb_image](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`), which also draws the icon from `assets/velo.svg`. The Linux menu bar draws text with [stb_truetype](https://github.com/nothings/stb) (public domain) and the system's sans-serif font.

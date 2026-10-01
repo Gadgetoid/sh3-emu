@@ -38,8 +38,9 @@ static void append_chunk(buffer_t *buffer, const char *type, const uint8_t *data
     append_u32(buffer, (uint32_t)crc);
 }
 
-bool png_encode(const uint32_t *pixels, int width, int height, uint8_t **png, size_t *png_length) {
-    size_t row = (size_t)width * 3 + 1;
+static bool encode(const uint32_t *pixels, int width, int height, bool alpha, uint8_t **png, size_t *png_length) {
+    size_t channels = alpha ? 4 : 3;
+    size_t row = (size_t)width * channels + 1;
     size_t raw_length = row * (size_t)height;
     uint8_t *raw = malloc(raw_length);
     if (!raw) return false;
@@ -51,6 +52,7 @@ bool png_encode(const uint32_t *pixels, int width, int height, uint8_t **png, si
             *out++ = (uint8_t)pixel;
             *out++ = (uint8_t)(pixel >> 8);
             *out++ = (uint8_t)(pixel >> 16);
+            if (alpha) *out++ = (uint8_t)(pixel >> 24);
         }
     }
     uLongf packed_length = compressBound((uLong)raw_length);
@@ -65,7 +67,7 @@ bool png_encode(const uint32_t *pixels, int width, int height, uint8_t **png, si
     uint8_t header[13] = {
         (uint8_t)(width >> 24), (uint8_t)(width >> 16), (uint8_t)(width >> 8), (uint8_t)width,
         (uint8_t)(height >> 24), (uint8_t)(height >> 16), (uint8_t)(height >> 8), (uint8_t)height,
-        8, 2, 0, 0, 0,
+        8, alpha ? 6 : 2, 0, 0, 0,
     };
     append_chunk(&buffer, "IHDR", header, sizeof header);
     append_chunk(&buffer, "IDAT", packed, packed_length);
@@ -75,4 +77,12 @@ bool png_encode(const uint32_t *pixels, int width, int height, uint8_t **png, si
     *png = buffer.data;
     *png_length = buffer.length;
     return true;
+}
+
+bool png_encode(const uint32_t *pixels, int width, int height, uint8_t **png, size_t *png_length) {
+    return encode(pixels, width, height, false, png, png_length);
+}
+
+bool png_encode_rgba(const uint32_t *pixels, int width, int height, uint8_t **png, size_t *png_length) {
+    return encode(pixels, width, height, true, png, png_length);
 }

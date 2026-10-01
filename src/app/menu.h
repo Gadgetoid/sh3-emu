@@ -1,4 +1,5 @@
 #pragma once
+#include <SDL3/SDL.h>
 #include <stdbool.h>
 
 enum {
@@ -60,7 +61,11 @@ enum {
     MENU_COUNT,
 };
 
-void menu_install(void);
+void menu_install(SDL_Window *window);
+int  menu_bar_height(void);
+bool menu_event(const SDL_Event *event);
+bool menu_active(void);
+void menu_draw(SDL_Renderer *renderer);
 void menu_ensure(void);
 int  menu_poll(void);
 void menu_set_checked(int item, bool checked);

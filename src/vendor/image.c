@@ -5,8 +5,3 @@
 #define STBI_ONLY_BMP
 #define STBI_NO_STDIO
 #include "stb_image.h"
-
-#define NANOSVG_IMPLEMENTATION
-#include "nanosvg.h"
-#define NANOSVGRAST_IMPLEMENTATION
-#include "nanosvgrast.h"

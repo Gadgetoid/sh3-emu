@@ -7,13 +7,15 @@ package=velo-emu
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
-make -s all headless velo-rapi
+make -s all headless velo-rapi icons
 
 install -D -m 755 velo "$root/usr/bin/velo"
 install -D -m 755 headless "$root/usr/bin/velo-headless"
 install -D -m 755 velo-rapi "$root/usr/bin/velo-rapi"
 install -D -m 644 README.md "$root/usr/share/doc/$package/README.md"
 install -D -m 644 LICENSE "$root/usr/share/doc/$package/LICENSE"
+install -D -m 644 assets/velo.svg "$root/usr/share/icons/hicolor/scalable/apps/$package.svg"
+for size in 16 32 64 128 256 512; do install -D -m 644 "build/icons/velo-$size.png" "$root/usr/share/icons/hicolor/${size}x${size}/apps/$package.png"; done
 for licence in licences/*; do install -D -m 644 "$licence" "$root/usr/share/doc/$package/licences/$(basename "$licence")"; done
 
 cat > "$root/usr/share/doc/$package/copyright" <<EOF
@@ -27,9 +29,9 @@ License: MIT
  See /usr/share/doc/$package/LICENSE
 Comment: Peripheral behaviour, the memory map and the keyboard table follow CERF (MIT), see /usr/share/doc/$package/licences/MIT-CERF.txt
 
-Files: src/vendor/stb_image.h
+Files: src/vendor/stb_image.h src/vendor/stb_truetype.h
 License: public-domain
- stb_image by Sean Barrett, public domain.
+ stb_image and stb_truetype by Sean Barrett, public domain.
 
 Files: src/vendor/nanosvg.h src/vendor/nanosvgrast.h
 License: Zlib
@@ -43,6 +45,8 @@ Type=Application
 Name=Velo
 Comment=Philips Velo 1 emulator
 Exec=velo
+Icon=$package
+StartupWMClass=$package
 Terminal=false
 Categories=Emulator;Game;
 EOF
@@ -62,7 +66,7 @@ Architecture: $arch
 Maintainer: Phil Howard <phil@pimoroni.com>
 Installed-Size: $size
 Depends: $depends
-Recommends: mtools, dosfstools, fdisk
+Recommends: mtools, dosfstools, fdisk, fontconfig, fonts-dejavu-core | fonts-noto-core
 Section: otherosfs
 Priority: optional
 Description: Philips Velo 1 handheld PC emulator

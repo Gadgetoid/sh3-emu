@@ -6,6 +6,16 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 cp velo velo-rapi "$app/Contents/MacOS/"
 
+icons=${ICONS:-build/icons}
+iconset=$(mktemp -d)/Velo.iconset
+mkdir -p "$iconset"
+for size in 16 32 128 256 512; do
+    cp "$icons/velo-$size.png" "$iconset/icon_${size}x${size}.png"
+    cp "$icons/velo-$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
+done
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/Velo.icns"
+rm -rf "$(dirname "$iconset")"
+
 cat > "$app/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -15,6 +25,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleDisplayName</key><string>Velo</string>
     <key>CFBundleIdentifier</key><string>org.velo-emu.Velo</string>
     <key>CFBundleExecutable</key><string>velo</string>
+    <key>CFBundleIconFile</key><string>Velo</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>

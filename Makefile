@@ -15,11 +15,16 @@ LDFLAGS += $(shell pkg-config --libs sdl3) -lm -lz $(THREAD_LIBS)
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Darwin)
-SRC_MENU  = src/app/menu_macos.m
+MENU     ?= macos
 LDFLAGS  += -framework Cocoa
 else
-SRC_MENU  = src/app/menu_none.c
+MENU     ?= bar
 CFLAGS   += -D_GNU_SOURCE
+endif
+ifeq ($(MENU),macos)
+SRC_MENU  = src/app/menu_macos.m
+else
+SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
 endif
 
 ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
@@ -27,7 +32,7 @@ SRC_NET  = src/net/net_gateway.c
 CFLAGS  += $(shell pkg-config --cflags slirp)
 NET_LIBS = $(shell pkg-config --libs slirp)
 ifeq ($(shell pkg-config --exists libcurl && echo yes),yes)
-SRC_NET  += src/net/web_proxy.c src/net/web_image.c src/vendor/vendor.c
+SRC_NET  += src/net/web_proxy.c src/net/web_image.c src/vendor/image.c src/vendor/svg.c
 CFLAGS   += $(shell pkg-config --cflags libcurl)
 NET_LIBS += $(shell pkg-config --libs libcurl)
 else
@@ -59,6 +64,16 @@ $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxy_check.o
 $(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/velo_rapi.o
 	$(CC) -o $@ $^
 
+ICON_TOOL  = $(BUILD)/icon
+ICON_SIZES = 16 32 64 128 256 512 1024
+
+$(ICON_TOOL): $(BUILD)/tools/icon.o $(BUILD)/src/util/png.o $(BUILD)/src/vendor/svg.o
+	$(CC) -o $@ $^ -lm -lz
+
+icons: $(ICON_TOOL) assets/velo.svg
+	@mkdir -p $(BUILD)/icons
+	@for size in $(ICON_SIZES); do $(ICON_TOOL) assets/velo.svg $$size $(BUILD)/icons/velo-$$size.png || exit 1; done
+
 $(BUILD)/src/vendor/%.o: CFLAGS += -w
 
 VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
@@ -82,15 +97,15 @@ $(BUILD)/%.o: %.m
 run: $(PROG)
 	./$(PROG) $(ROM)
 
-app: $(PROG) $(VELORAPI)
+app: $(PROG) $(VELORAPI) icons
 	sh tools/mkapp.sh Velo.app
 
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app
 
-.PHONY: all run clean test check app FORCE
+.PHONY: all run clean test check app icons FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/icon.d
 
 check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
 	sh tests/check.sh

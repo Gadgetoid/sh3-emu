@@ -7,7 +7,7 @@ typedef enum { VIEW_SIMULATED, VIEW_SHARP } view_display_t;
 
 typedef struct view view_t;
 
-view_t        *view_create(SDL_Window *window, SDL_Renderer *renderer, view_display_t display);
+view_t        *view_create(SDL_Window *window, SDL_Renderer *renderer, view_display_t display, int top);
 void           view_destroy(view_t *view);
 void           view_set_display(view_t *view, view_display_t display);
 view_display_t view_display(const view_t *view);

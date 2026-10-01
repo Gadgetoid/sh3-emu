@@ -14,6 +14,7 @@ struct view {
     view_display_t display;
     int            texture_w, texture_h;
     int            output_w, output_h;
+    float          top;
     bool           laid_out;
     SDL_FRect      dest;
     uint32_t       sharp[LCD_WIDTH * LCD_HEIGHT];
@@ -24,11 +25,12 @@ void view_source_size(view_display_t display, int *width, int *height) {
     *height = display == VIEW_SIMULATED ? GRID_H : LCD_HEIGHT;
 }
 
-view_t *view_create(SDL_Window *window, SDL_Renderer *renderer, view_display_t display) {
+view_t *view_create(SDL_Window *window, SDL_Renderer *renderer, view_display_t display, int top) {
     view_t *view = calloc(1, sizeof *view);
     view->window = window;
     view->renderer = renderer;
     view->display = display;
+    view->top = (float)top;
     return view;
 }
 
@@ -56,9 +58,13 @@ static void layout(view_t *view) {
     view->output_h = output_h;
     view->laid_out = true;
 
+    int window_w, window_h;
+    SDL_GetWindowSize(view->window, &window_w, &window_h);
+    float top = window_h > 0 ? floorf(view->top * output_h / window_h) : 0;
+    float area_h = output_h - top;
     int source_w, source_h;
     view_source_size(view->display, &source_w, &source_h);
-    float fit = fminf((float)output_w / source_w, (float)output_h / source_h);
+    float fit = fminf((float)output_w / source_w, area_h / source_h);
     bool whole = fabsf(fit - roundf(fit)) < 0.01f && fit >= 1.0f;
     float scale = whole ? roundf(fit) : fit;
 
@@ -80,7 +86,7 @@ static void layout(view_t *view) {
     view->dest.w = source_w * scale;
     view->dest.h = source_h * scale;
     view->dest.x = floorf((output_w - view->dest.w) / 2);
-    view->dest.y = floorf((output_h - view->dest.h) / 2);
+    view->dest.y = top + floorf((area_h - view->dest.h) / 2);
 }
 
 static void fill_sharp(view_t *view, bool powered) {
@@ -101,7 +107,6 @@ void view_draw(view_t *view, float seconds, bool powered) {
     SDL_SetRenderDrawColor(view->renderer, 0, 0, 0, 255);
     SDL_RenderClear(view->renderer);
     SDL_RenderTexture(view->renderer, view->texture, NULL, &view->dest);
-    SDL_RenderPresent(view->renderer);
 }
 
 bool view_screen_position(view_t *view, float window_x, float window_y, int *x, int *y) {

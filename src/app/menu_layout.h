@@ -1,6 +1,16 @@
 #pragma once
 #include "app/menu.h"
 
+#ifdef __APPLE__
+#define MENU_FILE_MANAGER     "Finder"
+#define MENU_HOST             "Mac"
+#define MENU_SCREENSHOT_PLACE "Desktop"
+#else
+#define MENU_FILE_MANAGER     "File Manager"
+#define MENU_HOST             "Computer"
+#define MENU_SCREENSHOT_PLACE "Pictures"
+#endif
+
 typedef enum {
     MENU_ENTRY_MENU,
     MENU_ENTRY_SUBMENU,
@@ -38,18 +48,18 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SAVE_STATE, "Save State", 's', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_LOAD_STATE, "Load State", 'l', MENU_KEY_PRIMARY },
-    { MENU_ENTRY_ITEM, MENU_SHOW_STATE, "Show Saved State in Finder", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SHOW_STATE, "Show Saved State in " MENU_FILE_MANAGER, 0, 0 },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SAVE_SNAPSHOT, "Save Snapshot\xe2\x80\xa6", 's', MENU_KEY_PRIMARY | MENU_KEY_CONTROL },
     { MENU_ENTRY_ITEM, MENU_LOAD_SNAPSHOT, "Load Snapshot\xe2\x80\xa6", 'l', MENU_KEY_PRIMARY | MENU_KEY_CONTROL },
-    { MENU_ENTRY_ITEM, MENU_SHOW_SNAPSHOTS, "Show Snapshots in Finder", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SHOW_SNAPSHOTS, "Show Snapshots in " MENU_FILE_MANAGER, 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "Edit", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_COPY_SCREEN, "Copy Screen", 'c', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_PASTE, "Paste as Typing", 'v', MENU_KEY_PRIMARY },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SAVE_SCREENSHOT, "Save Screenshot to Desktop", 's', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
+    { MENU_ENTRY_ITEM, MENU_SAVE_SCREENSHOT, "Save Screenshot to " MENU_SCREENSHOT_PLACE, 's', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 
     { MENU_ENTRY_MENU, 0, "View", 0, 0 },
@@ -100,7 +110,7 @@ static const menu_entry_t MENU_ENTRIES[] = {
 
     { MENU_ENTRY_MENU, 0, "Desktop", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SEND_FILES, "Send Files to Velo\xe2\x80\xa6", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_FETCH_DOCUMENTS, "Copy My Documents to Mac\xe2\x80\xa6", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_FETCH_DOCUMENTS, "Copy My Documents to " MENU_HOST "\xe2\x80\xa6", 0, 0 },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SHARED_FOLDER, "Shared Folder\xe2\x80\xa6", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SYNC_NOW, "Sync Shared Folder Now", 0, 0 },

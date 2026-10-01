@@ -62,7 +62,8 @@ static NSEventModifierFlags cocoa_modifiers(int modifiers) {
     return flags;
 }
 
-void menu_install(void) {
+void menu_install(SDL_Window *window) {
+    (void)window;
     target = [[VeloMenuTarget alloc] init];
     NSMenu *stack[4];
     int depth = 0;
@@ -90,6 +91,23 @@ void menu_install(void) {
         }
     }
     attach_menus();
+}
+
+int menu_bar_height(void) {
+    return 0;
+}
+
+bool menu_event(const SDL_Event *event) {
+    (void)event;
+    return false;
+}
+
+bool menu_active(void) {
+    return false;
+}
+
+void menu_draw(SDL_Renderer *renderer) {
+    (void)renderer;
 }
 
 void menu_ensure(void) {

@@ -7,15 +7,15 @@
 #include <time.h>
 
 #include "app/desktop.h"
-#include "core/lcd.h"
-#include "core/machine.h"
 #include "app/menu.h"
-#include "net/net_gateway.h"
-#include "util/options.h"
-#include "util/png.h"
 #include "app/typer.h"
 #include "app/view.h"
+#include "core/lcd.h"
+#include "core/machine.h"
+#include "net/net_gateway.h"
 #include "rapi/rapi.h"
+#include "util/options.h"
+#include "util/png.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -33,6 +33,12 @@
 #define BACKLIGHT_PRESS_SECONDS 0.1
 #define AUDIO_CHUNK 8192
 #define WINDOW_TITLE     "Philips Velo 1"
+
+#ifdef __APPLE__
+#define SCREENSHOT_FOLDER SDL_FOLDER_DESKTOP
+#else
+#define SCREENSHOT_FOLDER SDL_FOLDER_PICTURES
+#endif
 
 typedef struct {
     SDL_Keycode key;
@@ -514,18 +520,25 @@ static bool confirm_reset(SDL_Window *window) {
     return SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1;
 }
 
-static void open_in_finder(const char *path) {
-    extern char **environ;
-    char *arguments[] = { "open", (char *)path, NULL };
-    pid_t pid;
-    posix_spawnp(&pid, "open", NULL, NULL, arguments, environ);
+static void open_folder(const char *path) {
+    char url[2048];
+    snprintf(url, sizeof url, "file://%s", path);
+    SDL_OpenURL(url);
 }
 
-static void reveal_in_finder(const char *path) {
+static void reveal_file(const char *path) {
+#ifdef __APPLE__
     extern char **environ;
     char *arguments[] = { "open", "-R", (char *)path, NULL };
     pid_t pid;
     posix_spawnp(&pid, "open", NULL, NULL, arguments, environ);
+#else
+    char folder[1100];
+    snprintf(folder, sizeof folder, "%s", path);
+    char *slash = strrchr(folder, '/');
+    if (slash && slash != folder) *slash = 0;
+    open_folder(folder);
+#endif
 }
 
 static const char *SYSTEM_NAMES[] = { "", "CE 1.0", "CE 2.0" };
@@ -596,7 +609,7 @@ static bool no_roms_dialog(void) {
     };
     const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No Velo ROM found", message, 2, buttons, NULL };
     int chosen = 0;
-    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_in_finder(folder);
+    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_folder(folder);
     return false;
 }
 
@@ -678,7 +691,9 @@ static bool save_screenshot(view_t *view, char *path, size_t size) {
     localtime_r(&now, &local);
     char stamp[64];
     strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
-    snprintf(path, size, "%s/Desktop/Velo Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
+    const char *folder = SDL_GetUserFolder(SCREENSHOT_FOLDER);
+    if (folder) snprintf(path, size, "%sVelo Screenshot %s.png", folder, stamp);
+    else snprintf(path, size, "%s/Velo Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
     FILE *file = fopen(path, "wb");
     bool saved = file && fwrite(png, 1, length, file) == length;
     if (file) fclose(file);
@@ -689,7 +704,7 @@ static bool save_screenshot(view_t *view, char *path, size_t size) {
 static void window_size(view_display_t display, uint32_t scale, int *width, int *height) {
     view_source_size(display, width, height);
     *width = *width * WINDOW_SCALE * (int)scale / 100;
-    *height = *height * WINDOW_SCALE * (int)scale / 100;
+    *height = *height * WINDOW_SCALE * (int)scale / 100 + menu_bar_height();
 }
 
 static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
@@ -794,6 +809,7 @@ int main(int argc, char **argv) {
     if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
     int system = machine_rom_system(machine);
 
+    SDL_SetAppMetadata("Velo", options_version(), "velo-emu");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     int window_width, window_height;
     window_size((view_display_t)settings.display, settings.scale, &window_width, &window_height);
@@ -802,12 +818,12 @@ int main(int argc, char **argv) {
     if (!renderer) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_SetRenderVSync(renderer, 1);
 
-    view_t *view = view_create(window, renderer, (view_display_t)settings.display);
+    view_t *view = view_create(window, renderer, (view_display_t)settings.display, menu_bar_height());
 
 
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
 
-    menu_install();
+    menu_install(window);
 
     SDL_AudioSpec audio_spec = { SDL_AUDIO_S16, 1, 11025 };
     SDL_AudioStream *audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, NULL, NULL);
@@ -848,6 +864,10 @@ int main(int argc, char **argv) {
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            if (menu_event(&event)) {
+                if (menu_active()) release_keys(machine, held, -1);
+                continue;
+            }
             switch (event.type) {
             case SDL_EVENT_QUIT:
                 running = false;
@@ -1035,7 +1055,7 @@ int main(int argc, char **argv) {
                 backlight_release_at = machine_cycles(machine) + (uint64_t)(BACKLIGHT_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_SOUND: sound = !sound; break;
-            case MENU_SHOW_STATE: reveal_in_finder(state); break;
+            case MENU_SHOW_STATE: reveal_file(state); break;
             case MENU_SAVE_SNAPSHOT: {
                 static const SDL_DialogFileFilter filters[] = { { "Velo snapshot", "state" } };
                 static char default_snapshot[1200];
@@ -1053,7 +1073,7 @@ int main(int argc, char **argv) {
             case MENU_SHOW_SNAPSHOTS: {
                 char folder[1100];
                 snapshot_folder(folder, sizeof folder);
-                open_in_finder(folder);
+                open_folder(folder);
                 break;
             }
             case MENU_MEMORY_4:
@@ -1290,6 +1310,8 @@ int main(int argc, char **argv) {
         lcd_set_backlight(machine_backlight(machine));
         machine_screen(machine, lcd_framebuffer);
         view_draw(view, (float)elapsed, machine_lcd_enabled(machine));
+        menu_draw(renderer);
+        SDL_RenderPresent(renderer);
     }
 
     machine_save(machine, state, (int64_t)time(NULL));
