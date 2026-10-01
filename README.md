@@ -32,6 +32,8 @@ States, snapshots, ROMs, `emu.ini`, `rapi.sock` and the sync manifest live in `~
 
 ## Build
 
+On Linux (tested on Ubuntu 26.04): `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev mtools dosfstools`, then the same `make` targets. There are no menus there yet, so the GUI is limited to its command-line options; `headless`, `velo-rapi` and the tests work as on macOS. Card images are made with `mkfs.fat` and `mtools` instead of `hdiutil`.
+
 ```
 brew install sdl3 libslirp
 make         # velo and velo-rapi

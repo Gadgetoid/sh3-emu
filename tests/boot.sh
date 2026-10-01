@@ -3,6 +3,25 @@ set -e
 ROM=${1:-rom/nk.bin}
 OUT=${TMPDIR:-/tmp}/velo-test
 mkdir -p "$OUT"
+card_delete() {
+    if [ "$(uname -s)" = Darwin ]; then
+        mount=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "$1" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
+        rm "$mount"/$2
+        rm -rf "$mount/.fseventsd" "$mount/.Spotlight-V100" "$mount/.Trashes"
+        hdiutil detach -quiet "$mount"
+    else
+        mdel -i "$1@@512" "::$2"
+    fi
+}
+card_extract() {
+    if [ "$(uname -s)" = Darwin ]; then
+        mount=$(hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage "$1" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
+        cp -R "$mount/$2" "$3"
+        hdiutil detach -quiet "$mount"
+    else
+        mcopy -i "$1@@512" -s -n "::$2" "$3"
+    fi
+}
 check() {
     name=$1; expected=$2; shift 2
     ./headless "$ROM" --pgm="$OUT/$name.pgm" "$@" 2>/dev/null
@@ -115,21 +134,18 @@ Tool = string "\Windows\LoadTest\tool.exe"
     for i in 1 2 3 4 5 6; do head -c 8000 /dev/urandom > "$OUT/FRAG/gap$i.bin"; head -c 1000 /dev/urandom > "$OUT/FRAG/keep$i.bin"; done
     head -c 40000 /dev/urandom > "$OUT/large.bin"
     sh tools/mkcard.sh "$OUT/frag.img" 8 "$OUT/FRAG"
-    mount=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "$OUT/frag.img" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
-    rm "$mount"/FRAG/gap*.bin
-    rm -rf "$mount/.fseventsd" "$mount/.Spotlight-V100" "$mount/.Trashes"
-    hdiutil detach -quiet "$mount"
+    card_delete "$OUT/frag.img" "FRAG/gap*.bin"
     ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --card="$OUT/frag.img" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
     ./velo-rapi --socket="$SOCKET" put "$OUT/large.bin" "/PC Card/FRAG/large.bin"
     kill $EMULATOR
     wait $EMULATOR 2>/dev/null || true
-    mount=$(hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage "$OUT/frag.img" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
+    rm -rf "$OUT/FRAG-BACK"
+    card_extract "$OUT/frag.img" FRAG "$OUT/FRAG-BACK"
     intact=yes
-    cmp -s "$mount/FRAG/large.bin" "$OUT/large.bin" || intact=no
-    for i in 1 2 3 4 5 6; do cmp -s "$mount/FRAG/keep$i.bin" "$OUT/FRAG/keep$i.bin" || intact=no; done
-    hdiutil detach -quiet "$mount"
+    cmp -s "$OUT/FRAG-BACK/large.bin" "$OUT/large.bin" || intact=no
+    for i in 1 2 3 4 5 6; do cmp -s "$OUT/FRAG-BACK/keep$i.bin" "$OUT/FRAG/keep$i.bin" || intact=no; done
     if [ $intact = yes ]; then echo "ok   card_fragmented_write"; else echo "FAIL card_fragmented_write"; exit 1; fi
     rm -rf "$OUT/ALPHA" "$OUT/BRAVO"
     mkdir -p "$OUT/ALPHA" "$OUT/BRAVO"

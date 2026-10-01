@@ -19,6 +19,7 @@ SRC_MENU  = src/menu_macos.m
 LDFLAGS  += -framework Cocoa
 else
 SRC_MENU  = src/menu_none.c
+CFLAGS   += -D_GNU_SOURCE
 endif
 
 ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
@@ -34,7 +35,7 @@ SRC_NET  += src/webproxy_none.c
 endif
 LDFLAGS += $(NET_LIBS)
 else
-SRC_NET  = src/netgw_none.c
+SRC_NET  = src/netgw_none.c src/webproxy_none.c
 endif
 
 SRC_MACHINE = src/mips.c src/machine.c src/pccard.c src/uart.c src/keytext.c
