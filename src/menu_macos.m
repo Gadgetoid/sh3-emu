@@ -116,6 +116,17 @@ void menu_set_checked(int item, bool checked) {
     if (items[item].state != state) items[item].state = state;
 }
 
+void menu_set_title(int item, const char *title) {
+    if (item < 0 || item >= MENU_COUNT || !items[item]) return;
+    NSString *text = [NSString stringWithUTF8String:title];
+    if (![items[item].title isEqualToString:text]) items[item].title = text;
+}
+
+void menu_set_hidden(int item, bool hidden) {
+    if (item < 0 || item >= MENU_COUNT || !items[item]) return;
+    if (items[item].hidden != hidden) items[item].hidden = hidden;
+}
+
 int menu_modifiers(void) {
     NSEventModifierFlags flags = [NSEvent modifierFlags];
     int modifiers = MENU_MOD_KNOWN;

@@ -16,6 +16,7 @@
 #include "view.h"
 #include "rapi.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -115,6 +116,31 @@ typedef struct {
     uint8_t  queue[SERIAL_QUEUE];
     size_t   queued;
 } serial_t;
+
+#define SERIAL_PORT_MAX   16
+#define PORT_SCAN_SECONDS 2.0
+
+static bool is_serial_port(const char *name) {
+    return !strncmp(name, "cu.", 3) || !strncmp(name, "ttyUSB", 6) || !strncmp(name, "ttyACM", 6);
+}
+
+static int compare_names(const void *a, const void *b) {
+    return strcmp((const char *)a, (const char *)b);
+}
+
+static int list_serial_ports(char ports[][64], int max) {
+    DIR *dev = opendir("/dev");
+    if (!dev) return 0;
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dev)) && count < max) {
+        if (!is_serial_port(entry->d_name) || strlen(entry->d_name) + 6 > 64) continue;
+        snprintf(ports[count++], 64, "/dev/%s", entry->d_name);
+    }
+    closedir(dev);
+    qsort(ports, (size_t)count, 64, compare_names);
+    return count;
+}
 
 static speed_t speed_for(uint32_t baud) {
     static const struct { uint32_t baud; speed_t speed; } speeds[] = {
@@ -259,7 +285,7 @@ static void card_dialog_done(void *userdata, const char *const *files, int filte
     card_chosen = true;
 }
 
-typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT, PICK_SERIAL_DEVICE } pick_kind_t;
+typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -650,6 +676,9 @@ int main(int argc, char **argv) {
     serial = (serial_t){ SERIAL_OFF, NULL, -1, -1, "", settings.user_agent, settings.serial_device, 0, { 0 }, 0 };
     char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
     static typer_t typer;
+    static char ports[SERIAL_PORT_MAX][64];
+    int port_count = 0;
+    double since_port_scan = 0;
     static dropped_t dropped;
     rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
@@ -861,11 +890,15 @@ int main(int argc, char **argv) {
                 SDL_ShowOpenFileDialog(card_dialog_done, NULL, window, filters, 2, NULL, false);
                 break;
             }
-            case MENU_SERIAL_DEVICE: {
-                static const SDL_DialogFileFilter filters[] = { { "Serial ports", "*" } };
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SERIAL_DEVICE, window, filters, 1, "/dev", false);
+            default:
+                if (item >= MENU_SERIAL_PORT_FIRST && item <= MENU_SERIAL_PORT_LAST && item - MENU_SERIAL_PORT_FIRST < port_count) {
+                    snprintf(settings.serial_device, sizeof settings.serial_device, "%s", ports[item - MENU_SERIAL_PORT_FIRST]);
+                    settings_save(&settings);
+                    serial_reconnect_at = 0;
+                    notice = serial_open(&serial, machine, SERIAL_DEVICE);
+                    notice_left = NOTICE_SECONDS * 3;
+                }
                 break;
-            }
             case MENU_SERIAL_NETWORK:
             case MENU_SERIAL_PTY:
             case MENU_SERIAL_OFF:
@@ -906,7 +939,6 @@ int main(int argc, char **argv) {
                 notice = "card ejected";
                 notice_left = NOTICE_SECONDS;
                 break;
-            default: break;
             }
         }
         if (card_chosen) {
@@ -922,12 +954,6 @@ int main(int argc, char **argv) {
                 for (int i = 0; i < picked_count; i++) files[i] = picked[i];
                 files[picked_count] = NULL;
                 desktop_send(desktop, files);
-            } else if (picked_kind == PICK_SERIAL_DEVICE) {
-                snprintf(settings.serial_device, sizeof settings.serial_device, "%s", picked[0]);
-                settings_save(&settings);
-                serial_reconnect_at = 0;
-                notice = serial_open(&serial, machine, SERIAL_DEVICE);
-                notice_left = NOTICE_SECONDS * 3;
             } else if (picked_kind == PICK_SAVE_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 char path[1100];
@@ -980,7 +1006,19 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
         menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
-        menu_set_checked(MENU_SERIAL_DEVICE, serial.mode == SERIAL_DEVICE);
+        if (since_port_scan <= 0) {
+            since_port_scan = PORT_SCAN_SECONDS;
+            port_count = list_serial_ports(ports, SERIAL_PORT_MAX);
+        }
+        for (int i = 0; i < SERIAL_PORT_MAX; i++) {
+            int port_item = MENU_SERIAL_PORT_FIRST + i;
+            bool shown = i < port_count || (i == 0 && port_count == 0);
+            menu_set_hidden(port_item, !shown);
+            if (!shown) continue;
+            menu_set_title(port_item, port_count ? ports[i] + 5 : "No serial ports found");
+            menu_set_enabled(port_item, port_count > 0);
+            menu_set_checked(port_item, port_count && serial.mode == SERIAL_DEVICE && !strcmp(settings.serial_device, ports[i]));
+        }
         menu_set_enabled(MENU_SERIAL_OFF, serial.mode != SERIAL_OFF);
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
@@ -1013,6 +1051,7 @@ int main(int argc, char **argv) {
         }
         set_title(window, notice, paused, machine_suspended(machine));
         since_autosave += elapsed;
+        since_port_scan -= elapsed;
         if (since_autosave >= AUTOSAVE_SECONDS) {
             since_autosave = 0;
             machine_save(machine, state, (int64_t)time(NULL));

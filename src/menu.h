@@ -15,7 +15,8 @@ enum {
     MENU_SERIAL_NETWORK,
     MENU_SERIAL_PTY,
     MENU_SERIAL_OFF,
-    MENU_SERIAL_DEVICE,
+    MENU_SERIAL_PORT_FIRST,
+    MENU_SERIAL_PORT_LAST = MENU_SERIAL_PORT_FIRST + 15,
     MENU_SHOW_STATE,
     MENU_MEMORY_4,
     MENU_MEMORY_8,
@@ -62,6 +63,8 @@ void menu_ensure(void);
 int  menu_poll(void);
 void menu_set_checked(int item, bool checked);
 void menu_set_enabled(int item, bool enabled);
+void menu_set_title(int item, const char *title);
+void menu_set_hidden(int item, bool hidden);
 
 enum { MENU_MOD_SHIFT = 1, MENU_MOD_CONTROL = 2, MENU_MOD_ALT = 4, MENU_MOD_KNOWN = 8 };
 int  menu_modifiers(void);
