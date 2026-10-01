@@ -446,6 +446,13 @@ static int scale_index(uint32_t scale) {
     return -1;
 }
 
+static void copy_setting(char *destination, size_t size, const char *value) {
+    size_t length = strcspn(value, "\r\n");
+    if (length >= size) length = size - 1;
+    memcpy(destination, value, length);
+    destination[length] = 0;
+}
+
 static settings_t settings_load(void) {
     settings_t settings = { .memory = 4, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
     char path[1100];
@@ -462,16 +469,9 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "connect_at_launch=%u", &value) == 1) settings.connect_at_launch = value;
         else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
-        else if (!strncmp(line, "user_agent=", 11)) {
-            line[strcspn(line, "\r\n")] = 0;
-            snprintf(settings.user_agent, sizeof settings.user_agent, "%s", line + 11);
-        } else if (!strncmp(line, "serial_device=", 14)) {
-            line[strcspn(line, "\r\n")] = 0;
-            snprintf(settings.serial_device, sizeof settings.serial_device, "%s", line + 14);
-        } else if (!strncmp(line, "shared_folder=", 14)) {
-            line[strcspn(line, "\r\n")] = 0;
-            snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", line + 14);
-        }
+        else if (!strncmp(line, "user_agent=", 11)) copy_setting(settings.user_agent, sizeof settings.user_agent, line + 11);
+        else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
+        else if (!strncmp(line, "shared_folder=", 14)) copy_setting(settings.shared_folder, sizeof settings.shared_folder, line + 14);
     }
     fclose(file);
     return settings;
