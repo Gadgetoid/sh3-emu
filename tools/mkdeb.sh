@@ -13,12 +13,19 @@ install -D -m 755 velo "$root/usr/bin/velo"
 install -D -m 755 headless "$root/usr/bin/velo-headless"
 install -D -m 755 velo-rapi "$root/usr/bin/velo-rapi"
 install -D -m 644 README.md "$root/usr/share/doc/$package/README.md"
+install -D -m 644 LICENSE "$root/usr/share/doc/$package/LICENSE"
 for licence in licences/*; do install -D -m 644 "$licence" "$root/usr/share/doc/$package/licences/$(basename "$licence")"; done
 
 cat > "$root/usr/share/doc/$package/copyright" <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: velo-emu
-Comment: No ROMs are included. velo-emu's own licence is not yet stated.
+Comment: No ROMs are included.
+
+Files: *
+Copyright: 2026 Phil Howard
+License: MIT
+ See /usr/share/doc/$package/LICENSE
+Comment: Peripheral behaviour, the memory map and the keyboard table follow CERF (MIT), see /usr/share/doc/$package/licences/MIT-CERF.txt
 
 Files: src/vendor/stb_image.h
 License: public-domain
@@ -27,9 +34,6 @@ License: public-domain
 Files: src/vendor/nanosvg.h src/vendor/nanosvgrast.h
 License: Zlib
  See /usr/share/doc/$package/licences/Zlib-nanosvg.txt
-
-Files: *
-Comment: Peripheral behaviour, the memory map and the keyboard table follow CERF (MIT), see /usr/share/doc/$package/licences/MIT-CERF.txt
 EOF
 
 mkdir -p "$root/usr/share/applications"

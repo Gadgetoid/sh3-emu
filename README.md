@@ -266,6 +266,10 @@ Guest time is the instruction count at 36.864 MHz. Registers that aren't modelle
 
 Not emulated: sound input, UART B, IrDA, PC Cards other than CompactFlash, and Miniature Cards other than the DRAM card and the CE 2.0 ROM card.
 
+## Licence
+
+MIT, see `LICENSE`. ROMs and Windows CE software are not included.
+
 ## Credits
 
 Peripheral behaviour, the memory map and the keyboard table follow [CERF](https://github.com/gweslab/cerf) (MIT, `licences/MIT-CERF.txt`). The web proxy decodes images with [stb_image](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).
