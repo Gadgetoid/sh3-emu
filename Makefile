@@ -71,10 +71,13 @@ $(BUILD)/%.o: %.m
 run: $(PROG)
 	./$(PROG) $(ROM)
 
-clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
+app: $(PROG) $(VELORAPI)
+	sh tools/mkapp.sh Velo.app
 
-.PHONY: all run clean test
+clean:
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app
+
+.PHONY: all run clean test app
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxycheck.d $(BUILD)/tools/velorapi.d
 

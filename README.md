@@ -18,6 +18,10 @@ The ROM's shortcuts and desktop icons point at `\Storage Card`, CE 2.0's name fo
 
 `make test` runs a few CE 2.0 checks when `rom/nk-ce2.bin` exists, or with `make test CE2_ROM=PATH`.
 
+### Velo.app
+
+`make app` builds `Velo.app` with `velo` and `velo-rapi` in `Contents/MacOS` and the Homebrew libraries they use (SDL3, libslirp, GLib, libintl, PCRE2) in `Contents/Frameworks`, so it runs without Homebrew. It's ad-hoc signed and built for this Mac's architecture, so on another Mac it needs right-click > Open the first time. Put the ROMs in `~/Library/Application Support/Velo/roms` (see below).
+
 ### ROMs and the System menu
 
 Run without a ROM (or from the app), `velo` looks in the `roms` folder of its data folder and opens the last system used. Put the CE 1.0 `nk.bin` and the merged CE 2.0 image there under any names: each file is identified by where it loads, and the larger CE 2.0 image is preferred, so the merged one wins over the stock card ROM. Run > System switches between Windows CE 1.0 and Windows CE 2.0, saving the running machine and restoring the other one's state; a system with no ROM in the folder is greyed out. With no ROMs at all it says where to put them. A ROM given on the command line runs as before.
@@ -33,6 +37,7 @@ brew install sdl3 libslirp
 make         # velo and velo-rapi
 make run
 make headless
+make app     # Velo.app, with its Homebrew libraries bundled and an ad-hoc signature
 make test    # framebuffer hashes at the wizard, desktop, suspend/resume, a card listing and 16 and 32 MB System info; a saved state resuming identically; PPP up; the web proxy's rewriting, image conversion and a page through it in Pocket IE; a file round trip, a folder sync, the proxy and 115200 setup and a `.load` script over RAPI; a large write to a fragmented card; backlight key
 ```
 
