@@ -47,6 +47,12 @@
 #define REPLY_MAX       (4 * 1024 * 1024)
 #define REPLY_TIMEOUT   120
 
+#ifdef MSG_NOSIGNAL
+#define SEND_FLAGS MSG_NOSIGNAL
+#else
+#define SEND_FLAGS 0
+#endif
+
 struct rapi {
     int      socket;
     uint32_t os_major;
@@ -208,7 +214,7 @@ static bool socket_read(int socket, void *data, size_t length) {
 static bool socket_write(int socket, const void *data, size_t length) {
     const uint8_t *p = data;
     while (length) {
-        ssize_t sent = send(socket, p, length, 0);
+        ssize_t sent = send(socket, p, length, SEND_FLAGS);
         if (sent <= 0) return false;
         p += sent;
         length -= (size_t)sent;
