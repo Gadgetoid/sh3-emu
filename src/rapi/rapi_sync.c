@@ -119,7 +119,11 @@ static void scan_mac(sync_t *sync, entries_t *entries, const char *relative) {
     closedir(dir);
 }
 
-static bool scan_velo(sync_t *sync, entries_t *entries, const char *relative) {
+static bool scan_velo(sync_t *sync, entries_t *entries, const char *relative, int depth) {
+    if (depth > RAPI_FOLDER_DEPTH_MAX) {
+        sync_log(sync, "can't list %s: folders nested too deeply", relative);
+        return false;
+    }
     char pattern[PATH_SIZE * 2];
     remote_path(sync, relative, pattern, sizeof pattern - 2);
     strcat(pattern, "\\*");
@@ -134,7 +138,7 @@ static bool scan_velo(sync_t *sync, entries_t *entries, const char *relative) {
         char child[PATH_SIZE];
         join_relative(child, sizeof child, relative, files[i].name);
         if (files[i].attributes & RAPI_ATTRIBUTE_DIRECTORY) {
-            success = scan_velo(sync, entries, child);
+            success = scan_velo(sync, entries, child, depth + 1);
             continue;
         }
         entry_t *entry = find_or_add(entries, child);
@@ -371,7 +375,7 @@ bool rapi_sync_run(rapi_t *rapi, const char *folder, const char *remote_root, co
     sync.free_space = rapi_store(rapi, &store) ? store.free_size : 0;
     load_manifest(&sync, &entries, manifest_path);
     scan_mac(&sync, &entries, "");
-    if (!scan_velo(&sync, &entries, "")) {
+    if (!scan_velo(&sync, &entries, "", 0)) {
         free(entries.items);
         return false;
     }

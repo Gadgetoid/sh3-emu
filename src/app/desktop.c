@@ -90,12 +90,19 @@ static void run_send(desktop_t *desktop, rapi_t *rapi) {
     set_status(desktop, "sent %zu file%s to \\My Documents", sent, sent == 1 ? "" : "s");
 }
 
-static bool fetch_folder(desktop_t *desktop, rapi_t *rapi, const char *remote, const char *local, size_t *copied) {
+static bool fetch_folder(desktop_t *desktop, rapi_t *rapi, const char *remote, const char *local, int depth, size_t *copied) {
+    if (depth > RAPI_FOLDER_DEPTH_MAX) {
+        set_status(desktop, "can't copy %s: folders nested too deeply", remote);
+        return false;
+    }
     char pattern[PATH_SIZE * 2];
     snprintf(pattern, sizeof pattern, "%s\\*", remote);
     rapi_file_t *files;
     size_t count;
-    if (!rapi_list(rapi, pattern, &files, &count)) return false;
+    if (!rapi_list(rapi, pattern, &files, &count)) {
+        set_status(desktop, "%s", rapi_error(rapi));
+        return false;
+    }
     mkdir(local, 0755);
     bool success = true;
     for (size_t i = 0; i < count && success; i++) {
@@ -103,12 +110,13 @@ static bool fetch_folder(desktop_t *desktop, rapi_t *rapi, const char *remote, c
         snprintf(child_remote, sizeof child_remote, "%s\\%s", remote, files[i].name);
         snprintf(child_local, sizeof child_local, "%s/%s", local, files[i].name);
         if (files[i].attributes & RAPI_ATTRIBUTE_DIRECTORY) {
-            success = fetch_folder(desktop, rapi, child_remote, child_local, copied);
+            success = fetch_folder(desktop, rapi, child_remote, child_local, depth + 1, copied);
             continue;
         }
         progress_t progress = { desktop, files[i].name, 0, 1 };
         success = rapi_download(rapi, child_remote, child_local, show_progress, &progress);
         if (success) (*copied)++;
+        else set_status(desktop, "%s", rapi_error(rapi));
     }
     free(files);
     return success;
@@ -116,10 +124,8 @@ static bool fetch_folder(desktop_t *desktop, rapi_t *rapi, const char *remote, c
 
 static void run_fetch(desktop_t *desktop, rapi_t *rapi) {
     size_t copied = 0;
-    if (fetch_folder(desktop, rapi, REMOTE_HOME, desktop->folder, &copied)) {
+    if (fetch_folder(desktop, rapi, REMOTE_HOME, desktop->folder, 0, &copied)) {
         set_status(desktop, "copied %zu file%s from \\My Documents", copied, copied == 1 ? "" : "s");
-    } else {
-        set_status(desktop, "%s", rapi_error(rapi));
     }
 }
 

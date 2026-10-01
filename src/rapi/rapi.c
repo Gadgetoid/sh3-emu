@@ -46,6 +46,7 @@
 #define CHUNK_SIZE      8192
 #define REPLY_MAX       (4 * 1024 * 1024)
 #define REPLY_TIMEOUT   120
+#define FIND_ENTRY_MIN  20
 
 #ifdef MSG_NOSIGNAL
 #define SEND_FLAGS MSG_NOSIGNAL
@@ -361,6 +362,16 @@ bool rapi_store(rapi_t *rapi, rapi_store_t *store) {
     return reply_u32(rapi, &store->store_size) && reply_u32(rapi, &store->free_size);
 }
 
+static bool safe_file_name(const uint8_t *units, uint32_t unit_count, const char *name) {
+    bool ended = false;
+    for (uint32_t i = 0; i < unit_count; i++) {
+        bool terminator = !units[i * 2] && !units[i * 2 + 1];
+        if (ended && !terminator) return false;
+        if (terminator) ended = true;
+    }
+    return *name && strcmp(name, ".") && strcmp(name, "..") && !strpbrk(name, "/\\");
+}
+
 bool rapi_list(rapi_t *rapi, const char *pattern, rapi_file_t **files, size_t *count) {
     *files = NULL;
     *count = 0;
@@ -370,25 +381,36 @@ bool rapi_list(rapi_t *rapi, const char *pattern, rapi_file_t **files, size_t *c
     if (!message_begin(&message, COMMAND_FIND_ALL_FILES) || !message_string(&message, pattern) || !message_u32(&message, flags)) return false;
     if (!call(rapi, &message) || !reply_u32(rapi, &found)) return false;
     if (!found) return true;
+    if (found > (rapi->reply_length - rapi->reply_offset) / FIND_ENTRY_MIN) {
+        set_error(rapi, "short reply from the Velo");
+        return false;
+    }
     rapi_file_t *list = calloc(found, sizeof *list);
     if (!list) return false;
+    size_t kept = 0;
     for (uint32_t i = 0; i < found; i++) {
+        rapi_file_t *file = &list[kept];
         uint32_t name_units, low, high;
-        if (!reply_u32(rapi, &name_units) || !reply_u32(rapi, &list[i].attributes) || !reply_u32(rapi, &low) ||
-            !reply_u32(rapi, &high) || !reply_u32(rapi, &list[i].size)) {
+        if (!reply_u32(rapi, &name_units) || !reply_u32(rapi, &file->attributes) || !reply_u32(rapi, &low) ||
+            !reply_u32(rapi, &high) || !reply_u32(rapi, &file->size)) {
             free(list);
             return false;
         }
-        list[i].write_time = (uint64_t)high << 32 | low;
+        file->write_time = (uint64_t)high << 32 | low;
         const uint8_t *name = reply_bytes(rapi, (size_t)name_units * 2);
         if (!name) {
             free(list);
             return false;
         }
-        utf16_to_utf8(name, name_units, list[i].name, sizeof list[i].name);
+        utf16_to_utf8(name, name_units, file->name, sizeof file->name);
+        if (safe_file_name(name, name_units, file->name)) kept++;
+    }
+    if (!kept) {
+        free(list);
+        return true;
     }
     *files = list;
-    *count = found;
+    *count = kept;
     return true;
 }
 
