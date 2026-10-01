@@ -1394,7 +1394,8 @@ static bool write_record(FILE *file, const char *name, const void *data, uint32_
 
 bool machine_save(machine_t *m, const char *path, int64_t host_time) {
     char temporary[1100];
-    snprintf(temporary, sizeof temporary, "%s.tmp", path);
+    int written = snprintf(temporary, sizeof temporary, "%s.tmp", path);
+    if (written < 0 || (size_t)written >= sizeof temporary) return false;
     FILE *file = fopen(temporary, "wb");
     if (!file) return false;
     bool ok = fwrite(STATE_MAGIC, sizeof STATE_MAGIC, 1, file) == 1 &&
