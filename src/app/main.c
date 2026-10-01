@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <spawn.h>
 #include <termios.h>
 #include <unistd.h>
@@ -507,12 +508,27 @@ static void open_folder(const char *path) {
     SDL_OpenURL(url);
 }
 
+#define REVEAL_CHILDREN_MAX 16
+
+static pid_t reveal_children[REVEAL_CHILDREN_MAX];
+static int reveal_child_count = 0;
+
+static void reap_reveal_children(void) {
+    int kept = 0;
+    for (int i = 0; i < reveal_child_count; i++) {
+        if (waitpid(reveal_children[i], NULL, WNOHANG) == 0) reveal_children[kept++] = reveal_children[i];
+    }
+    reveal_child_count = kept;
+}
+
 static void reveal_file(const char *path) {
 #ifdef __APPLE__
     extern char **environ;
     char *arguments[] = { "open", "-R", (char *)path, NULL };
     pid_t pid;
-    posix_spawnp(&pid, "open", NULL, NULL, arguments, environ);
+    if (posix_spawnp(&pid, "open", NULL, NULL, arguments, environ) != 0) return;
+    if (reveal_child_count < REVEAL_CHILDREN_MAX) reveal_children[reveal_child_count++] = pid;
+    else waitpid(pid, NULL, 0);
 #else
     char folder[1100];
     snprintf(folder, sizeof folder, "%s", path);
@@ -1207,6 +1223,7 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
         menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
+        reap_reveal_children();
         if (since_port_scan <= 0) {
             since_port_scan = PORT_SCAN_SECONDS;
             port_count = list_serial_ports(ports, SERIAL_PORT_MAX);
