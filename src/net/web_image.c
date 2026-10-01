@@ -10,7 +10,7 @@
 #include "vendor/nanosvgrast.h"
 #include "vendor/stb_image.h"
 
-#define MAX_SOURCE_PIXELS (64u * 1024 * 1024)
+#define MAX_SOURCE_PIXELS (16u * 1024 * 1024)
 #define SVG_DPI           96.0f
 #define GREY_LEVELS       4
 #define MIN_CODE_SIZE     2
@@ -19,6 +19,8 @@
 #define MAX_CODE          4095
 #define USE_PASSES        8
 #define SVG_MAX_LENGTH    (8u * 1024 * 1024)
+#define USE_MAX           4096
+#define SVG_SCAN_MAX      (256u * 1024 * 1024)
 
 typedef struct {
     uint8_t *data;
@@ -208,11 +210,12 @@ static bool element_name_at(const char *p, const char *end, const char *name) {
     return next == '>' || next == '/' || isspace((unsigned char)next);
 }
 
-static bool find_element(const char *text, const char *end, const char *id, const char **start, const char **finish, char *name, size_t name_size) {
+static bool find_element(const char *text, const char *end, const char *id, const char **start, const char **finish, char *name, size_t name_size, size_t *scanned) {
     char needle[256];
     for (int quote = 0; quote < 2; quote++) {
         snprintf(needle, sizeof needle, quote ? " id='%s'" : " id=\"%s\"", id);
         const char *found = find_text(text, end, needle);
+        *scanned += (size_t)((found ? found : end) - text);
         if (!found) continue;
         const char *open = found;
         while (open > text && *open != '<') open--;
@@ -232,6 +235,7 @@ static bool find_element(const char *text, const char *end, const char *id, cons
             if (*p != '<') continue;
             if (p[1] == '/' && element_name_at(p + 2, end, name)) {
                 if (--depth == 0) {
+                    *scanned += (size_t)(p - tag_end);
                     const char *close = memchr(p, '>', (size_t)(end - p));
                     if (!close) return false;
                     *finish = close + 1;
@@ -242,6 +246,7 @@ static bool find_element(const char *text, const char *end, const char *id, cons
                 if (inner_end && inner_end[-1] != '/') depth++;
             }
         }
+        *scanned += (size_t)(end - tag_end);
         return false;
     }
     return false;
@@ -273,6 +278,8 @@ static char *expand_uses(const char *text, size_t length) {
     if (!current) return NULL;
     memcpy(current, text, length);
     current[length] = 0;
+    size_t scanned = 0;
+    int expansions = 0;
     for (int pass = 0; pass < USE_PASSES; pass++) {
         const char *end = current + strlen(current);
         const char *use = current;
@@ -280,7 +287,10 @@ static char *expand_uses(const char *text, size_t length) {
         if (!use) break;
         bytes_t out = { 0 };
         const char *copied = current;
-        for (const char *p = current; (p = find_text(p, end, "<use")); ) {
+        char cached_reference[256] = "", cached_name[64] = "";
+        const char *cached_start = NULL, *cached_finish = NULL;
+        bool cached_found = false;
+        for (const char *p = current; !out.failed && (p = find_text(p, end, "<use")); ) {
             if (!element_name_at(p + 1, end, "use")) {
                 p += 4;
                 continue;
@@ -293,19 +303,31 @@ static char *expand_uses(const char *text, size_t length) {
                 if (close) after = close + 6;
             }
             append(&out, copied, (size_t)(p - copied));
-            char reference[256] = "", transform[512] = "", x[64] = "0", y[64] = "0", name[64];
+            char reference[256] = "", transform[512] = "", x[64] = "0", y[64] = "0";
             if (!svg_attribute(p, tag_end, "href", reference, sizeof reference)) svg_attribute(p, tag_end, "xlink:href", reference, sizeof reference);
             svg_attribute(p, tag_end, "transform", transform, sizeof transform);
             svg_attribute(p, tag_end, "x", x, sizeof x);
             svg_attribute(p, tag_end, "y", y, sizeof y);
-            const char *start, *finish;
-            if (reference[0] == '#' && find_element(current, end, reference + 1, &start, &finish, name, sizeof name) && strcmp(name, "use")) {
+            if (++expansions > USE_MAX) {
+                out.failed = true;
+                break;
+            }
+            if (reference[0] == '#' && strcmp(reference, cached_reference)) {
+                snprintf(cached_reference, sizeof cached_reference, "%s", reference);
+                cached_found = find_element(current, end, reference + 1, &cached_start, &cached_finish, cached_name, sizeof cached_name, &scanned);
+                if (scanned > SVG_SCAN_MAX) {
+                    out.failed = true;
+                    break;
+                }
+            }
+            if (reference[0] == '#' && cached_found && strcmp(cached_name, "use")) {
                 char group[700];
                 int group_length = snprintf(group, sizeof group, "<g transform=\"%s translate(%s %s)\">", transform, x, y);
                 append(&out, group, (size_t)group_length);
-                append_element(&out, start, finish, name);
+                append_element(&out, cached_start, cached_finish, cached_name);
                 append(&out, "</g>", 4);
             }
+            if (out.length > SVG_MAX_LENGTH) out.failed = true;
             copied = after;
             p = after;
         }

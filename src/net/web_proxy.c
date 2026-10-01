@@ -26,6 +26,7 @@
 #define CONNECT_TIMEOUT  15
 #define TRANSFER_TIMEOUT 60
 #define HINT_COUNT       512
+#define CONNECTION_MAX   8
 
 #ifdef MSG_NOSIGNAL
 #define SEND_FLAGS MSG_NOSIGNAL
@@ -74,6 +75,8 @@ typedef struct {
 static image_hint_t hints[HINT_COUNT];
 static int next_hint = 0;
 static pthread_mutex_t hint_lock = PTHREAD_MUTEX_INITIALIZER;
+static int active_connections = 0;
+static pthread_mutex_t connection_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void proxy_log(net_gateway_log_fn log, const char *format, ...) {
     if (!log) return;
@@ -684,6 +687,9 @@ static void *connection_thread(void *opaque) {
     connection_t *connection = opaque;
     handle(connection);
     free(connection);
+    pthread_mutex_lock(&connection_lock);
+    active_connections--;
+    pthread_mutex_unlock(&connection_lock);
     return NULL;
 }
 
@@ -730,6 +736,10 @@ void web_proxy_stop(web_proxy_t *proxy) {
 void web_proxy_poll(web_proxy_t *proxy) {
     if (!proxy) return;
     for (;;) {
+        pthread_mutex_lock(&connection_lock);
+        bool full = active_connections >= CONNECTION_MAX;
+        pthread_mutex_unlock(&connection_lock);
+        if (full) return;
         int client = accept(proxy->listener, NULL, NULL);
         if (client < 0) return;
         fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK);
@@ -748,7 +758,13 @@ void web_proxy_poll(web_proxy_t *proxy) {
         pthread_attr_init(&attributes);
         pthread_attr_setdetachstate(&attributes, PTHREAD_CREATE_DETACHED);
         pthread_t thread;
+        pthread_mutex_lock(&connection_lock);
+        active_connections++;
+        pthread_mutex_unlock(&connection_lock);
         if (pthread_create(&thread, &attributes, connection_thread, connection) != 0) {
+            pthread_mutex_lock(&connection_lock);
+            active_connections--;
+            pthread_mutex_unlock(&connection_lock);
             close(client);
             free(connection);
         }
