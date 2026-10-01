@@ -127,6 +127,7 @@ static bool find_source(const loader_t *loader, const char *name, char *out, siz
 }
 
 static void make_directories(loader_t *loader, const char *path) {
+    if (!*path) return;
     char partial[PATH_SIZE];
     snprintf(partial, sizeof partial, "%s", path);
     for (char *p = partial + 1; ; p++) {
