@@ -562,16 +562,53 @@ static void rom_folder(char *path, size_t size) {
     SDL_CreateDirectory(path);
 }
 
-static int rom_system(const char *path, size_t *size) {
-    uint8_t *rom = file_read(path, size);
+#define ROM_MIN_BYTES   (1024 * 1024)
+#define ROM_MAX_BYTES   (64 * 1024 * 1024)
+#define ROM_PROBE_CACHE 32
+
+typedef struct {
+    char   path[1024];
+    off_t  size;
+    time_t modified;
+    int    system;
+} rom_probe_t;
+
+static rom_probe_t rom_probes[ROM_PROBE_CACHE];
+static int rom_probe_count = 0;
+static int rom_probe_next = 0;
+
+static int rom_system(const char *path) {
+    size_t size;
+    uint8_t *rom = file_read(path, &size);
     if (!rom) return 0;
     char error[256];
-    machine_t *machine = machine_create(rom, *size, error, sizeof error);
+    machine_t *machine = machine_create(rom, size, error, sizeof error);
     free(rom);
     if (!machine) return 0;
     int system = machine_rom_system(machine);
     machine_destroy(machine);
     return system;
+}
+
+static int cached_rom_system(const char *path, const struct stat *info) {
+    rom_probe_t *probe = NULL;
+    for (int i = 0; i < rom_probe_count && !probe; i++) {
+        if (!strcmp(rom_probes[i].path, path)) probe = &rom_probes[i];
+    }
+    if (probe && probe->size == info->st_size && probe->modified == info->st_mtime) return probe->system;
+    if (!probe) {
+        if (rom_probe_count < ROM_PROBE_CACHE) {
+            probe = &rom_probes[rom_probe_count++];
+        } else {
+            probe = &rom_probes[rom_probe_next];
+            rom_probe_next = (rom_probe_next + 1) % ROM_PROBE_CACHE;
+        }
+        snprintf(probe->path, sizeof probe->path, "%s", path);
+    }
+    probe->size = info->st_size;
+    probe->modified = info->st_mtime;
+    probe->system = rom_system(path);
+    return probe->system;
 }
 
 static void find_roms(rom_set_t *roms) {
@@ -583,14 +620,14 @@ static void find_roms(rom_set_t *roms) {
     struct dirent *entry;
     while ((entry = readdir(dir))) {
         if (entry->d_name[0] == '.') continue;
-        char path[1400];
-        snprintf(path, sizeof path, "%s/%s", folder, entry->d_name);
+        char path[sizeof roms->path[0]];
+        if (snprintf(path, sizeof path, "%s/%s", folder, entry->d_name) >= (int)sizeof path) continue;
         struct stat info;
-        if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < 1024 * 1024) continue;
-        size_t size;
-        int system = rom_system(path, &size);
+        if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < ROM_MIN_BYTES || info.st_size > ROM_MAX_BYTES) continue;
+        int system = cached_rom_system(path, &info);
+        size_t size = (size_t)info.st_size;
         if (!system || size <= roms->size[system]) continue;
-        snprintf(roms->path[system], sizeof roms->path[system], "%s", path);
+        memcpy(roms->path[system], path, sizeof path);
         roms->size[system] = size;
     }
     closedir(dir);
