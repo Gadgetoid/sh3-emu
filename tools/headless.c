@@ -105,13 +105,14 @@ typedef struct {
     const char *type_strings[16];
     int      type_count;
     uint32_t memory, speed;
+    bool     debug_output;
 } run_t;
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND,
-    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC,
+    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT,
 };
 
 static const option_t OPTIONS[] = {
@@ -145,7 +146,13 @@ static const option_t OPTIONS[] = {
     [OPT_WAV] = { "wav", "FILE", "write the sound output, with silences removed", 0 },
     [OPT_TRACE_PC] = { "trace-pc", NULL, "print the program counter every emulated second", 0 },
     [OPT_WATCH_PC] = { "watch-pc", "VA", "log calls reaching an address (slot-relative below 0x02000000)", MACHINE_WATCH_MAX },
+    [OPT_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr", 0 },
 };
+
+static void print_debug_line(void *context, const char *line) {
+    (void)context;
+    fprintf(stderr, "debug: %s\n", line);
+}
 
 static bool parse_option(void *context, int option, const char *value, char *error, size_t error_size) {
     run_t *run = context;
@@ -223,6 +230,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         return true;
     case OPT_WAV: run->wav = value; return true;
     case OPT_TRACE_PC: run->trace_pc = true; return true;
+    case OPT_DEBUG_OUTPUT: run->debug_output = true; return true;
     case OPT_WATCH_PC:
         if (!option_integer(value, 0, &integer) || integer < 0) return false;
         run->watches[run->watch_count++] = (uint32_t)integer;
@@ -273,6 +281,7 @@ int main(int argc, char **argv) {
     if (run.memory) machine_set_memory(machine, run.memory);
     if (run.speed) machine_set_speed(machine, run.speed);
     machine_set_host_clock(machine, run.host_time);
+    if (run.debug_output) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
     if (run.load) machine_serial_connect(machine, false);
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);

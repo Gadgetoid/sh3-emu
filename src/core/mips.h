@@ -53,7 +53,7 @@ typedef struct {
     uint8_t *(*fetch_page)(void *context, uint32_t pa);
 } mips_bus_t;
 
-#define MIPS_WATCH_MAX 5
+#define MIPS_WATCH_MAX 8
 #define MIPS_SLOT_SIZE 0x02000000u
 
 struct mips_cpu {
@@ -87,3 +87,4 @@ void mips_set_external_ip(mips_cpu_t *cpu, uint32_t ip_bits);
 void mips_run(mips_cpu_t *cpu, uint64_t until_cycle);
 bool mips_translate(mips_cpu_t *cpu, uint32_t va, bool write, uint32_t *pa);
 bool mips_read_virtual(mips_cpu_t *cpu, uint32_t va, int size, uint32_t *value);
+void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va);

@@ -384,6 +384,53 @@ static void log_message(const char *message) {
     if (verbose) fputs(message, stderr);
 }
 
+#define DEBUG_LOG_MAX (1024 * 1024)
+
+static FILE *debug_log;
+static bool  debug_to_stderr;
+
+static void data_folder(char *path, size_t size);
+
+static void debug_log_path(char *path, size_t size) {
+    char base[1024];
+    data_folder(base, sizeof base);
+    snprintf(path, size, "%s/debug.log", base);
+}
+
+static void print_debug_line(void *context, const char *line) {
+    (void)context;
+    if (debug_to_stderr) fprintf(stderr, "debug: %s\n", line);
+    if (!debug_log) return;
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[16];
+    strftime(stamp, sizeof stamp, "%H:%M:%S", &local);
+    fprintf(debug_log, "%s %s\n", stamp, line);
+    fflush(debug_log);
+}
+
+static void start_debug_log(const char *rom_path) {
+    if (!debug_log) {
+        char path[1100], old[1110];
+        debug_log_path(path, sizeof path);
+        struct stat info;
+        if (stat(path, &info) == 0 && info.st_size > DEBUG_LOG_MAX) {
+            snprintf(old, sizeof old, "%s.old", path);
+            rename(path, old);
+        }
+        debug_log = fopen(path, "a");
+        if (!debug_log) return;
+    }
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[32];
+    strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &local);
+    fprintf(debug_log, "--- %s %s\n", stamp, file_leaf_name(rom_path));
+    fflush(debug_log);
+}
+
 static void data_folder(char *path, size_t size) {
     rapi_data_path("", path, size);
     size_t length = strlen(path);
@@ -541,7 +588,7 @@ static bool confirm_reset(SDL_Window *window) {
     return SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1;
 }
 
-static void open_folder(const char *path) {
+static void open_path(const char *path) {
     char url[4096] = "file://";
     size_t length = strlen(url);
     for (const unsigned char *at = (const unsigned char *)path; *at && length + 4 < sizeof url; at++) {
@@ -578,7 +625,7 @@ static void reveal_file(const char *path) {
     snprintf(folder, sizeof folder, "%s", path);
     char *slash = strrchr(folder, '/');
     if (slash && slash != folder) *slash = 0;
-    open_folder(folder);
+    open_path(folder);
 #endif
 }
 
@@ -687,7 +734,7 @@ static bool no_roms_dialog(void) {
     };
     const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No Velo ROM found", message, 2, buttons, NULL };
     int chosen = 0;
-    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_folder(folder);
+    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_path(folder);
     return false;
 }
 
@@ -714,6 +761,8 @@ static machine_t *start_machine(const char *rom_path, const settings_t *settings
     machine_set_memory(machine, settings->memory);
     machine_set_speed(machine, settings->speed);
     machine_set_host_clock(machine, settings->host_time != 0);
+    machine_set_debug_output(machine, print_debug_line, NULL);
+    start_debug_log(rom_path);
     if (state_file) snprintf(state, state_size, "%s", state_file);
     else state_path(state, state_size, machine, rom_path);
     if (fresh) return machine;
@@ -802,7 +851,7 @@ typedef struct {
 enum {
     LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
-    LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE,
+    LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT,
 };
 
 static const option_t LAUNCH_OPTIONS[] = {
@@ -817,6 +866,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
     [LAUNCH_VERBOSE] = { "verbose", NULL, "log hardware, network and proxy activity to stderr", 0 },
+    [LAUNCH_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr as well as debug.log", 0 },
 };
 
 static bool launch_option(void *context, int option, const char *value, char *error, size_t error_size) {
@@ -848,6 +898,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
         return true;
     case LAUNCH_USER_AGENT: snprintf(settings->user_agent, sizeof settings->user_agent, "%s", value); return true;
     case LAUNCH_VERBOSE: verbose = true; return true;
+    case LAUNCH_DEBUG_OUTPUT: debug_to_stderr = true; return true;
     }
     return false;
 }
@@ -1162,10 +1213,17 @@ int main(int argc, char **argv) {
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_LOAD_SNAPSHOT, window, filters, 1, folder, false);
                 break;
             }
+            case MENU_SHOW_DEBUG_OUTPUT: {
+                char path[1100];
+                debug_log_path(path, sizeof path);
+                if (debug_log) fflush(debug_log);
+                open_path(path);
+                break;
+            }
             case MENU_SHOW_SNAPSHOTS: {
                 char folder[1100];
                 snapshot_folder(folder, sizeof folder);
-                open_folder(folder);
+                open_path(folder);
                 break;
             }
             case MENU_MEMORY_4:

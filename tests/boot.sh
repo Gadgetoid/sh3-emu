@@ -36,6 +36,7 @@ check desktop  2eb469a6f1f8a86900314a036e30b0e725df989e4adf0962a797091ebff39033 
 ./headless "$ROM" --seconds=44 --save="$OUT/desktop.state" $CALIBRATE $WIZARD 2>/dev/null
 check resumed 2eb469a6f1f8a86900314a036e30b0e725df989e4adf0962a797091ebff39033 --seconds=1 --load="$OUT/desktop.state"
 if ./headless "$ROM" --host-time --seconds=1 2>&1 | grep -q "clock: set from the host"; then echo "ok   host_time"; else echo "FAIL host_time"; exit 1; fi
+if ./headless "$ROM" --debug-output --seconds=1 2>&1 | grep -q "^debug: Pegasus Kernel for MIPS"; then echo "ok   debug_output"; else echo "FAIL debug_output"; exit 1; fi
 check soft_reset ded10bd9062935ba803cf78c2adf05aa3865f39b8486e1f36a450a5dc6f80f99 --seconds=30 --load="$OUT/desktop.state" --soft-reset=1
 ./headless "$ROM" --pgm="$OUT/start_continuous.pgm" --seconds=47 $CALIBRATE $WIZARD --tap=45:15:227 2>/dev/null
 ./headless "$ROM" --pgm="$OUT/start_resumed.pgm" --seconds=3 --load="$OUT/desktop.state" --tap=1:15:227 2>/dev/null
@@ -184,6 +185,7 @@ if [ -f "$CE2_ROM" ]; then
     CE1_ROM=$ROM
     ROM=$CE2_ROM
     if ./headless "$ROM" --host-time --seconds=1 2>&1 | grep -q "clock: set from the host"; then echo "ok   ce2_host_time"; else echo "FAIL ce2_host_time"; exit 1; fi
+    if ./headless "$ROM" --debug-output --seconds=3 2>&1 | grep -q "^debug: Configuring 480x240, 4bpp display"; then echo "ok   ce2_debug_output"; else echo "FAIL ce2_debug_output"; exit 1; fi
     check ce2_desktop aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20
     check ce2_memory_20mb 66a2cc77cfed28615b0486c02a749163fc13755aa5cc01348fbc25e689cbaa05 --memory=20 --seconds=25
     check ce2_start_uncalibrated aa5f6f4b5de495a83c8c53ce380a80692321db5aec941043d2ec02839351d20b --tap=19:15:227:0.1 --seconds=22

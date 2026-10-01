@@ -199,6 +199,12 @@ struct machine {
     uint64_t rtc_anchor;
     bool     host_clock;
     uint32_t set_time_va;
+    uint32_t debug_string_va, debug_print_va, debug_print_buffer;
+    machine_debug_fn debug_sink;
+    void    *debug_context;
+    uint32_t debug_refill_va;
+    char     debug_line[256];
+    size_t   debug_length;
     uint64_t alarm;
     bool     alarm_armed;
     uint64_t alarm_next;
@@ -1041,6 +1047,54 @@ static uint32_t find_set_real_time(const machine_t *m) {
     return va;
 }
 
+static const uint32_t WRITE_DEBUG_STRING_GATE[] = { 0x8C4E00A0, 0x31CF0020, 0x51E00000, 0, 0x8C580050 };
+static const uint32_t WRITE_DEBUG_STRING_GATE_MASK[] = { 0xFFFFFFFF, 0xFFFFFFFF, 0xFFFF0000, 0, 0xFFFFFFFF };
+static const uint32_t DEBUG_PRINT_GATE[] = { 0x24070100, 0x3C0E0000, 0x8DCE0000, 0x51C00000, 0, 0x0C000000, 0x27A40000 };
+static const uint32_t DEBUG_PRINT_GATE_MASK[] = { 0xFFFFFFFF, 0xFFFF0000, 0xFFFF0000, 0xFFFF0000, 0, 0xFC000000, 0xFFFF0000 };
+#define FUNCTION_SEARCH_WORDS 16
+#define STACK_FRAME_32        0x27BDFFE0
+
+static uint32_t rom_word(const uint8_t *rom, uint32_t offset) {
+    uint32_t word;
+    memcpy(&word, rom + offset, 4);
+    return word;
+}
+
+static bool scan_code(const uint8_t *rom, uint32_t size, const uint32_t *code, const uint32_t *mask, size_t words, uint32_t *offset) {
+    for (uint32_t at = 0; at + words * 4 <= size; at += 4) {
+        bool match = true;
+        for (size_t i = 0; i < words && match; i++) match = (rom_word(rom, at + (uint32_t)i * 4) & mask[i]) == code[i];
+        if (match) {
+            *offset = at;
+            return true;
+        }
+    }
+    return false;
+}
+
+static uint32_t scan_write_debug_string(const uint8_t *rom, uint32_t size, uint32_t pa) {
+    uint32_t gate;
+    if (!scan_code(rom, size, WRITE_DEBUG_STRING_GATE, WRITE_DEBUG_STRING_GATE_MASK, 5, &gate)) return 0;
+    for (uint32_t back = 4; back <= FUNCTION_SEARCH_WORDS * 4 && back <= gate; back += 4) {
+        if (rom_word(rom, gate - back) == STACK_FRAME_32) return 0x80000000u | (pa + gate - back);
+    }
+    return 0;
+}
+
+static uint32_t scan_debug_print(const uint8_t *rom, uint32_t size, uint32_t pa, uint32_t *buffer) {
+    uint32_t at;
+    if (!scan_code(rom, size, DEBUG_PRINT_GATE, DEBUG_PRINT_GATE_MASK, 7, &at)) return 0;
+    *buffer = rom_word(rom, at + 24) & 0xFFFF;
+    return 0x80000000u | (pa + at + 12);
+}
+
+static void find_debug_output(machine_t *m) {
+    m->debug_string_va = scan_write_debug_string(m->rom, m->rom_size, m->rom_pa);
+    if (!m->debug_string_va && m->rom2) m->debug_string_va = scan_write_debug_string(m->rom2, m->rom2_size, m->rom2_pa);
+    m->debug_print_va = scan_debug_print(m->rom, m->rom_size, m->rom_pa, &m->debug_print_buffer);
+    if (!m->debug_print_va && m->rom2) m->debug_print_va = scan_debug_print(m->rom2, m->rom2_size, m->rom2_pa, &m->debug_print_buffer);
+}
+
 static void on_watch(void *context, uint32_t pc);
 
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
@@ -1099,8 +1153,11 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     bind_uart(m);
     machine_power_on(m);
     m->set_time_va = find_set_real_time(m);
-    if (m->set_time_va) {
-        m->cpu.watch[m->cpu.watch_count++] = m->set_time_va;
+    find_debug_output(m);
+    uint32_t hooks[] = { m->set_time_va, m->debug_string_va, m->debug_print_va };
+    for (size_t i = 0; i < sizeof hooks / sizeof hooks[0]; i++) {
+        if (!hooks[i]) continue;
+        m->cpu.watch[m->cpu.watch_count++] = hooks[i];
         m->cpu.on_watch = on_watch;
     }
     return m;
@@ -1631,6 +1688,9 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     uint64_t cycles = m->cpu.cycles, rtc_base = m->rtc_base, rtc_anchor = m->rtc_anchor;
     bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy, host_clock = m->host_clock;
     uint32_t set_time_va = m->set_time_va;
+    uint32_t debug_string_va = m->debug_string_va, debug_print_va = m->debug_print_va, debug_print_buffer = m->debug_print_buffer;
+    machine_debug_fn debug_sink = m->debug_sink;
+    void *debug_context = m->debug_context;
     uint32_t serial_tag = m->serial_tag;
     FILE *pending_card = m->pending_card;
     char pending_card_path[sizeof m->pending_card_path];
@@ -1691,6 +1751,12 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->pccard.total_sectors = card.total_sectors;
     m->host_clock = host_clock;
     m->set_time_va = set_time_va;
+    m->debug_string_va = debug_string_va;
+    m->debug_print_va = debug_print_va;
+    m->debug_print_buffer = debug_print_buffer;
+    m->debug_sink = debug_sink;
+    m->debug_context = debug_context;
+    m->debug_length = 0;
     bind_card_socket(m, image);
     bind_uart(m);
     machine_power_on(m);
@@ -1858,10 +1924,52 @@ static void report_watch(machine_t *m, uint32_t pc) {
                  cpu->gpr[31], cpu->gpr[2], cpu->gpr[4], cpu->gpr[5], cpu->gpr[6], cpu->gpr[7]);
 }
 
+static void debug_character(machine_t *m, uint16_t character) {
+    if (character == '\r') return;
+    if (character == '\n' || m->debug_length == sizeof m->debug_line - 1) {
+        m->debug_line[m->debug_length] = 0;
+        if (m->debug_length) m->debug_sink(m->debug_context, m->debug_line);
+        m->debug_length = 0;
+        if (character == '\n') return;
+    }
+    m->debug_line[m->debug_length++] = character >= 0x20 && character < 0x7F ? (char)character : '?';
+}
+
+#define DEBUG_STRING_MAX 1024
+
+static void capture_debug_string(machine_t *m, uint32_t va) {
+    if (!m->debug_sink || !va) return;
+    uint16_t text[DEBUG_STRING_MAX];
+    uint32_t length = 0;
+    while (length < DEBUG_STRING_MAX) {
+        uint32_t address = va + 2 * length;
+        if (!guest_halfword(m, address, false, &text[length])) {
+            if (address < 0x80000000u && address != m->debug_refill_va) {
+                m->debug_refill_va = address;
+                mips_raise_tlb_miss(&m->cpu, address);
+                return;
+            }
+            break;
+        }
+        if (!text[length]) break;
+        length++;
+    }
+    m->debug_refill_va = 0;
+    for (uint32_t i = 0; i < length; i++) debug_character(m, text[i]);
+}
+
 static void on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
     if (pc == m->set_time_va) apply_host_time(m);
-    else report_watch(m, pc);
+    else if (pc == m->debug_string_va) capture_debug_string(m, m->cpu.gpr[4]);
+    else if (pc == m->debug_print_va) {
+        if (!m->cpu.gpr[14]) capture_debug_string(m, m->cpu.gpr[29] + m->debug_print_buffer);
+    } else report_watch(m, pc);
+}
+
+void machine_set_debug_output(machine_t *m, machine_debug_fn sink, void *context) {
+    m->debug_sink = sink;
+    m->debug_context = context;
 }
 
 bool machine_watch_pc(machine_t *m, uint32_t va) {

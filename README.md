@@ -206,9 +206,14 @@ velo-headless --help
 - `--pgm=FILE` saves the raw greyscale screen, and `--png=FILE` saves it through the simulated LCD, as the GUI draws it.
 - `--net=SECONDS` connects the PPP network, `--rapi=SOCKET` makes the Velo's RAPI port available for `velo-rapi --socket`, and `--realtime[=N]` paces the run at N times real time for anything driving it over RAPI (unpaced, an idle Velo runs about 1000 times faster). `--cable` and `--cable-send` connect a bare serial cable and send bytes down it.
 - `--watch-pc=VA` logs registers each time the CPU reaches an address; below 0x02000000 it matches in any process slot.
+- `--debug-output` prints CE's debug output (see Debug output).
 - SIGTERM or SIGINT ends a run early and still writes `--save`, `--pgm`, `--png` and `--wav`.
 
 Unknown options, malformed values and events past the end of a run are errors or warnings, rather than being ignored. All three tools take `--help` and `--version`, and options that take a value accept `--name=VALUE` or `--name VALUE`.
+
+## Debug output
+
+CE's debug output, from `OutputDebugString` in programs and the kernel's own messages (its boot banner, and a register dump when a program crashes), goes to `debug.log` in the data folder, which Emulation > Show Debug Output opens. `velo --debug-output` and `headless --debug-output` also print it to stderr. The retail ROMs build these messages and then drop them, so the emulator reads each string where the OAL's `OEMWriteDebugString` would have sent it to the debug port. CE 1.0 also gates the kernel's messages behind a flag, so they're read where `NKDbgPrintfW` drops them. The log is moved to `debug.log.old` at launch once it passes 1 MB.
 
 ## Windows CE 2.0 details
 

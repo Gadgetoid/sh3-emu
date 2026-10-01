@@ -11,6 +11,7 @@
 typedef struct machine machine_t;
 
 typedef void (*machine_log_fn)(const char *message);
+typedef void (*machine_debug_fn)(void *context, const char *line);
 
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size);
 void       machine_destroy(machine_t *machine);
@@ -61,6 +62,7 @@ bool machine_state_matches(machine_t *machine, const char *path);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);
 void machine_advance_clock(machine_t *machine, int64_t seconds);
 void machine_set_host_clock(machine_t *machine, bool enabled);
+void machine_set_debug_output(machine_t *machine, machine_debug_fn sink, void *context);
 
 void machine_dump_state(machine_t *machine);
 bool machine_read_virtual(machine_t *machine, uint32_t va, uint32_t *value);

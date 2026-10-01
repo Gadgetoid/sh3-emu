@@ -192,6 +192,10 @@ static bool store(mips_cpu_t *cpu, uint32_t va, int size, uint32_t value) {
     return true;
 }
 
+void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va) {
+    tlb_fault(cpu, MIPS_EXC_TLBL, va);
+}
+
 bool mips_read_virtual(mips_cpu_t *cpu, uint32_t va, int size, uint32_t *value) {
     uint32_t pa;
     if (translate(cpu, va, false, &pa) != TRANSLATE_OK) return false;
@@ -484,6 +488,7 @@ void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
             bool slot_relative = va < MIPS_SLOT_SIZE && current_pc < 0x80000000u;
             if (slot_relative ? (current_pc & (MIPS_SLOT_SIZE - 1)) == va : current_pc == va) cpu->on_watch(cpu->bus.context, current_pc);
         }
+        if (cpu->fault) continue;
         cpu->pc = cpu->next_pc;
         cpu->next_pc = cpu->pc + 4;
         cpu->next_in_delay_slot = false;
