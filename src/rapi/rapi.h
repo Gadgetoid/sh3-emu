@@ -39,6 +39,7 @@ typedef void (*rapi_progress_fn)(void *context, uint64_t done, uint64_t total);
 
 bool        rapi_data_path(const char *leaf, char *path, size_t size);
 rapi_t     *rapi_connect(const char *socket_path, char *error, size_t error_size);
+void        rapi_set_timeout(rapi_t *rapi, int seconds);
 void        rapi_disconnect(rapi_t *rapi);
 const char *rapi_error(const rapi_t *rapi);
 

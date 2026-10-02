@@ -45,7 +45,8 @@
 
 #define CHUNK_SIZE      8192
 #define REPLY_MAX       (4 * 1024 * 1024)
-#define REPLY_TIMEOUT   120
+#define HANDSHAKE_TIMEOUT 5
+#define REPLY_TIMEOUT     30
 #define FIND_ENTRY_MIN  20
 
 #ifdef MSG_NOSIGNAL
@@ -311,7 +312,7 @@ rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
         snprintf(error, error_size, "the emulator isn't running with Network (PPP) connected (no %s)", socket_path);
         return NULL;
     }
-    struct timeval timeout = { REPLY_TIMEOUT, 0 };
+    struct timeval timeout = { HANDSHAKE_TIMEOUT, 0 };
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
 #ifdef SO_NOSIGPIPE
     int enabled = 1;
@@ -321,12 +322,19 @@ rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
     rapi->socket = fd;
     rapi_version_t version;
     if (!rapi_version(rapi, &version)) {
-        snprintf(error, error_size, "the Velo isn't answering: %s", rapi->error);
+        snprintf(error, error_size, "the Velo isn't answering (is PC Link connected?): %s", rapi->error);
         rapi_disconnect(rapi);
         return NULL;
     }
     rapi->os_major = version.major;
+    rapi_set_timeout(rapi, REPLY_TIMEOUT);
     return rapi;
+}
+
+void rapi_set_timeout(rapi_t *rapi, int seconds) {
+    if (rapi->socket < 0 || seconds <= 0) return;
+    struct timeval timeout = { seconds, 0 };
+    setsockopt(rapi->socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
 }
 
 void rapi_disconnect(rapi_t *rapi) {

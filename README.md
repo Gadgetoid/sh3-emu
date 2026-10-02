@@ -16,7 +16,7 @@ With the CE 2.0 upgrade's applications, a library of period software on a PC Car
 
 ### Install
 
-- **macOS (Apple silicon):** `Velo.app`, from a release or `make app` (see Building). It isn't notarised, so macOS blocks a downloaded copy the first time it opens: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine Velo.app`. A copy built with `make app` opens normally.
+- **macOS (Apple silicon):** `Velo.app`, from a release or `make app` (see Building). It isn't notarised, so macOS blocks a downloaded copy the first time it opens: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine Velo.app`. A copy built with `make app` opens normally. `velo-rapi` is inside it, at `Velo.app/Contents/MacOS/velo-rapi`.
 - **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `velo`, `velo-headless` and `velo-rapi`, with a desktop entry.
 - **From source:** see Building.
 
@@ -127,7 +127,7 @@ The PC Link menu uses it:
 - Send Files to Velo… copies files into `\My Documents`, and Copy My Documents to Mac… copies `\My Documents`, with its folders, into a host folder.
 - Shared Folder… pairs a host folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too (to the Trash). When both sides changed a file, the host keeps its copy and the Velo's arrives as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped, and empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`.
 
-`velo-rapi` does the same from the command line while the emulator is running with Network (PPP) connected:
+`velo-rapi` does the same from the command line while the emulator is running with Network (PPP) connected. It gives up after 5 seconds if the Velo doesn't answer, and after 30 seconds of silence once connected (`--timeout=SECONDS` changes that):
 
 ```
 velo-rapi info
