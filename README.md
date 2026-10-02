@@ -58,7 +58,7 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 | Machine | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
 | Machine | Reset… (cold boot, clears RAM; confirmed in a dialog) | |
 | Machine | System: Windows CE 1.0, Windows CE 2.0 | |
-| Machine | Next Cold Boot: Memory (4 MB (original), 8, 16, 20 or 32 MB), Set Clock from Host | |
+| Machine | Next Cold Boot: Memory (4 MB (original), 8, 16, 20 or 32 MB), Screen (480 x 240 (original), 640 x 240, 640 x 480, 800 x 600), Set Clock from Host | |
 | Machine | Pause | Cmd-P |
 | Machine | CPU Speed: 1x (original), 2x, 4x, 8x | |
 | Machine | Show Debug Output | |
@@ -69,7 +69,7 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 | Edit | Paste as Typing (types the clipboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
 | Edit | Save Screenshot to Desktop | Cmd-Shift-S |
 | View | 50%, 75%, Actual Size, 150%, 200%; Zoom In and Zoom Out | Cmd-0, Cmd-=, Cmd-- |
-| View | Simulated LCD (glass, ghosting and backlight) or Sharp Pixels (plain greys at 480 x 240) | |
+| View | Simulated LCD (glass, ghosting and backlight) or Sharp Pixels (plain greys, one per screen pixel) | |
 | View | Full Screen | Cmd-Ctrl-F |
 | Devices | PC Card: Insert Card Image…, Eject Card | Cmd-O, Cmd-E |
 | Devices | Serial Port: Not Connected, Network (PPP), Pseudo-terminal, Host Serial Port (the detected ports) | Cmd-Shift-N for Network |
@@ -181,11 +181,13 @@ Type addresses as `http://`: Pocket IE makes `https://` connections itself, not 
 
 It sends a Lynx user agent upstream in place of Pocket IE's, which some sites block, and sites generally serve text browsers their simplest pages. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT`; an empty value passes Pocket IE's own through. Through the proxy, `127.0.0.1` is the host's loopback.
 
-## Clock, memory and speed
+## Clock, memory, screen and speed
 
 Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator gives it the host's time in Pacific time, so once you pick your home city the clock is right. After that the clock keeps running while the emulator is closed, and survives a soft reset.
 
 Memory sets the RAM for the next cold boot (Machine > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
+
+Screen sets the display size for the next cold boot, or `--screen=WxH`. The emulator patches the display setup in the loaded ROM (the kernel's LCD controller setup and GWES's or the display driver's size, stride and framebuffer), keeping the original refresh rate, and moves the framebuffer out of the way of the larger image. CE 1.0 runs at any of the sizes; the merged CE 2.0 image at up to 640 x 480; the CE 2.0 upgrade ROM on its own at 640 x 240, as its display driver faults at taller sizes. Sizes a ROM can't run are greyed out. The ROM files aren't changed, and a saved machine keeps the screen it was booted with. Some of CE's own dialogs, such as the setup wizard's, keep their 480 x 240 layout.
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD, sound and serial stay on the real clock, so only the CPU gets faster.
 

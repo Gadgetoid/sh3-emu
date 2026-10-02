@@ -4,10 +4,12 @@
 
 #include "core/lcd.h"
 
-#define GRID_W (LCD_WIDTH + 2 * LCD_MARGIN_X)
-#define GRID_H (LCD_HEIGHT + 2 * LCD_MARGIN_Y)
+#define GRID_MAX ((SCREEN_MAX_WIDTH + 2 * LCD_MARGIN_X) * (SCREEN_MAX_HEIGHT + 2 * LCD_MARGIN_Y))
 
-uint8_t lcd_framebuffer[LCD_WIDTH * LCD_HEIGHT];
+uint8_t lcd_framebuffer[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];
+
+static int screen_w = SCREEN_STOCK_WIDTH, screen_h = SCREEN_STOCK_HEIGHT;
+static int grid_w = SCREEN_STOCK_WIDTH + 2 * LCD_MARGIN_X, grid_h = SCREEN_STOCK_HEIGHT + 2 * LCD_MARGIN_Y;
 
 static inline int min_int(int a, int b) { return a < b ? a : b; }
 static inline int max_int(int a, int b) { return a > b ? a : b; }
@@ -41,11 +43,11 @@ static const panel_t panel_unlit = {
     .bloom = 0.0f,
 };
 
-static float shown[LCD_WIDTH * LCD_HEIGHT];
-static float ink_grid[GRID_W * GRID_H];
-static float glow_grid[GRID_W * GRID_H];
-static float glow_scratch[GRID_W * GRID_H];
-static float soft_grid[GRID_W * GRID_H];
+static float shown[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];
+static float ink_grid[GRID_MAX];
+static float glow_grid[GRID_MAX];
+static float glow_scratch[GRID_MAX];
+static float soft_grid[GRID_MAX];
 static uint32_t *output = NULL;
 static float *vignette_x = NULL, *vignette_y = NULL;
 static float *grain = NULL;
@@ -66,6 +68,23 @@ static int dirty_x, dirty_y, dirty_w, dirty_h;
 static bool force_compose = true;
 static bool backlight = true;
 static bool powered = true;
+
+void lcd_set_size(int width, int height) {
+    if (width == screen_w && height == screen_h) return;
+    if (width < 1 || height < 1 || width > SCREEN_MAX_WIDTH || height > SCREEN_MAX_HEIGHT) return;
+    screen_w = width;
+    screen_h = height;
+    grid_w = width + 2 * LCD_MARGIN_X;
+    grid_h = height + 2 * LCD_MARGIN_Y;
+    memset(shown, 0, sizeof shown);
+    free(output);
+    output = NULL;
+    cell = output_w = output_h = 0;
+    force_compose = true;
+}
+
+int lcd_width(void) { return screen_w; }
+int lcd_height(void) { return screen_h; }
 
 void lcd_set_power(bool on) {
     if (on == powered) return;
@@ -123,8 +142,8 @@ void lcd_compose_setup(int new_cell) {
     if (new_cell < 2) new_cell = 2;
     if (new_cell == cell) return;
     cell = new_cell;
-    output_w = GRID_W * cell;
-    output_h = GRID_H * cell;
+    output_w = grid_w * cell;
+    output_h = grid_h * cell;
     free(output);
     free(columns);
     free(vignette_x);
@@ -139,18 +158,18 @@ void lcd_compose_setup(int new_cell) {
         column_t *column = &columns[x];
         int sub_x = x % cell;
         column->grid = x / cell;
-        column->in_panel = column->grid >= LCD_MARGIN_X && column->grid < LCD_MARGIN_X + LCD_WIDTH;
+        column->in_panel = column->grid >= LCD_MARGIN_X && column->grid < LCD_MARGIN_X + screen_w;
         column->electrode = sub_x < cell - gap;
         int shadow_x = x - shadow_offset;
         column->shadow_grid = shadow_x >= 0 ? shadow_x / cell : -1;
         column->shadow_electrode = shadow_x >= 0 && shadow_x % cell < cell - gap;
         float soft_u = (x + 0.5f) / cell - 0.5f - soft_offset;
-        column->soft_x0 = max_int(0, min_int(GRID_W - 1, (int)floorf(soft_u)));
-        column->soft_x1 = min_int(GRID_W - 1, column->soft_x0 + 1);
+        column->soft_x0 = max_int(0, min_int(grid_w - 1, (int)floorf(soft_u)));
+        column->soft_x1 = min_int(grid_w - 1, column->soft_x0 + 1);
         column->soft_fx = fminf(1.0f, fmaxf(0.0f, soft_u - column->soft_x0));
         float glow_u = (x + 0.5f) / cell - 0.5f;
-        column->glow_x0 = max_int(0, min_int(GRID_W - 1, (int)floorf(glow_u)));
-        column->glow_x1 = min_int(GRID_W - 1, column->glow_x0 + 1);
+        column->glow_x0 = max_int(0, min_int(grid_w - 1, (int)floorf(glow_u)));
+        column->glow_x1 = min_int(grid_w - 1, column->glow_x0 + 1);
         column->glow_fx = fminf(1.0f, fmaxf(0.0f, glow_u - column->glow_x0));
     }
     vignette_x = malloc((size_t)output_w * sizeof(float));
@@ -183,24 +202,24 @@ void lcd_compose_setup(int new_cell) {
 
 static void box_blur(float *grid, float *scratch, int radius) {
     float norm = 1.0f / (2 * radius + 1);
-    for (int y = 0; y < GRID_H; y++) {
-        for (int x = 0; x < GRID_W; x++) {
+    for (int y = 0; y < grid_h; y++) {
+        for (int x = 0; x < grid_w; x++) {
             float sum = 0;
             for (int k = -radius; k <= radius; k++) {
-                int sx = min_int(GRID_W - 1, max_int(0, x + k));
-                sum += grid[y * GRID_W + sx];
+                int sx = min_int(grid_w - 1, max_int(0, x + k));
+                sum += grid[y * grid_w + sx];
             }
-            scratch[y * GRID_W + x] = sum * norm;
+            scratch[y * grid_w + x] = sum * norm;
         }
     }
-    for (int y = 0; y < GRID_H; y++) {
-        for (int x = 0; x < GRID_W; x++) {
+    for (int y = 0; y < grid_h; y++) {
+        for (int x = 0; x < grid_w; x++) {
             float sum = 0;
             for (int k = -radius; k <= radius; k++) {
-                int sy = min_int(GRID_H - 1, max_int(0, y + k));
-                sum += scratch[sy * GRID_W + x];
+                int sy = min_int(grid_h - 1, max_int(0, y + k));
+                sum += scratch[sy * grid_w + x];
             }
-            grid[y * GRID_W + x] = sum * norm;
+            grid[y * grid_w + x] = sum * norm;
         }
     }
 }
@@ -221,7 +240,7 @@ void lcd_invalidate(void) {
 
 bool lcd_needs_compose(void) {
     if (force_compose) return true;
-    for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
+    for (int i = 0; i < screen_w * screen_h; i++) {
         if (pixel_target(i) != shown[i]) return true;
     }
     return false;
@@ -230,13 +249,13 @@ bool lcd_needs_compose(void) {
 static bool settle_pixels(float seconds) {
     float darken = response_scale > 0 ? 1.0f - expf(-seconds / (0.0209f * response_scale)) : 1.0f;
     float lighten = response_scale > 0 ? 1.0f - expf(-seconds / (0.0387f * response_scale)) : 1.0f;
-    changed_left = LCD_WIDTH;
+    changed_left = screen_w;
     changed_right = -1;
-    changed_top = LCD_HEIGHT;
+    changed_top = screen_h;
     changed_bottom = -1;
-    for (int y = 0; y < LCD_HEIGHT; y++) {
-        for (int x = 0; x < LCD_WIDTH; x++) {
-            int i = y * LCD_WIDTH + x;
+    for (int y = 0; y < screen_h; y++) {
+        for (int x = 0; x < screen_w; x++) {
+            int i = y * screen_w + x;
             float target = pixel_target(i);
             float delta = target - shown[i];
             if (delta == 0.0f) continue;
@@ -270,12 +289,12 @@ bool lcd_compose(float seconds) {
     bool full = force_compose;
     force_compose = false;
     if (!settled_change && !full) return false;
-    int left = 0, top = 0, right = GRID_W - 1, bottom = GRID_H - 1;
+    int left = 0, top = 0, right = grid_w - 1, bottom = grid_h - 1;
     if (!full) {
         left = max_int(0, changed_left + LCD_MARGIN_X - DIRTY_MARGIN);
-        right = min_int(GRID_W - 1, changed_right + LCD_MARGIN_X + DIRTY_MARGIN);
+        right = min_int(grid_w - 1, changed_right + LCD_MARGIN_X + DIRTY_MARGIN);
         top = max_int(0, changed_top + LCD_MARGIN_Y - DIRTY_MARGIN);
-        bottom = min_int(GRID_H - 1, changed_bottom + LCD_MARGIN_Y + DIRTY_MARGIN);
+        bottom = min_int(grid_h - 1, changed_bottom + LCD_MARGIN_Y + DIRTY_MARGIN);
     }
     dirty_x = left * cell;
     dirty_y = top * cell;
@@ -289,19 +308,19 @@ bool lcd_compose(float seconds) {
     int shadow_offset = max_int(1, cell / 3);
     float soft_offset = 0.75f;
 
-    memset(ink_grid, 0, sizeof ink_grid);
-    for (int y = 0; y < LCD_HEIGHT; y++) {
-        for (int x = 0; x < LCD_WIDTH; x++) {
-            ink_grid[(y + LCD_MARGIN_Y) * GRID_W + x + LCD_MARGIN_X] = shown[y * LCD_WIDTH + x];
+    memset(ink_grid, 0, (size_t)grid_w * grid_h * sizeof ink_grid[0]);
+    for (int y = 0; y < screen_h; y++) {
+        for (int x = 0; x < screen_w; x++) {
+            ink_grid[(y + LCD_MARGIN_Y) * grid_w + x + LCD_MARGIN_X] = shown[y * screen_w + x];
         }
     }
 
     if (panel->bloom > 0) {
-        for (int i = 0; i < GRID_W * GRID_H; i++) glow_grid[i] = 1.0f - fminf(1.0f, ink_grid[i] * panel->contrast * gain);
+        for (int i = 0; i < grid_w * grid_h; i++) glow_grid[i] = 1.0f - fminf(1.0f, ink_grid[i] * panel->contrast * gain);
         box_blur(glow_grid, glow_scratch, 2);
         box_blur(glow_grid, glow_scratch, 2);
     }
-    memcpy(soft_grid, ink_grid, sizeof soft_grid);
+    memcpy(soft_grid, ink_grid, (size_t)grid_w * grid_h * sizeof soft_grid[0]);
     box_blur(soft_grid, glow_scratch, 1);
 
     for (int y = dirty_y; y < dirty_y + dirty_h; y++) {
@@ -309,24 +328,24 @@ bool lcd_compose(float seconds) {
         int shadow_y = y - shadow_offset;
         int shadow_grid_y = shadow_y >= 0 ? shadow_y / cell : -1;
         int shadow_sub_y = shadow_y >= 0 ? shadow_y % cell : 0;
-        bool row_in_panel = grid_y >= LCD_MARGIN_Y && grid_y < LCD_MARGIN_Y + LCD_HEIGHT;
+        bool row_in_panel = grid_y >= LCD_MARGIN_Y && grid_y < LCD_MARGIN_Y + screen_h;
         bool row_electrode = sub_y < cell - gap;
         bool row_shadow = shadow_grid_y >= 0 && shadow_sub_y < cell - gap;
 
         float soft_v = (y + 0.5f) / cell - 0.5f - soft_offset;
-        int soft_y0 = max_int(0, min_int(GRID_H - 1, (int)floorf(soft_v)));
-        int soft_y1 = min_int(GRID_H - 1, soft_y0 + 1);
+        int soft_y0 = max_int(0, min_int(grid_h - 1, (int)floorf(soft_v)));
+        int soft_y1 = min_int(grid_h - 1, soft_y0 + 1);
         float soft_fy = fminf(1.0f, fmaxf(0.0f, soft_v - soft_y0));
 
         float glow_v = (y + 0.5f) / cell - 0.5f;
-        int glow_y0 = max_int(0, min_int(GRID_H - 1, (int)floorf(glow_v)));
-        int glow_y1 = min_int(GRID_H - 1, glow_y0 + 1);
+        int glow_y0 = max_int(0, min_int(grid_h - 1, (int)floorf(glow_v)));
+        int glow_y1 = min_int(grid_h - 1, glow_y0 + 1);
         float glow_fy = fminf(1.0f, fmaxf(0.0f, glow_v - glow_y0));
 
-        const float *ink_row = &ink_grid[grid_y * GRID_W];
-        const float *shadow_row = row_shadow ? &ink_grid[shadow_grid_y * GRID_W] : NULL;
-        const float *soft_top_row = &soft_grid[soft_y0 * GRID_W], *soft_bottom_row = &soft_grid[soft_y1 * GRID_W];
-        const float *glow_top_row = &glow_grid[glow_y0 * GRID_W], *glow_bottom_row = &glow_grid[glow_y1 * GRID_W];
+        const float *ink_row = &ink_grid[grid_y * grid_w];
+        const float *shadow_row = row_shadow ? &ink_grid[shadow_grid_y * grid_w] : NULL;
+        const float *soft_top_row = &soft_grid[soft_y0 * grid_w], *soft_bottom_row = &soft_grid[soft_y1 * grid_w];
+        const float *glow_top_row = &glow_grid[glow_y0 * grid_w], *glow_bottom_row = &glow_grid[glow_y1 * grid_w];
         const float *grain_row = &grain[(size_t)y * output_w];
         float vignette_row = vignette_y[y];
         uint32_t *out_row = &output[(size_t)y * output_w];

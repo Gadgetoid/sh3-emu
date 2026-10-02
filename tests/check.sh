@@ -14,6 +14,8 @@ expect_fail headless_no_rom "no ROM given" ./headless
 expect_fail headless_unknown "unknown option --tpa" ./headless rom.bin --tpa=1:2:3
 expect_fail headless_bad_tap "wants SECONDS:X:Y" ./headless rom.bin --tap=21:108
 expect_fail velo_bad_serial "wants net|pty|off|PORT" ./velo --serial=usb
+expect_fail headless_bad_screen "wants WxH" ./headless rom.bin --screen=1024x768
+expect_fail velo_bad_screen "wants WxH" ./velo --screen=640
 expect_fail velo_rapi_unknown "unknown option --frob" ./velo-rapi --frob
 if pkg-config --exists slirp libcurl; then
     PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')

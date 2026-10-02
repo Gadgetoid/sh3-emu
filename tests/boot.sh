@@ -180,6 +180,11 @@ if ./headless "$ROM" --seconds=4 --load="$OUT/desktop.state" --backlight=2 --tra
 SYSINFO="--tap=46:15:227:0.1 --tap=47:60:133:0.1 --tap=48.5:130:133:0.1 --tap=52:262:150:0.08 --tap=52.12:262:150:0.08"
 check memory_16mb 151d7d109bd5e68c370edf0069c58225c69d0f9bbd9c97016820b08c64ebdea5 --memory=16 --seconds=56 $CALIBRATE $WIZARD $SYSINFO
 check memory_32mb c6b7c1de7831be7af001cf41e8d678a21f222b356beeae4440878c9602a3d535 --memory=32 --seconds=56 $CALIBRATE $WIZARD $SYSINFO
+check screen_640x480_wizard 93ae4f60b5550cd914c4efadc88a6e22f31f0fde9fbc8a7cb8ddd4d8a162bbd7 --screen=640x480 --seconds=8
+SCREEN_SETUP="--key=8:4B --key=10:4B --tap=12:320:240 --tap=14:128:96 --tap=16:128:384 --tap=18:512:384 --tap=20:512:96 --key=23:4B --tap=27:631:16:0.1 --tap=31:631:16:0.1 --tap=35:631:16:0.1 --tap=39:631:16:0.1 --tap=43:631:16:0.1 --tap=47:456:231 --tap=50:456:231 --tap=53:456:231"
+./headless "$ROM" --screen=640x480 --seconds=56 --save="$OUT/screen.state" $SCREEN_SETUP 2>/dev/null
+check screen_640x480_resumed f897b6341b6ffdf3a6071f4de8b86c217e1fa764343c39e3e26caf04d2e6d203 --seconds=1 --load="$OUT/screen.state"
+check screen_640x480_typing 18f2dbe96c51590ce145639f6a1873e6a5f4f60367d1273313e545ef1f40c5ff --seconds=14 --load="$OUT/screen.state" --tap=1:360:45:0.08 --tap=1.12:360:45:0.08 "--type=5:Resumed at 640 x 480."
 CE2_ROM=${2:-rom/nk-ce2.bin}
 if [ -f "$CE2_ROM" ]; then
     CE1_ROM=$ROM
@@ -197,5 +202,8 @@ if [ -f "$CE2_ROM" ]; then
     python3 -c 'import struct, sys; d = open(sys.argv[1], "rb").read(); open(sys.argv[2], "wb").write(b"B000FF\n" + struct.pack("<II", 0x90001000, len(d)) + struct.pack("<III", 0x90001000, len(d), sum(d)) + d + struct.pack("<III", 0, 0x90001000, 0))' "$CE2_ROM" "$OUT/ce2.b000ff"
     ROM="$OUT/ce2.b000ff"
     check ce2_b000ff aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20
+    ROM=$CE2_ROM
+    check ce2_screen_640x240 06c0e1c97a9d0fa895e9a3d2c4cd85ee079363195cac96e35a699bb48944cb6e --screen=640x240 --seconds=20
+    if ./headless "$ROM" --screen=640x480 --seconds=1 2>&1 | grep -q "can't run at 640x480"; then echo "ok   ce2_screen_unsupported"; else echo "FAIL ce2_screen_unsupported"; exit 1; fi
     ROM=$CE1_ROM
 fi

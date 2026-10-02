@@ -53,6 +53,8 @@ static void type_text(machine_t *machine, const char *text) {
 }
 
 static bool write_panel_png(const char *path, machine_t *machine, int cell, int backlight) {
+    screen_size_t size = machine_screen_size(machine);
+    lcd_set_size(size.width, size.height);
     lcd_compose_setup(cell);
     lcd_set_power(machine_lcd_enabled(machine));
     lcd_set_backlight(backlight < 0 ? machine_backlight(machine) : backlight != 0);
@@ -68,11 +70,11 @@ static bool write_panel_png(const char *path, machine_t *machine, int cell, int 
     return written;
 }
 
-static void write_pgm(const char *path, const uint8_t *levels) {
+static void write_pgm(const char *path, const uint8_t *levels, screen_size_t size) {
     FILE *file = fopen(path, "wb");
     if (!file) return;
-    fprintf(file, "P5\n%d %d\n255\n", MACHINE_SCREEN_WIDTH, MACHINE_SCREEN_HEIGHT);
-    for (int i = 0; i < MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT; i++) fputc(255 - levels[i] * 17, file);
+    fprintf(file, "P5\n%d %d\n255\n", size.width, size.height);
+    for (int i = 0; i < size.width * size.height; i++) fputc(255 - levels[i] * 17, file);
     fclose(file);
 }
 
@@ -105,11 +107,12 @@ typedef struct {
     const char *type_strings[16];
     int      type_count;
     uint32_t memory, speed;
+    screen_size_t screen;
     bool     debug_output;
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT,
@@ -122,6 +125,7 @@ static const option_t OPTIONS[] = {
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a PC Card image, after --load", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 4, 8, 16, 20 or 32", 0 },
+    [OPT_SCREEN] = { "screen", "WxH", "screen for a cold boot: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for RAPI clients", 0 },
     [OPT_HOST_TIME] = { "host-time", NULL, "set the clock from this computer at a cold boot", 0 },
@@ -140,7 +144,7 @@ static const option_t OPTIONS[] = {
     [OPT_CABLE] = { "cable", "SECONDS", "connect a bare serial cable, with nothing at the other end", 0 },
     [OPT_CABLE_SEND] = { "cable-send", "SECONDS:TEXT", "send bytes down the cable (\\r and \\n allowed); anything CE sends is printed", 8 },
     [OPT_HEADING_OUTPUT] = { NULL, NULL, "Output and debugging", 0 },
-    [OPT_PGM] = { "pgm", "FILE", "save the raw 480 x 240 greyscale screen at the end", 0 },
+    [OPT_PGM] = { "pgm", "FILE", "save the raw greyscale screen at the end", 0 },
     [OPT_PNG] = { "png", "FILE", "save the screen through the simulated LCD at the end", 0 },
     [OPT_PNG_CELL] = { "png-cell", "N", "device pixels per LCD pixel for --png (default 4)", 0 },
     [OPT_PNG_BACKLIGHT] = { "png-backlight", "on|off", "draw --png lit or unlit, whatever the backlight is doing", 0 },
@@ -169,6 +173,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
         run->memory = (uint32_t)integer;
         return true;
+    case OPT_SCREEN: return screen_parse(value, &run->screen);
     case OPT_SPEED:
         if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
         run->speed = (uint32_t)integer;
@@ -184,8 +189,8 @@ static bool parse_option(void *context, int option, const char *value, char *err
         run->tap_hold[n] = 0.5;
         int got = sscanf(rest, "%d:%d:%lf%c", &run->tap_x[n], &run->tap_y[n], &run->tap_hold[n], &tail);
         if (got != 2 && got != 3) return false;
-        if (run->tap_x[n] < 0 || run->tap_x[n] >= MACHINE_SCREEN_WIDTH || run->tap_y[n] < 0 || run->tap_y[n] >= MACHINE_SCREEN_HEIGHT) {
-            snprintf(error, error_size, "--tap position %d,%d is off the 480 x 240 screen", run->tap_x[n], run->tap_y[n]);
+        if (run->tap_x[n] < 0 || run->tap_x[n] >= SCREEN_MAX_WIDTH || run->tap_y[n] < 0 || run->tap_y[n] >= SCREEN_MAX_HEIGHT) {
+            snprintf(error, error_size, "--tap position %d,%d is off the screen", run->tap_x[n], run->tap_y[n]);
             return false;
         }
         run->tap_count++;
@@ -282,6 +287,10 @@ int main(int argc, char **argv) {
     if (!machine) { fprintf(stderr, "%s\n", error); return 1; }
     machine_set_log(machine, log_stderr);
     if (run.memory) machine_set_memory(machine, run.memory);
+    if (run.screen.width && !machine_set_screen(machine, run.screen)) {
+        fprintf(stderr, "this ROM can't run at %ux%u\n", run.screen.width, run.screen.height);
+        return 1;
+    }
     if (run.speed) machine_set_speed(machine, run.speed);
     machine_set_host_clock(machine, run.host_time);
     if (run.debug_output) machine_set_debug_output(machine, print_debug_line, NULL);
@@ -289,6 +298,13 @@ int main(int argc, char **argv) {
     if (run.load) machine_serial_connect(machine, false);
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
+    screen_size_t screen = machine_screen_size(machine);
+    for (int t = 0; t < run.tap_count; t++) {
+        if (run.tap_x[t] >= screen.width || run.tap_y[t] >= screen.height) {
+            fprintf(stderr, "--tap position %d,%d is off the %ux%u screen\n", run.tap_x[t], run.tap_y[t], screen.width, screen.height);
+            return 2;
+        }
+    }
 
     FILE *wav_file = run.wav ? fopen(run.wav, "wb") : NULL;
     uint32_t wav_rate = 0;
@@ -412,9 +428,9 @@ int main(int argc, char **argv) {
     }
     if (run.save && !machine_save(machine, run.save, 0)) { fprintf(stderr, "cannot save state %s\n", run.save); return 1; }
     if (run.pgm) {
-        static uint8_t levels[MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT];
+        static uint8_t levels[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];
         machine_screen(machine, levels);
-        write_pgm(run.pgm, levels);
+        write_pgm(run.pgm, levels, machine_screen_size(machine));
     }
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     net_gateway_destroy(gateway);

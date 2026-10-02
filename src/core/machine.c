@@ -168,6 +168,10 @@ struct machine {
     uint32_t rom2_pa;
     uint32_t entry_va;
     uint64_t rom_hash;
+    uint64_t rom_base_hash;
+    screen_size_t screen, screen_next;
+    screen_patch_t screen_patch;
+    uint32_t screen_supported;
     key_layout_t key_layout;
     machine_log_fn log;
 
@@ -380,18 +384,18 @@ static void lcd_schedule(machine_t *m) {
     if (m->lcd_next == NO_EVENT) m->lcd_next = m->cpu.cycles + lcd_frame_cycles(m);
 }
 
-static uint16_t touch_adc(int pixel) {
-    int value = 64 + (pixel < 0 ? 0 : pixel) * 2;
+static uint16_t touch_adc(int pixel, int span, int stock_span) {
+    int value = 64 + (pixel < 0 ? 0 : pixel) * 2 * stock_span / span;
     return (uint16_t)(value > 1023 ? 1023 : value);
 }
 
-static uint16_t touch_x_adc(int x) {
-    int value = 40 + (x < 0 ? 0 : x) * 1903 / 1000;
+static uint16_t touch_x_adc(const machine_t *m, int x) {
+    int value = 40 + (x < 0 ? 0 : x) * 1903 * SCREEN_STOCK_WIDTH / (1000 * m->screen.width);
     return (uint16_t)(value > 1023 ? 1023 : value);
 }
 
-static uint16_t touch_y_adc(int y) {
-    int value = 92 + (y < 0 ? 0 : y) * 3528 / 1000;
+static uint16_t touch_y_adc(const machine_t *m, int y) {
+    int value = 92 + (y < 0 ? 0 : y) * 3528 * SCREEN_STOCK_HEIGHT / (1000 * m->screen.height);
     return (uint16_t)(value > 1023 ? 1023 : value);
 }
 
@@ -422,9 +426,9 @@ static void ucb_convert(machine_t *m, uint16_t adc_cr) {
     } else if (mode == (1u << 8)) {
         sample = m->pen_down ? 0x3FF : 0;
     } else if (channel == (2u << 2) || channel == (3u << 2)) {
-        sample = m->touch_legacy ? touch_adc(m->pen_x) : touch_y_adc(m->pen_y);
+        sample = m->touch_legacy ? touch_adc(m->pen_x, m->screen.width, SCREEN_STOCK_WIDTH) : touch_y_adc(m, m->pen_y);
     } else {
-        sample = m->touch_legacy ? touch_adc(m->pen_y) : touch_x_adc(m->pen_x);
+        sample = m->touch_legacy ? touch_adc(m->pen_y, m->screen.height, SCREEN_STOCK_HEIGHT) : touch_x_adc(m, m->pen_x);
     }
     m->ucb_adc_data = (uint16_t)((1u << 15) | ((sample & 0x3FFu) << 5));
 }
@@ -1094,6 +1098,60 @@ static void find_debug_output(machine_t *m) {
     if (!m->debug_print_va && m->rom2) m->debug_print_va = scan_debug_print(m->rom2, m->rom2_size, m->rom2_pa, &m->debug_print_buffer);
 }
 
+static int screen_roms(machine_t *m, screen_rom_t roms[2]) {
+    roms[0] = (screen_rom_t){ m->rom, m->rom_pa, m->rom_size };
+    if (!m->rom2) return 1;
+    roms[1] = (screen_rom_t){ m->rom2, m->rom2_pa, m->rom2_size };
+    return 2;
+}
+
+static bool screen_is_stock(screen_size_t size) {
+    return size.width == SCREEN_STOCK_WIDTH && size.height == SCREEN_STOCK_HEIGHT;
+}
+
+static bool screen_equal(screen_size_t a, screen_size_t b) {
+    return a.width == b.width && a.height == b.height;
+}
+
+static uint64_t screen_hash(uint64_t base, screen_size_t size) {
+    if (screen_is_stock(size)) return base;
+    const uint8_t bytes[] = { (uint8_t)size.width, (uint8_t)(size.width >> 8), (uint8_t)size.height, (uint8_t)(size.height >> 8) };
+    for (size_t i = 0; i < sizeof bytes; i++) base = (base ^ bytes[i]) * 0x100000001B3ull;
+    return base;
+}
+
+static void apply_screen(machine_t *m, screen_size_t size) {
+    screen_rom_t roms[2];
+    int count = screen_roms(m, roms);
+    screen_rom_revert(roms, count, &m->screen_patch);
+    if (!screen_rom_patch(roms, count, size, &m->screen_patch)) size = (screen_size_t){ SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT };
+    m->screen = size;
+    m->rom_hash = screen_hash(m->rom_base_hash, size);
+    mips_flush_translations(&m->cpu);
+}
+
+static uint32_t find_supported_screens(machine_t *m) {
+    screen_rom_t roms[2];
+    int count = screen_roms(m, roms);
+    uint32_t supported = 0;
+    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
+        screen_patch_t trial;
+        if (!screen_rom_patch(roms, count, SCREEN_PRESETS[i], &trial)) continue;
+        screen_rom_revert(roms, count, &trial);
+        supported |= 1u << i;
+    }
+    return supported;
+}
+
+static bool screen_for_hash(const machine_t *m, uint64_t hash, screen_size_t *size) {
+    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
+        if (!(m->screen_supported & (1u << i)) || screen_hash(m->rom_base_hash, SCREEN_PRESETS[i]) != hash) continue;
+        *size = SCREEN_PRESETS[i];
+        return true;
+    }
+    return false;
+}
+
 static void on_watch(void *context, uint32_t pc);
 
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
@@ -1141,11 +1199,14 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->dram_size = m->dram_size_next = DRAM_SIZE;
     m->eeprom_scl = m->eeprom_sda = m->eeprom_sda_out = true;
     m->dram = calloc(1, m->dram_size);
-    m->rom_hash = 0xCBF29CE484222325ull;
-    for (size_t i = 0; i < rom_size; i++) m->rom_hash = (m->rom_hash ^ rom[i]) * 0x100000001B3ull;
+    m->rom_base_hash = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < rom_size; i++) m->rom_base_hash = (m->rom_base_hash ^ rom[i]) * 0x100000001B3ull;
+    m->rom_hash = m->rom_base_hash;
+    m->screen = m->screen_next = (screen_size_t){ SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT };
     static const char shadowed_keyboard[] = "keybddr.dll.rom";
     m->key_layout = memmem(rom, rom_size, shadowed_keyboard, sizeof shadowed_keyboard - 1) ? KEY_LAYOUT_UPGRADE_CD : KEY_LAYOUT_ROM;
     apply_rom_patches(m);
+    m->screen_supported = find_supported_screens(m);
     m->cpu.bus.context = m;
     m->cpu.bus.read = bus_read;
     m->cpu.bus.write = bus_write;
@@ -1169,6 +1230,8 @@ void machine_destroy(machine_t *m) {
     free(m->card_dram);
     if (m->card_socket.image) fclose(m->card_socket.image);
     if (m->pending_card) fclose(m->pending_card);
+    screen_rom_t roms[2];
+    screen_rom_revert(roms, screen_roms(m, roms), &m->screen_patch);
     free(m->dram);
     free(m->rom);
     free(m->rom2);
@@ -1324,8 +1387,9 @@ static uint32_t lcd_shade(const machine_t *m, uint32_t raw, uint32_t bpp) {
 
 bool machine_screen(machine_t *m, uint8_t *levels) {
     uint32_t ctl1 = m->regs[0x28 / 4], ctl2 = m->regs[0x2C / 4];
+    int screen_width = m->screen.width, screen_height = m->screen.height;
     if (!(ctl1 & LCD_ENVID)) {
-        memset(levels, 0, MACHINE_SCREEN_WIDTH * MACHINE_SCREEN_HEIGHT);
+        memset(levels, 0, (size_t)screen_width * screen_height);
         return false;
     }
     uint32_t bpp = 1u << ((ctl1 >> 6) & 3);
@@ -1338,8 +1402,8 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
         uint32_t on_duty = lcd_shade(m, raw, bpp);
         shades[raw] = bpp == 4 ? (uint8_t)on_duty : (uint8_t)((on_duty * 3 + 7) / 15 * 5);
     }
-    for (int y = 0; y < MACHINE_SCREEN_HEIGHT; y++) {
-        for (int x = 0; x < MACHINE_SCREEN_WIDTH; x++) {
+    for (int y = 0; y < screen_height; y++) {
+        for (int x = 0; x < screen_width; x++) {
             uint8_t level = 0;
             if ((uint32_t)x < width && (uint32_t)y < height) {
                 uint32_t bit = (uint32_t)x * bpp;
@@ -1347,9 +1411,24 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
                 uint32_t byte = pa < DRAM_DECODE_END ? m->dram[pa & (m->dram_size - 1)] : 0;
                 level = shades[(byte >> (8 - bpp - bit % 8)) & ((1u << bpp) - 1)];
             }
-            levels[y * MACHINE_SCREEN_WIDTH + x] = level;
+            levels[y * screen_width + x] = level;
         }
     }
+    return true;
+}
+
+screen_size_t machine_screen_size(machine_t *m) { return m->screen; }
+screen_size_t machine_screen_next(machine_t *m) { return m->screen_next; }
+
+bool machine_screen_supported(machine_t *m, screen_size_t size) {
+    int index = screen_preset_index(size);
+    return index >= 0 && (m->screen_supported & (1u << index));
+}
+
+bool machine_set_screen(machine_t *m, screen_size_t size) {
+    if (!machine_screen_supported(m, size)) return false;
+    m->screen_next = size;
+    if (m->cpu.cycles == 0 && !screen_equal(m->screen_next, m->screen)) machine_reset(m);
     return true;
 }
 
@@ -1518,7 +1597,7 @@ static void apply_record(machine_t *m, const state_record_t *record) {
 static void cancel_pending_card(machine_t *m);
 
 uint64_t machine_rom_hash(machine_t *m) {
-    return m->rom_hash;
+    return m->rom_base_hash;
 }
 
 key_layout_t machine_key_layout(machine_t *m) {
@@ -1538,7 +1617,8 @@ bool machine_state_matches(machine_t *m, const char *path) {
     if (!ok || memcmp(header, STATE_MAGIC, sizeof STATE_MAGIC) != 0) return false;
     uint64_t rom_hash;
     memcpy(&rom_hash, header + sizeof STATE_MAGIC, sizeof rom_hash);
-    return rom_hash == m->rom_hash;
+    screen_size_t size;
+    return screen_for_hash(m, rom_hash, &size);
 }
 
 static bool valid_card_dram_size(uint32_t size) {
@@ -1571,10 +1651,11 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     ok = ok && (size_t)length >= header && memcmp(contents, STATE_MAGIC, sizeof STATE_MAGIC) == 0;
     uint64_t rom_hash = 0;
     int64_t saved_at = 0;
+    screen_size_t saved_screen = m->screen;
     if (ok) {
         memcpy(&rom_hash, contents + sizeof STATE_MAGIC, sizeof rom_hash);
         memcpy(&saved_at, contents + sizeof STATE_MAGIC + sizeof rom_hash, sizeof saved_at);
-        ok = rom_hash == m->rom_hash;
+        ok = screen_for_hash(m, rom_hash, &saved_screen);
     }
     bool has_dram = false, bad_card = false;
     uint32_t saved_card = 0;
@@ -1611,11 +1692,14 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         memcpy(current_path, m->card_path, sizeof current_path);
         m->card_socket.image = NULL;
         uint32_t dram_next = m->dram_size_next, card_next = m->card_dram_size_next;
+        screen_size_t screen_next = m->screen_next;
         m->dram_size_next = m->dram_size;
         m->card_dram_size_next = saved_card;
+        m->screen_next = saved_screen;
         machine_reset(m);
         m->dram_size_next = dram_next;
         m->card_dram_size_next = card_next;
+        m->screen_next = screen_next;
         m->pccard.inserted = false;
         m->touch_legacy = true;
         const uint8_t *cursor = contents + header, *end = contents + length;
@@ -1709,7 +1793,10 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     uint32_t rom_size = m->rom_size, rom_pa = m->rom_pa, entry_va = m->entry_va;
     uint8_t *rom2 = m->rom2;
     uint32_t rom2_size = m->rom2_size, rom2_pa = m->rom2_pa;
-    uint64_t rom_hash = m->rom_hash;
+    uint64_t rom_hash = m->rom_hash, rom_base_hash = m->rom_base_hash;
+    screen_size_t screen = m->screen, screen_next = m->screen_next;
+    screen_patch_t screen_patch = m->screen_patch;
+    uint32_t screen_supported = m->screen_supported;
     key_layout_t key_layout = m->key_layout;
     machine_log_fn log = m->log;
     pccard_t card = m->pccard;
@@ -1750,6 +1837,11 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->rom2_pa = rom2_pa;
     m->entry_va = entry_va;
     m->rom_hash = rom_hash;
+    m->rom_base_hash = rom_base_hash;
+    m->screen = screen;
+    m->screen_next = screen_next;
+    m->screen_patch = screen_patch;
+    m->screen_supported = screen_supported;
     m->key_layout = key_layout;
     m->log = log;
     m->cpu.bus = bus;
@@ -1764,6 +1856,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->debug_sink = debug_sink;
     m->debug_context = debug_context;
     m->debug_length = 0;
+    if (!keep_ram && !screen_equal(m->screen_next, m->screen)) apply_screen(m, m->screen_next);
     bind_card_socket(m, image);
     bind_uart(m);
     machine_power_on(m);

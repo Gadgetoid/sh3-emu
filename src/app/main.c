@@ -586,6 +586,7 @@ static void state_path(char *path, size_t size, machine_t *machine, const char *
 
 typedef struct {
     uint32_t memory;
+    screen_size_t screen;
     uint32_t speed;
     uint32_t host_time;
     uint32_t scale;
@@ -628,7 +629,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { .memory = 4, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
+    settings_t settings = { .memory = 4, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -637,6 +638,11 @@ static settings_t settings_load(void) {
     unsigned value;
     while (fgets(line, sizeof line, file)) {
         if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
+        else if (!strncmp(line, "screen=", 7)) {
+            char size[32];
+            copy_setting(size, sizeof size, line + 7);
+            screen_parse(size, &settings.screen);
+        }
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
         else if (sscanf(line, "scale=%u", &value) == 1 && scale_index(value) >= 0) settings.scale = value;
@@ -656,8 +662,8 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nsystem=%u\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
-            settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->system, settings->serial_device, settings->user_agent,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nsystem=%u\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
+            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->system, settings->serial_device, settings->user_agent,
             settings->shared_folder);
     fclose(file);
 }
@@ -847,6 +853,7 @@ static machine_t *start_machine(const char *rom_path, const settings_t *settings
     }
     machine_set_log(machine, log_message);
     machine_set_memory(machine, settings->memory);
+    machine_set_screen(machine, settings->screen);
     machine_set_speed(machine, settings->speed);
     machine_set_host_clock(machine, settings->host_time != 0);
     machine_set_debug_output(machine, print_debug_line, NULL);
@@ -937,7 +944,7 @@ typedef struct {
 } launch_t;
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED,
+    LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT,
 };
@@ -948,6 +955,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
     [LAUNCH_CARD] = { "card", "IMAGE", "insert a PC Card image", 0 },
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for the next cold boot: 4, 8, 16, 20 or 32", 0 },
+    [LAUNCH_SCREEN] = { "screen", "WxH", "screen for the next cold boot: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
     [LAUNCH_SERIAL] = { "serial", "net|pty|off|PORT", "COM1 on the PPP network, a pseudo-terminal, nothing, or a host serial port such as /dev/cu.usbserial-1", 0 },
@@ -971,6 +979,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
         if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
         settings->memory = (uint32_t)integer;
         return true;
+    case LAUNCH_SCREEN: return screen_parse(value, &settings->screen);
     case LAUNCH_SPEED:
         if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
         settings->speed = (uint32_t)integer;
@@ -1026,6 +1035,8 @@ int main(int argc, char **argv) {
     if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
     int system = machine_rom_system(machine);
     key_layout_t key_layout = machine_key_layout(machine);
+    screen_size_t screen = machine_screen_size(machine);
+    lcd_set_size(screen.width, screen.height);
 
     SDL_SetAppMetadata("Velo", options_version(), "velo-emu");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
@@ -1336,6 +1347,19 @@ int main(int argc, char **argv) {
                 notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Machine > Reset (clears the machine)";
                 notice_left = NOTICE_SECONDS * 3;
                 break;
+            case MENU_SCREEN_480X240:
+            case MENU_SCREEN_640X240:
+            case MENU_SCREEN_640X480:
+            case MENU_SCREEN_800X600: {
+                screen_size_t wanted = SCREEN_PRESETS[item - MENU_SCREEN_480X240];
+                if (!machine_set_screen(machine, wanted)) break;
+                settings.screen = wanted;
+                settings_save(&settings);
+                screen_size_t current = machine_screen_size(machine);
+                notice = current.width == wanted.width && current.height == wanted.height ? "screen unchanged" : "screen changes after Machine > Reset (clears the machine)";
+                notice_left = NOTICE_SECONDS * 3;
+                break;
+            }
             case MENU_HOST_TIME:
                 settings.host_time = !settings.host_time;
                 machine_set_host_clock(machine, settings.host_time != 0);
@@ -1498,6 +1522,12 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_MEMORY_16, machine_memory_next(machine) == 16);
         menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
         menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
+        screen_size_t screen_next = machine_screen_next(machine);
+        for (int screen_item = MENU_SCREEN_480X240; screen_item <= MENU_SCREEN_800X600; screen_item++) {
+            screen_size_t preset = SCREEN_PRESETS[screen_item - MENU_SCREEN_480X240];
+            menu_set_enabled(screen_item, machine_screen_supported(machine, preset));
+            menu_set_checked(screen_item, screen_next.width == preset.width && screen_next.height == preset.height);
+        }
         menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
         menu_set_checked(MENU_SYSTEM_CE1, system == 1);
         menu_set_checked(MENU_SYSTEM_CE2, system == 2);
@@ -1557,6 +1587,11 @@ int main(int argc, char **argv) {
             SDL_PutAudioStreamData(audio, samples, (int)(count * sizeof samples[0]));
         }
 
+        screen = machine_screen_size(machine);
+        if (screen.width != lcd_width() || screen.height != lcd_height()) {
+            view_set_screen_size(view, screen.width, screen.height);
+            if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) fit_window(window, view, settings.scale);
+        }
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight(machine_backlight(machine));
         machine_screen(machine, lcd_framebuffer);

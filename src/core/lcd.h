@@ -2,12 +2,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define LCD_WIDTH    480
-#define LCD_HEIGHT   240
+#include "core/screen.h"
+
 #define LCD_MARGIN_X 4
 #define LCD_MARGIN_Y 4
 
-extern uint8_t lcd_framebuffer[LCD_WIDTH * LCD_HEIGHT];
+extern uint8_t lcd_framebuffer[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];
+
+void      lcd_set_size(int width, int height);
+int       lcd_width(void);
+int       lcd_height(void);
 
 void      lcd_compose_setup(int cell);
 bool      lcd_compose(float seconds);

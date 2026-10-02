@@ -4,10 +4,9 @@
 #include <stdint.h>
 
 #include "core/key_text.h"
+#include "core/screen.h"
 
 #define MACHINE_CLOCK_HZ      36864000u
-#define MACHINE_SCREEN_WIDTH  480
-#define MACHINE_SCREEN_HEIGHT 240
 #define MACHINE_WATCH_MAX     4
 
 typedef struct machine machine_t;
@@ -26,6 +25,10 @@ bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
 void machine_backlight_button(machine_t *machine, bool down);
 bool machine_screen(machine_t *machine, uint8_t *levels);
+screen_size_t machine_screen_size(machine_t *machine);
+screen_size_t machine_screen_next(machine_t *machine);
+bool          machine_screen_supported(machine_t *machine, screen_size_t size);
+bool          machine_set_screen(machine_t *machine, screen_size_t size);
 
 void machine_key(machine_t *machine, uint8_t scancode, bool up);
 void machine_touch(machine_t *machine, bool down, int x, int y);

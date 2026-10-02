@@ -3,9 +3,7 @@
 
 #include <math.h>
 #include <stdlib.h>
-
-#define GRID_W (LCD_WIDTH + 2 * LCD_MARGIN_X)
-#define GRID_H (LCD_HEIGHT + 2 * LCD_MARGIN_Y)
+#include <string.h>
 
 struct view {
     SDL_Window    *window;
@@ -17,12 +15,12 @@ struct view {
     float          top;
     bool           laid_out;
     SDL_FRect      dest;
-    uint32_t       sharp[LCD_WIDTH * LCD_HEIGHT];
+    uint32_t       sharp[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];
 };
 
 void view_source_size(view_display_t display, int *width, int *height) {
-    *width = display == VIEW_SIMULATED ? GRID_W : LCD_WIDTH;
-    *height = display == VIEW_SIMULATED ? GRID_H : LCD_HEIGHT;
+    *width = lcd_width() + (display == VIEW_SIMULATED ? 2 * LCD_MARGIN_X : 0);
+    *height = lcd_height() + (display == VIEW_SIMULATED ? 2 * LCD_MARGIN_Y : 0);
 }
 
 view_t *view_create(SDL_Window *window, SDL_Renderer *renderer, view_display_t display, int top) {
@@ -50,6 +48,13 @@ view_display_t view_display(const view_t *view) {
     return view->display;
 }
 
+void view_set_screen_size(view_t *view, int width, int height) {
+    if (width == lcd_width() && height == lcd_height()) return;
+    lcd_set_size(width, height);
+    memset(view->sharp, 0, sizeof view->sharp);
+    view->laid_out = false;
+}
+
 static bool layout(view_t *view) {
     int output_w, output_h;
     SDL_GetRenderOutputSize(view->renderer, &output_w, &output_h);
@@ -68,7 +73,7 @@ static bool layout(view_t *view) {
     bool whole = fabsf(fit - roundf(fit)) < 0.01f && fit >= 1.0f;
     float scale = whole ? roundf(fit) : fit;
 
-    int texture_w = LCD_WIDTH, texture_h = LCD_HEIGHT;
+    int texture_w = lcd_width(), texture_h = lcd_height();
     if (view->display == VIEW_SIMULATED) {
         lcd_compose_setup(scale >= 2.0f ? (int)ceilf(scale) : 2);
         lcd_invalidate();
@@ -92,7 +97,7 @@ static bool layout(view_t *view) {
 
 static bool fill_sharp(view_t *view, bool powered) {
     bool changed = false;
-    for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
+    for (int i = 0; i < lcd_width() * lcd_height(); i++) {
         uint32_t grey = powered ? 255u - lcd_framebuffer[i] * 17u : 255u;
         uint32_t pixel = grey | grey << 8 | grey << 16 | 0xff000000u;
         if (view->sharp[i] != pixel) {
@@ -114,7 +119,7 @@ bool view_update(view_t *view, float seconds, bool powered) {
             changed = true;
         }
     } else if (fill_sharp(view, powered) || changed) {
-        SDL_UpdateTexture(view->texture, NULL, view->sharp, LCD_WIDTH * 4);
+        SDL_UpdateTexture(view->texture, NULL, view->sharp, lcd_width() * 4);
         changed = true;
     }
     return changed;
@@ -141,9 +146,9 @@ bool view_screen_position(view_t *view, float window_x, float window_y, int *x, 
     *y = (int)lcd_y;
     if (*x < 0) *x = 0;
     if (*y < 0) *y = 0;
-    if (*x >= LCD_WIDTH) *x = LCD_WIDTH - 1;
-    if (*y >= LCD_HEIGHT) *y = LCD_HEIGHT - 1;
-    return lcd_x >= 0 && lcd_y >= 0 && lcd_x < LCD_WIDTH && lcd_y < LCD_HEIGHT;
+    if (*x >= lcd_width()) *x = lcd_width() - 1;
+    if (*y >= lcd_height()) *y = lcd_height() - 1;
+    return lcd_x >= 0 && lcd_y >= 0 && lcd_x < lcd_width() && lcd_y < lcd_height();
 }
 
 const uint32_t *view_image(view_t *view, int *width, int *height) {
@@ -152,7 +157,7 @@ const uint32_t *view_image(view_t *view, int *width, int *height) {
         *height = lcd_compose_height();
         return lcd_compose_pixels();
     }
-    *width = LCD_WIDTH;
-    *height = LCD_HEIGHT;
+    *width = lcd_width();
+    *height = lcd_height();
     return view->sharp;
 }
