@@ -20,9 +20,9 @@ if pkg-config --exists slirp libcurl; then
     python3 -m http.server "$PORT" --bind 127.0.0.1 --directory tests/web >/dev/null 2>&1 &
     SERVER=$!
     trap 'kill $SERVER 2>/dev/null || true' EXIT
-    sleep 1
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/page.html', timeout=1)" 2>/dev/null && break; sleep 1; done
     PAGE=$(./proxycheck "http://127.0.0.1:$PORT/page.html" 2>/dev/null | iconv -f WINDOWS-1252 -t UTF-8)
-    if echo "$PAGE" | grep -q 'Café “quoted” — dash</p><a href="http://example.com/next">next</a></body>' && ! echo "$PAGE" | grep -qiE 'script|style|svg|hidden'; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; exit 1; fi
+    if echo "$PAGE" | grep -q 'Café “quoted” — dash</p><a href="http://example.com/next">next</a></body>' && ! echo "$PAGE" | grep -qiE 'script|style|svg|hidden'; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; ./proxycheck "http://127.0.0.1:$PORT/page.html" 2>&1 | head -40; exit 1; fi
     MOVED=$(./proxycheck "http://127.0.0.1:$PORT/folder" 2>/dev/null)
     if echo "$MOVED" | grep -q "^HTTP/1.0 301" && echo "$MOVED" | grep -q "^Content-Type: text/html" && echo "$MOVED" | grep -q "folder/\">here</A>"; then echo "ok   proxy_redirect"; else echo "FAIL proxy_redirect"; echo "$MOVED"; exit 1; fi
     XHTML=$(./proxycheck "http://127.0.0.1:$PORT/page.xhtml" 2>/dev/null)
