@@ -111,10 +111,60 @@ static void scroller_step(scroller_t *scroller, machine_t *machine) {
     scroller->next_at = now + SCROLL_STEP;
 }
 
+#define INPUT_QUEUE    64
+#define PEN_MIN_CYCLES (MACHINE_CLOCK_HZ * 6 / 100)
+#define KEY_MIN_CYCLES (MACHINE_CLOCK_HZ / 50)
+
+typedef enum { INPUT_PEN, INPUT_KEY } input_kind_t;
+
+typedef struct {
+    struct { uint64_t at; input_kind_t kind; bool down; int x, y; uint8_t scancode; } events[INPUT_QUEUE];
+    int      count;
+    uint64_t last_at;
+} input_queue_t;
+
+static void input_add(input_queue_t *input, machine_t *machine, input_kind_t kind, bool down, int x, int y, uint8_t scancode) {
+    if (input->count == INPUT_QUEUE) return;
+    uint64_t now = machine_cycles(machine);
+    uint64_t spacing = kind == INPUT_PEN ? PEN_MIN_CYCLES : KEY_MIN_CYCLES;
+    uint64_t at = input->last_at + spacing > now ? input->last_at + spacing : now;
+    input->events[input->count].at = at;
+    input->events[input->count].kind = kind;
+    input->events[input->count].down = down;
+    input->events[input->count].x = x;
+    input->events[input->count].y = y;
+    input->events[input->count].scancode = scancode;
+    input->count++;
+    input->last_at = at;
+}
+
+static void pen_move(input_queue_t *input, machine_t *machine, int x, int y) {
+    if (input->count) return;
+    machine_touch(machine, true, x, y);
+}
+
+static void input_step(input_queue_t *input, machine_t *machine) {
+    uint64_t now = machine_cycles(machine);
+    int done = 0;
+    while (done < input->count && input->events[done].at <= now) {
+        if (input->events[done].kind == INPUT_PEN) machine_touch(machine, input->events[done].down, input->events[done].x, input->events[done].y);
+        else machine_key(machine, input->events[done].scancode, !input->events[done].down);
+        done++;
+    }
+    for (int i = done; i < input->count; i++) input->events[i - done] = input->events[i];
+    input->count -= done;
+}
+
+static void input_clear(input_queue_t *input) {
+    input->count = 0;
+    input->last_at = 0;
+}
+
 typedef struct {
     SDL_Mutex  *lock;
     SDL_Thread *thread;
     machine_t  *machine;
+    input_queue_t *input;
     bool        paused, stop, restart;
     SDL_AtomicInt waiting;
 } runner_t;
@@ -138,6 +188,7 @@ static int run_machine(void *context) {
             if (owed > RUN_MAX_BEHIND) owed = RUN_MAX_BEHIND;
             uint64_t hold_until = now + RUN_HOLD_NS;
             while (owed >= RUN_SLICE_CYCLES && SDL_GetTicksNS() < hold_until && !SDL_GetAtomicInt(&runner->waiting)) {
+                input_step(runner->input, runner->machine);
                 machine_run(runner->machine, RUN_SLICE_CYCLES);
                 owed -= RUN_SLICE_CYCLES;
             }
@@ -150,7 +201,7 @@ static int run_machine(void *context) {
     }
 }
 
-static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) {
+static void release_keys(input_queue_t *input, machine_t *machine, bool *held, int only_modifiers_up) {
     static const struct { uint8_t scancode; int modifier; } modifiers[] = {
         { 0x51, MENU_MOD_SHIFT }, { 0x01, MENU_MOD_CONTROL }, { 0x19, MENU_MOD_ALT }, { 0x09, MENU_MOD_ALT },
     };
@@ -158,7 +209,7 @@ static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) 
         for (int i = 0; i < 256; i++) {
             if (!held[i]) continue;
             held[i] = false;
-            machine_key(machine, (uint8_t)i, true);
+            input_add(input, machine, INPUT_KEY, false, 0, 0, (uint8_t)i);
         }
         return;
     }
@@ -167,7 +218,7 @@ static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) 
         uint8_t scancode = modifiers[i].scancode;
         if (held[scancode] && !(only_modifiers_up & modifiers[i].modifier)) {
             held[scancode] = false;
-            machine_key(machine, scancode, true);
+            input_add(input, machine, INPUT_KEY, false, 0, 0, scancode);
         }
     }
 }
@@ -1012,6 +1063,7 @@ int main(int argc, char **argv) {
     char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
     static typer_t typer;
     static scroller_t scroller;
+    static input_queue_t input;
     static char ports[SERIAL_PORT_MAX][64];
     int port_count = 0;
     double since_port_scan = 0;
@@ -1031,7 +1083,7 @@ int main(int argc, char **argv) {
     }
 
     static runner_t runner;
-    runner = (runner_t){ SDL_CreateMutex(), NULL, machine, false, false, true, { 0 } };
+    runner = (runner_t){ SDL_CreateMutex(), NULL, machine, &input, false, false, true, { 0 } };
     runner.thread = SDL_CreateThread(run_machine, "velo-machine", &runner);
     while (running) {
         SDL_Event event;
@@ -1044,8 +1096,8 @@ int main(int argc, char **argv) {
             events_seen = true;
             if (menu_event(&event)) {
                 if (menu_active()) {
-                    release_keys(machine, held, -1);
-                    if (pen_down) machine_touch(machine, false, 0, 0);
+                    release_keys(&input, machine, held, -1);
+                    if (pen_down) input_add(&input, machine, INPUT_PEN, false, 0, 0, 0);
                     pen_down = false;
                 }
                 continue;
@@ -1062,10 +1114,10 @@ int main(int argc, char **argv) {
                 if (down) {
                     if (event.key.repeat || (event.key.mod & SDL_KMOD_GUI) || held[scancode]) break;
                     held[scancode] = true;
-                    machine_key(machine, scancode, false);
+                    input_add(&input, machine, INPUT_KEY, true, 0, 0, scancode);
                 } else if (held[scancode]) {
                     held[scancode] = false;
-                    machine_key(machine, scancode, true);
+                    input_add(&input, machine, INPUT_KEY, false, 0, 0, scancode);
                 }
                 break;
             }
@@ -1086,14 +1138,14 @@ int main(int argc, char **argv) {
                 find_roms(&roms);
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
-                release_keys(machine, held, -1);
+                release_keys(&input, machine, held, -1);
                 break;
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (event.button.button == SDL_BUTTON_LEFT) {
                     int x, y;
                     if (view_screen_position(view, event.button.x, event.button.y, &x, &y)) {
                         pen_down = true;
-                        machine_touch(machine, true, x, y);
+                        input_add(&input, machine, INPUT_PEN, true, x, y, 0);
                     }
                 }
                 break;
@@ -1101,7 +1153,7 @@ int main(int argc, char **argv) {
                 if (pen_down) {
                     int x, y;
                     view_screen_position(view, event.motion.x, event.motion.y, &x, &y);
-                    machine_touch(machine, true, x, y);
+                    pen_move(&input, machine, x, y);
                 }
                 break;
             case SDL_EVENT_MOUSE_BUTTON_UP:
@@ -1109,7 +1161,7 @@ int main(int argc, char **argv) {
                     int x, y;
                     view_screen_position(view, event.button.x, event.button.y, &x, &y);
                     pen_down = false;
-                    machine_touch(machine, false, x, y);
+                    input_add(&input, machine, INPUT_PEN, false, x, y, 0);
                 }
                 break;
             default:
@@ -1121,9 +1173,9 @@ int main(int argc, char **argv) {
             }
         }
 
-        release_keys(machine, held, menu_modifiers());
+        release_keys(&input, machine, held, menu_modifiers());
         for (int item = menu_poll(); item >= 0; item = menu_poll()) {
-            release_keys(machine, held, -1);
+            release_keys(&input, machine, held, -1);
             switch (item) {
             case MENU_POWER:
                 machine_power_button(machine, true);
@@ -1151,6 +1203,7 @@ int main(int argc, char **argv) {
                 serial_mode_t mode = serial.mode;
                 serial_close(&serial, machine);
                 if (pen_down) machine_touch(machine, false, 0, 0);
+                input_clear(&input);
                 pen_down = false;
                 typer.length = typer.position = 0;
                 machine_save(machine, state, (int64_t)time(NULL));

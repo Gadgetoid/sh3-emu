@@ -17,6 +17,7 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <zlib.h>
 
 #define HEAD_MAX         16384
 #define BODY_MAX         (1024 * 1024)
@@ -28,6 +29,7 @@
 #define TRANSFER_TIMEOUT 60
 #define HINT_COUNT       512
 #define CONNECTION_MAX   8
+#define GZIP_MIN         256
 
 #ifdef MSG_NOSIGNAL
 #define SEND_FLAGS MSG_NOSIGNAL
@@ -600,6 +602,38 @@ static void replace_with_moved_page(response_t *response, const char *location) 
     response->body = page;
 }
 
+static bool accepts_gzip(const request_t *request) {
+    char value[256];
+    if (!find_header(request->headers, "Accept-Encoding", value, sizeof value)) return false;
+    return find_nocase(value, value + strlen(value), "gzip") != NULL;
+}
+
+static bool gzip_body(buffer_t *body) {
+    z_stream stream = { 0 };
+    if (deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) return false;
+    buffer_t out = { 0 };
+    uLong bound = deflateBound(&stream, (uLong)body->length);
+    out.data = malloc(bound + 1);
+    if (!out.data) {
+        deflateEnd(&stream);
+        return false;
+    }
+    out.capacity = bound + 1;
+    stream.next_in = (Bytef *)body->data;
+    stream.avail_in = (uInt)body->length;
+    stream.next_out = (Bytef *)out.data;
+    stream.avail_out = (uInt)bound;
+    int result = deflate(&stream, Z_FINISH);
+    out.length = stream.total_out;
+    deflateEnd(&stream);
+    if (result != Z_STREAM_END) {
+        buffer_free(&out);
+        return false;
+    }
+    buffer_replace(body, &out);
+    return true;
+}
+
 static bool looks_like_html(const buffer_t *body) {
     size_t at = 0;
     while (at < body->length && isspace((unsigned char)body->data[at])) at++;
@@ -635,20 +669,24 @@ static void send_response(int client, const request_t *request, response_t *resp
     uint8_t *gif;
     size_t gif_length;
     int hint_width, hint_height;
+    bool image = !strncmp(mime, "image/", 6);
     find_image_hint(request->url, &hint_width, &hint_height);
-    if (!strncmp(mime, "image/", 6) && response->body.length &&
+    if (image && response->body.length &&
         web_image_convert((const uint8_t *)response->body.data, response->body.length, !strcmp(mime, "image/svg+xml"),
                          hint_width, hint_height, &gif, &gif_length)) {
         free(response->body.data);
         response->body = (buffer_t){ (char *)gif, gif_length, gif_length };
         snprintf(content_type, sizeof content_type, "image/gif");
     }
+    bool gzipped = !text && !image && !*location && strcmp(request->method, "HEAD") && response->body.length >= GZIP_MIN &&
+                   accepts_gzip(request) && gzip_body(&response->body);
 
     long status = legacy_status(response->status);
     buffer_t head = { 0 };
     buffer_printf(&head, "HTTP/1.0 %ld %s\r\n", status, reason_phrase(status));
     if (*content_type) buffer_printf(&head, "Content-Type: %s\r\n", text ? mime : content_type);
     if (*location) buffer_printf(&head, "Location: %s\r\n", location);
+    if (gzipped) buffer_printf(&head, "Content-Encoding: gzip\r\n");
     char line[URL_MAX];
     const char *cursor = response->headers.data ? strstr(response->headers.data, "\r\n") : NULL;
     if (cursor) cursor += 2;

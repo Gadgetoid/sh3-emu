@@ -177,6 +177,7 @@ Type addresses as `http://`: Pocket IE makes `https://` connections itself, not 
 - converts UTF-8 text to Windows-1252 and drops the charset
 - drops `Secure` from cookies and maps 303, 307 and 308 redirects to 301 and 302
 - turns PNG, JPEG, GIF, BMP and SVG images into four-grey dithered GIFs, at the size the page's `<img width height>` gives and at most 436 pixels wide, the widest Pocket IE shows unscaled. Other formats, such as WebP, pass through unchanged.
+- gzips anything else it passes through unchanged, such as JSON, if the request has `Accept-Encoding: gzip`. Pocket IE doesn't send it.
 
 It sends a Lynx user agent upstream in place of Pocket IE's, which some sites block, and sites generally serve text browsers their simplest pages. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT`; an empty value passes Pocket IE's own through. Through the proxy, `127.0.0.1` is the host's loopback.
 

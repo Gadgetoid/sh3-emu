@@ -34,5 +34,9 @@ if pkg-config --exists slirp libcurl; then
     BODY='import sys, struct, hashlib; head, body = sys.stdin.buffer.read().split(b"\r\n\r\n", 1); print(body[:6].decode("latin-1"), *struct.unpack("<HH", body[6:10]), hashlib.sha256(body).hexdigest())'
     SVG=$(./proxycheck "http://127.0.0.1:$PORT/images.html" "http://127.0.0.1:$PORT/shapes.svg" 2>/dev/null | python3 -c "$BODY")
     PNG=$(./proxycheck "http://127.0.0.1:$PORT/gradient.png" 2>/dev/null | python3 -c "$BODY")
+    GZIP='import gzip, sys; head, body = sys.stdin.buffer.read().split(b"\r\n\r\n", 1); sys.exit(0 if b"Content-Encoding: gzip" in head and gzip.decompress(body) == open("tests/web/data.json", "rb").read() else 1)'
+    PLAIN='import sys; head, body = sys.stdin.buffer.read().split(b"\r\n\r\n", 1); sys.exit(0 if b"Content-Encoding" not in head and body == open("tests/web/data.json", "rb").read() else 1)'
+    if ./proxycheck --header="Accept-Encoding: gzip, deflate" "http://127.0.0.1:$PORT/data.json" 2>/dev/null | python3 -c "$GZIP" &&
+       ./proxycheck "http://127.0.0.1:$PORT/data.json" 2>/dev/null | python3 -c "$PLAIN"; then echo "ok   proxy_gzip"; else echo "FAIL proxy_gzip"; exit 1; fi
     if [ "$SVG" = "GIF89a 100 50 4952502eef863d6cd28acd031a890c4d93b43269bebd712c05318955547ac371" ] && [ "${PNG% *}" = "GIF89a 436 218" ]; then echo "ok   proxy_images"; else echo "FAIL proxy_images $SVG / $PNG"; exit 1; fi
 fi
