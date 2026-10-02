@@ -41,6 +41,10 @@ bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
 
+bool machine_insert_disk(machine_t *machine, const char *path, bool read_only);
+void machine_eject_disk(machine_t *machine);
+bool machine_disk_inserted(machine_t *machine);
+
 void   machine_serial_connect(machine_t *machine, bool connected);
 bool   machine_serial_connected(machine_t *machine);
 void   machine_set_serial_tag(machine_t *machine, uint32_t tag);

@@ -9,6 +9,7 @@
 #include "core/mips.h"
 #include "core/pccard.h"
 #include "core/uart.h"
+#include "core/vdisk.h"
 
 #define DRAM_SIZE        0x00400000u
 #define DRAM_MAX         0x01000000u
@@ -187,6 +188,9 @@ struct machine {
     bool     ir_cardet;
     uart_t   uart_a;
     uart_port_t uart_port;
+    vdisk_t  vdisk;
+    vdisk_port_t vdisk_port;
+    char     vdisk_path[1024];
     bool     serial_connected;
     uint32_t serial_tag;
 
@@ -843,6 +847,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         *value = 0xFFFFFFFFu >> (32 - size * 8);
         return true;
     }
+    if (pa >= VDISK_PA && pa < VDISK_PA + VDISK_WINDOW) { *value = vdisk_read(&m->vdisk_port, pa - VDISK_PA, size); return true; }
     note_access(m, "unmapped read", pa, size, 0);
     *value = 0;
     return true;
@@ -867,6 +872,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
         write_host(m->card_dram + (pa & (m->card_dram_size - 1)), size, value);
         return true;
     }
+    if (pa >= VDISK_PA && pa < VDISK_PA + VDISK_WINDOW) { vdisk_write(&m->vdisk_port, pa - VDISK_PA, size, value); return true; }
     note_access(m, "unmapped write", pa, size, value);
     return true;
 }
@@ -898,6 +904,10 @@ static void bind_uart(machine_t *m) {
     m->uart_port.dram_mask = m->dram_size - 1;
     m->uart_port.context = m;
     m->uart_port.raise = uart_raise;
+}
+
+static void bind_vdisk(machine_t *m) {
+    m->vdisk_port.state = &m->vdisk;
 }
 
 static void bind_card_socket(machine_t *m, FILE *image) {
@@ -1213,6 +1223,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->cpu.bus.fetch_page = bus_fetch_page;
     bind_card_socket(m, NULL);
     bind_uart(m);
+    bind_vdisk(m);
     machine_power_on(m);
     m->set_time_va = find_set_real_time(m);
     find_debug_output(m);
@@ -1230,6 +1241,7 @@ void machine_destroy(machine_t *m) {
     free(m->card_dram);
     if (m->card_socket.image) fclose(m->card_socket.image);
     if (m->pending_card) fclose(m->pending_card);
+    if (m->vdisk_port.image) fclose(m->vdisk_port.image);
     screen_rom_t roms[2];
     screen_rom_revert(roms, screen_roms(m, roms), &m->screen_patch);
     free(m->dram);
@@ -1522,7 +1534,9 @@ void machine_dump_state(machine_t *m) {
     X(eeprom_phase, m->eeprom_phase) X(eeprom_shift, m->eeprom_shift) X(eeprom_bit, m->eeprom_bit) \
     X(eeprom_addr, m->eeprom_addr) X(eeprom_selected, m->eeprom_selected) X(eeprom_read, m->eeprom_read) \
     X(eeprom_in_ack, m->eeprom_in_ack) X(eeprom_scl, m->eeprom_scl) X(eeprom_sda, m->eeprom_sda) \
-    X(eeprom_sda_out, m->eeprom_sda_out)
+    X(eeprom_sda_out, m->eeprom_sda_out) \
+    X(vdisk_path, m->vdisk_path) X(vdisk_lba, m->vdisk.lba) X(vdisk_count, m->vdisk.count) X(vdisk_status, m->vdisk.status) \
+    X(vdisk_changes, m->vdisk.changes) X(vdisk_buffer, m->vdisk.buffer)
 
 static bool write_record(FILE *file, const char *name, const void *data, uint32_t size) {
     uint8_t length = (uint8_t)strlen(name);
@@ -1687,6 +1701,8 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         }
     }
     if (ok) {
+        char disk_path[sizeof m->vdisk_path];
+        memcpy(disk_path, m->vdisk_path, sizeof disk_path);
         FILE *image = m->card_socket.image;
         char current_path[sizeof m->card_path];
         memcpy(current_path, m->card_path, sizeof current_path);
@@ -1741,6 +1757,13 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         m->card_lost = lost;
         m->card_lost_at = m->cpu.cycles;
         bind_uart(m);
+        m->vdisk_path[sizeof m->vdisk_path - 1] = 0;
+        if (strcmp(disk_path, m->vdisk_path) != 0) {
+            char wanted[sizeof m->vdisk_path];
+            memcpy(wanted, m->vdisk_path, sizeof wanted);
+            machine_eject_disk(m);
+            if (wanted[0] && !machine_insert_disk(m, wanted, false)) machine_logf(m, "state: disk image %s not found, so the disk is out\n", wanted);
+        }
         m->uart_a.rx_next = NO_EVENT;
         intc_update(m);
         if (host_time) *host_time = saved_at;
@@ -1801,6 +1824,10 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     machine_log_fn log = m->log;
     pccard_t card = m->pccard;
     FILE *image = m->card_socket.image;
+    vdisk_port_t vdisk_port = m->vdisk_port;
+    uint32_t vdisk_changes = m->vdisk.changes;
+    char vdisk_path[sizeof m->vdisk_path];
+    memcpy(vdisk_path, m->vdisk_path, sizeof vdisk_path);
     char card_path[sizeof m->card_path];
     memcpy(card_path, m->card_path, sizeof card_path);
     if (!keep_ram && pending_card) fclose(pending_card);
@@ -1859,6 +1886,10 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     if (!keep_ram && !screen_equal(m->screen_next, m->screen)) apply_screen(m, m->screen_next);
     bind_card_socket(m, image);
     bind_uart(m);
+    m->vdisk_port = vdisk_port;
+    m->vdisk.changes = vdisk_changes;
+    memcpy(m->vdisk_path, vdisk_path, sizeof vdisk_path);
+    bind_vdisk(m);
     machine_power_on(m);
     m->cpu.speed = speed;
     memcpy(m->cpu.watch, watch, sizeof watch);
@@ -1937,6 +1968,26 @@ void machine_eject_card(machine_t *m) {
     cancel_pending_card(m);
     pccard_eject(&m->card_socket);
     m->card_path[0] = 0;
+}
+
+bool machine_insert_disk(machine_t *m, const char *path, bool read_only) {
+    FILE *image = fopen(path, read_only ? "rb" : "r+b");
+    if (!image) return false;
+    if (!vdisk_insert(&m->vdisk_port, image, read_only)) {
+        fclose(image);
+        return false;
+    }
+    snprintf(m->vdisk_path, sizeof m->vdisk_path, "%s", path);
+    return true;
+}
+
+void machine_eject_disk(machine_t *m) {
+    vdisk_eject(&m->vdisk_port);
+    m->vdisk_path[0] = 0;
+}
+
+bool machine_disk_inserted(machine_t *m) {
+    return m->vdisk_port.image != NULL;
 }
 
 bool machine_card_inserted(machine_t *m) {

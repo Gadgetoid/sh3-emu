@@ -108,6 +108,24 @@ velo --card=card.img
 
 It uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. Insert it with Devices > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later. To change its contents on the host, eject it first; on macOS `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` mounts it, and on Linux `mcopy -i card.img@@512` copies to and from it.
 
+### Paravirtual disk (experimental, CE 2.0)
+
+A second disk, separate from the PC Card slot, backed by an image file. It's emulator-only hardware (a few registers and a sector buffer at physical `0x10800000`) with a small block driver (`guest/vdisk`) under CE 2.0's FATFS. Tested on the merged CE 2.0 image. With it attached, CE 2.0 mounts it as `\Storage Card` and a PC Card becomes `\Storage Card2`.
+
+Build the driver with velo-toolchain (`make vdisk`, which looks for it in `../velo-toolchain`; set `VELO_TOOLCHAIN=PATH` otherwise), then install it once over RAPI, with the machine connected (the upgrade ROM on its own has no RAPI server, so copy the file from a card and set the registry another way there):
+
+```
+velo-rapi put build/guest/vdisk/vdisk.dll /Windows/vdisk.dll
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Dll string vdisk.dll
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Prefix string DSK
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Index dword 2
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Order dword 0
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk FSD string FATFS.DLL
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Ioctl dword 4
+```
+
+Attach an image with `--disk=IMAGE` (velo and headless) and soft reset; CE mounts it once the shell is up. Any `mkcard.sh` image works, and so does a blank file (`mkfile 32m disk.img` on macOS, `truncate -s 32M disk.img` on Linux), which CE offers to format. The image path is kept in the saved state. The driver is only loaded at boot, so attaching or changing the image needs a soft reset, and there is no CE 1.0 driver.
+
 ## Serial and networking
 
 Devices > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator responds with `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the host at 10.0.2.2 and DNS at 10.0.2.3. CE's sockets reach the host and the internet (outgoing only); 10.0.2.2 is the host's loopback.

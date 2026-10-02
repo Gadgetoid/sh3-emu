@@ -939,12 +939,12 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
 typedef struct {
     settings_t   *settings;
     serial_mode_t serial_mode;
-    const char   *card, *state_file;
+    const char   *card, *disk, *state_file;
     bool          fresh;
 } launch_t;
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
+    LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_DISK, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT,
 };
@@ -954,6 +954,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_STATE] = { "state", "FILE", "load, save and autosave FILE instead of the ROM's own state", 0 },
     [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
     [LAUNCH_CARD] = { "card", "IMAGE", "insert a PC Card image", 0 },
+    [LAUNCH_DISK] = { "disk", "IMAGE", "attach a disk image to the paravirtual disk (needs vdisk.dll in the guest)", 0 },
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for the next cold boot: 4, 8, 16, 20 or 32", 0 },
     [LAUNCH_SCREEN] = { "screen", "WxH", "screen for the next cold boot: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
@@ -975,6 +976,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
     case LAUNCH_STATE: launch->state_file = value; return true;
     case LAUNCH_FRESH: launch->fresh = true; return true;
     case LAUNCH_CARD: launch->card = value; return true;
+    case LAUNCH_DISK: launch->disk = value; return true;
     case LAUNCH_MEMORY:
         if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
         settings->memory = (uint32_t)integer;
@@ -1011,7 +1013,7 @@ int main(int argc, char **argv) {
     const char *rom_path = NULL;
     migrate_old_folders();
     settings_t settings = settings_load();
-    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, false };
+    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, false };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
@@ -1019,7 +1021,7 @@ int main(int argc, char **argv) {
     if (parsed == OPTIONS_ERROR) return 2;
     if (positional_count) rom_path = positional[0];
     serial_mode_t serial_mode = launch.serial_mode;
-    const char *card = launch.card, *state_file = launch.state_file;
+    const char *card = launch.card, *disk = launch.disk, *state_file = launch.state_file;
     bool fresh = launch.fresh;
     static rom_set_t roms;
     find_roms(&roms);
@@ -1052,6 +1054,7 @@ int main(int argc, char **argv) {
 
 
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
+    if (disk && !machine_insert_disk(machine, disk, false)) fprintf(stderr, "cannot open disk image %s\n", disk);
 
     menu_install(window);
 

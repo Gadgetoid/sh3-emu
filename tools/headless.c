@@ -81,7 +81,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double   seconds;
-    const char *png, *pgm, *load, *save, *wav, *card;
+    const char *png, *pgm, *load, *save, *wav, *card, *disk;
     int      png_cell, png_backlight;
     bool     trace_pc, host_time;
     double   key_times[32];
@@ -112,7 +112,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DISK, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT,
@@ -124,6 +124,7 @@ static const option_t OPTIONS[] = {
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a PC Card image, after --load", 0 },
+    [OPT_DISK] = { "disk", "IMAGE", "attach a disk image to the paravirtual disk, after --load", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 4, 8, 16, 20 or 32", 0 },
     [OPT_SCREEN] = { "screen", "WxH", "screen for a cold boot: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
@@ -169,6 +170,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
+    case OPT_DISK: run->disk = value; return true;
     case OPT_MEMORY:
         if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
         run->memory = (uint32_t)integer;
@@ -298,6 +300,7 @@ int main(int argc, char **argv) {
     if (run.load) machine_serial_connect(machine, false);
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
+    if (run.disk && !machine_insert_disk(machine, run.disk, false)) { fprintf(stderr, "cannot open disk image %s\n", run.disk); return 1; }
     screen_size_t screen = machine_screen_size(machine);
     for (int t = 0; t < run.tap_count; t++) {
         if (run.tap_x[t] >= screen.width || run.tap_y[t] >= screen.height) {
