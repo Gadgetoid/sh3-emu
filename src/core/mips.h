@@ -51,9 +51,25 @@ typedef struct {
     bool   (*read)(void *context, uint32_t pa, int size, uint32_t *value);
     bool   (*write)(void *context, uint32_t pa, int size, uint32_t value);
     uint8_t *(*fetch_page)(void *context, uint32_t pa);
+    uint8_t  *dram;
+    uint32_t  dram_mask;
+    uint32_t  dram_end;
 } mips_bus_t;
 
 #define MIPS_WATCH_MAX 8
+#define MIPS_PAGE_CACHE 64
+#define MIPS_FETCH_CACHE 32
+
+typedef struct {
+    uint32_t tag;
+    uint32_t pfn;
+    bool     dirty;
+} mips_page_cache_t;
+
+typedef struct {
+    uint32_t tag;
+    uint8_t *page;
+} mips_fetch_cache_t;
 #define MIPS_SLOT_SIZE 0x02000000u
 
 struct mips_cpu {
@@ -74,11 +90,11 @@ struct mips_cpu {
     bool     fault;
     bool     yield;
     mips_bus_t bus;
-    uint32_t last_fetch_vpn;
-    uint8_t *last_fetch_page;
-    bool     last_fetch_valid;
+    mips_fetch_cache_t fetch_cache[MIPS_FETCH_CACHE];
+    mips_page_cache_t page_cache[MIPS_PAGE_CACHE];
     uint32_t watch[MIPS_WATCH_MAX];
     int      watch_count;
+    uint32_t watch_filter[128];
     void   (*on_watch)(void *context, uint32_t pc);
 };
 
@@ -87,3 +103,4 @@ void mips_set_external_ip(mips_cpu_t *cpu, uint32_t ip_bits);
 void mips_run(mips_cpu_t *cpu, uint64_t until_cycle);
 bool mips_translate(mips_cpu_t *cpu, uint32_t va, bool write, uint32_t *pa);
 void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va);
+void mips_flush_translations(mips_cpu_t *cpu);

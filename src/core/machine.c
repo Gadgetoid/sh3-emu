@@ -1281,6 +1281,9 @@ void machine_run(machine_t *m, uint64_t cycles) {
                 m->cpu.cycles = until;
             }
         } else if (until > m->cpu.cycles) {
+            m->cpu.bus.dram = m->dram;
+            m->cpu.bus.dram_mask = m->dram_size - 1;
+            m->cpu.bus.dram_end = DRAM_DECODE_END;
             mips_run(&m->cpu, until);
         }
         process_events(m);
@@ -1631,8 +1634,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
             machine_logf(m, "state: sound DMA rebuilt from registers\n");
         }
         sanitize_state(m);
-        m->cpu.last_fetch_valid = false;
-        m->cpu.last_fetch_page = NULL;
+        mips_flush_translations(&m->cpu);
         bind_card_socket(m, NULL);
         if (m->pccard.inserted && strcmp(current_path, m->card_path) != 0) {
             if (image) fclose(image);

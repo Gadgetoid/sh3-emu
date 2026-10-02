@@ -78,7 +78,7 @@ static void tlb_write(mips_cpu_t *cpu, uint32_t index) {
     entry->valid = (entrylo & ENTRYLO_V) != 0;
     entry->dirty = (entrylo & ENTRYLO_D) != 0;
     entry->noncache = (entrylo & ENTRYLO_N) != 0;
-    cpu->last_fetch_valid = false;
+    mips_flush_translations(cpu);
 }
 
 static void tlb_read(mips_cpu_t *cpu) {
@@ -89,7 +89,6 @@ static void tlb_read(mips_cpu_t *cpu) {
                           | (entry->dirty ? ENTRYLO_D : 0)
                           | (entry->valid ? ENTRYLO_V : 0)
                           | (entry->global ? ENTRYLO_G : 0);
-    cpu->last_fetch_valid = false;
 }
 
 static void tlb_probe(mips_cpu_t *cpu) {
@@ -118,7 +117,6 @@ static void raise_exception(mips_cpu_t *cpu, uint32_t code, uint32_t faulting_pc
     cpu->pc = vector;
     cpu->next_pc = vector + 4;
     cpu->next_in_delay_slot = false;
-    cpu->last_fetch_valid = false;
     cpu->fault = true;
 }
 
@@ -139,6 +137,11 @@ static void tlb_fault(mips_cpu_t *cpu, uint32_t code, uint32_t va) {
 
 typedef enum { TRANSLATE_OK, TRANSLATE_ADDRESS, TRANSLATE_MISS, TRANSLATE_INVALID, TRANSLATE_MODIFIED } translate_result_t;
 
+void mips_flush_translations(mips_cpu_t *cpu) {
+    memset(cpu->page_cache, 0, sizeof cpu->page_cache);
+    memset(cpu->fetch_cache, 0, sizeof cpu->fetch_cache);
+}
+
 static translate_result_t translate(mips_cpu_t *cpu, uint32_t va, bool write, uint32_t *pa) {
     bool user = (cpu->cp0[CP0_STATUS] & STATUS_KUC) != 0;
     if (va >= 0x80000000u) {
@@ -146,11 +149,19 @@ static translate_result_t translate(mips_cpu_t *cpu, uint32_t va, bool write, ui
         if (va < 0xA0000000u) { *pa = va - 0x80000000u; return TRANSLATE_OK; }
         if (va < 0xC0000000u) { *pa = va - 0xA0000000u; return TRANSLATE_OK; }
     }
-    int index = tlb_find(cpu, va & ENTRYHI_VPN_MASK, tlb_pid(cpu));
+    uint32_t vpn = va & ENTRYHI_VPN_MASK, pid = tlb_pid(cpu);
+    uint32_t tag = vpn | pid << 1 | 1;
+    mips_page_cache_t *cached = &cpu->page_cache[(va >> 12) & (MIPS_PAGE_CACHE - 1)];
+    if (cached->tag == tag && (!write || cached->dirty)) {
+        *pa = cached->pfn | (va & 0xFFFu);
+        return TRANSLATE_OK;
+    }
+    int index = tlb_find(cpu, vpn, pid);
     if (index < 0) return TRANSLATE_MISS;
     const mips_tlb_entry_t *entry = &cpu->tlb[index];
     if (!entry->valid) return TRANSLATE_INVALID;
     if (write && !entry->dirty) return TRANSLATE_MODIFIED;
+    *cached = (mips_page_cache_t){ tag, entry->pfn, entry->dirty };
     *pa = entry->pfn | (va & 0xFFFu);
     return TRANSLATE_OK;
 }
@@ -170,10 +181,29 @@ static bool translate_or_fault(mips_cpu_t *cpu, uint32_t va, bool write, uint32_
     return false;
 }
 
+static uint32_t read_dram(const uint8_t *base, int size) {
+    if (size == 4) return (uint32_t)base[0] | (uint32_t)base[1] << 8 | (uint32_t)base[2] << 16 | (uint32_t)base[3] << 24;
+    if (size == 2) return (uint32_t)base[0] | (uint32_t)base[1] << 8;
+    return base[0];
+}
+
+static void write_dram(uint8_t *base, int size, uint32_t value) {
+    base[0] = (uint8_t)value;
+    if (size == 1) return;
+    base[1] = (uint8_t)(value >> 8);
+    if (size == 2) return;
+    base[2] = (uint8_t)(value >> 16);
+    base[3] = (uint8_t)(value >> 24);
+}
+
 static bool load(mips_cpu_t *cpu, uint32_t va, int size, uint32_t *value) {
     if (va & (uint32_t)(size - 1)) { address_fault(cpu, MIPS_EXC_ADEL, va); return false; }
     uint32_t pa;
     if (!translate_or_fault(cpu, va, false, &pa)) return false;
+    if (pa < cpu->bus.dram_end) {
+        *value = read_dram(cpu->bus.dram + (pa & cpu->bus.dram_mask), size);
+        return true;
+    }
     if (!cpu->bus.read(cpu->bus.context, pa, size, value)) {
         raise_exception(cpu, MIPS_EXC_DBE, current_pc, current_in_delay_slot);
         return false;
@@ -185,6 +215,10 @@ static bool store(mips_cpu_t *cpu, uint32_t va, int size, uint32_t value) {
     if (va & (uint32_t)(size - 1)) { address_fault(cpu, MIPS_EXC_ADES, va); return false; }
     uint32_t pa;
     if (!translate_or_fault(cpu, va, true, &pa)) return false;
+    if (pa < cpu->bus.dram_end) {
+        write_dram(cpu->bus.dram + (pa & cpu->bus.dram_mask), size, value);
+        return true;
+    }
     if (!cpu->bus.write(cpu->bus.context, pa, size, value)) {
         raise_exception(cpu, MIPS_EXC_DBE, current_pc, current_in_delay_slot);
         return false;
@@ -198,8 +232,10 @@ void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va) {
 
 static bool fetch(mips_cpu_t *cpu, uint32_t va, uint32_t *instruction) {
     if (va & 3) { address_fault(cpu, MIPS_EXC_ADEL, va); return false; }
-    uint32_t vpn = va & ENTRYHI_VPN_MASK;
-    if (!cpu->last_fetch_valid || cpu->last_fetch_vpn != vpn) {
+    uint32_t user = (cpu->cp0[CP0_STATUS] & STATUS_KUC) != 0;
+    uint32_t tag = (va & ENTRYHI_VPN_MASK) | tlb_pid(cpu) << 2 | user << 1 | 1;
+    mips_fetch_cache_t *cached = &cpu->fetch_cache[(va >> 12) & (MIPS_FETCH_CACHE - 1)];
+    if (cached->tag != tag) {
         uint32_t pa;
         if (!translate_or_fault(cpu, va, false, &pa)) return false;
         uint8_t *page = cpu->bus.fetch_page(cpu->bus.context, pa & ENTRYHI_VPN_MASK);
@@ -210,11 +246,10 @@ static bool fetch(mips_cpu_t *cpu, uint32_t va, uint32_t *instruction) {
             }
             return true;
         }
-        cpu->last_fetch_vpn = vpn;
-        cpu->last_fetch_page = page;
-        cpu->last_fetch_valid = true;
+        cached->tag = tag;
+        cached->page = page;
     }
-    memcpy(instruction, cpu->last_fetch_page + (va & 0xFFFu), 4);
+    memcpy(instruction, cached->page + (va & 0xFFFu), 4);
     return true;
 }
 
@@ -282,7 +317,6 @@ static void write_cp0(mips_cpu_t *cpu, int reg, uint32_t value) {
             cpu->cp0[reg] = value;
             break;
     }
-    cpu->last_fetch_valid = false;
 }
 
 static inline int32_t sign16(uint32_t value) { return (int16_t)(value & 0xFFFFu); }
@@ -392,7 +426,6 @@ static void execute(mips_cpu_t *cpu, uint32_t op) {
             case 0x08: tlb_probe(cpu); break;
             case 0x10:
                 cpu->cp0[CP0_STATUS] = (cpu->cp0[CP0_STATUS] & ~0xFu) | ((cpu->cp0[CP0_STATUS] >> 2) & 0xFu);
-                cpu->last_fetch_valid = false;
                 break;
             default: raise_exception(cpu, MIPS_EXC_RI, current_pc, current_in_delay_slot); break;
             }
@@ -460,8 +493,14 @@ static void execute(mips_cpu_t *cpu, uint32_t op) {
     r[0] = 0;
 }
 
+static uint32_t watch_bit(uint32_t va) {
+    return (va >> 2) & 4095;
+}
+
 void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
     cpu->yield = false;
+    memset(cpu->watch_filter, 0, sizeof cpu->watch_filter);
+    for (int w = 0; w < cpu->watch_count; w++) cpu->watch_filter[watch_bit(cpu->watch[w]) >> 5] |= 1u << (watch_bit(cpu->watch[w]) & 31);
     uint32_t speed = cpu->speed ? cpu->speed : 1;
     while (cpu->cycles < until_cycle && !cpu->yield) {
         if (++cpu->speed_count >= speed) {
@@ -477,7 +516,8 @@ void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
         }
         uint32_t instruction;
         if (!fetch(cpu, current_pc, &instruction)) continue;
-        for (int w = 0; w < cpu->watch_count; w++) {
+        uint32_t bit = watch_bit(current_pc);
+        for (int w = 0; (cpu->watch_filter[bit >> 5] >> (bit & 31) & 1) && w < cpu->watch_count; w++) {
             uint32_t va = cpu->watch[w];
             bool slot_relative = va < MIPS_SLOT_SIZE && current_pc < 0x80000000u;
             if (slot_relative ? (current_pc & (MIPS_SLOT_SIZE - 1)) == va : current_pc == va) cpu->on_watch(cpu->bus.context, current_pc);
