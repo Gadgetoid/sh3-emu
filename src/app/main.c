@@ -1212,6 +1212,7 @@ int main(int argc, char **argv) {
                 machine = next;
                 memcpy(state, next_state, sizeof state);
                 system = wanted;
+                key_layout = machine_key_layout(machine);
                 settings.system = (uint32_t)wanted;
                 settings_save(&settings);
                 serial_reconnect_at = 0;
