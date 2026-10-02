@@ -50,10 +50,10 @@ view_display_t view_display(const view_t *view) {
     return view->display;
 }
 
-static void layout(view_t *view) {
+static bool layout(view_t *view) {
     int output_w, output_h;
     SDL_GetRenderOutputSize(view->renderer, &output_w, &output_h);
-    if (view->laid_out && output_w == view->output_w && output_h == view->output_h) return;
+    if (view->laid_out && output_w == view->output_w && output_h == view->output_h) return false;
     view->output_w = output_w;
     view->output_h = output_h;
     view->laid_out = true;
@@ -87,23 +87,37 @@ static void layout(view_t *view) {
     view->dest.h = source_h * scale;
     view->dest.x = floorf((output_w - view->dest.w) / 2);
     view->dest.y = top + floorf((area_h - view->dest.h) / 2);
+    return true;
 }
 
-static void fill_sharp(view_t *view, bool powered) {
+static bool fill_sharp(view_t *view, bool powered) {
+    bool changed = false;
     for (int i = 0; i < LCD_WIDTH * LCD_HEIGHT; i++) {
         uint32_t grey = powered ? 255u - lcd_framebuffer[i] * 17u : 255u;
-        view->sharp[i] = grey | grey << 8 | grey << 16 | 0xff000000u;
+        uint32_t pixel = grey | grey << 8 | grey << 16 | 0xff000000u;
+        if (view->sharp[i] != pixel) {
+            view->sharp[i] = pixel;
+            changed = true;
+        }
     }
+    return changed;
 }
 
-void view_draw(view_t *view, float seconds, bool powered) {
-    layout(view);
+bool view_update(view_t *view, float seconds, bool powered) {
+    bool changed = layout(view);
     if (view->display == VIEW_SIMULATED) {
-        if (lcd_compose(seconds)) SDL_UpdateTexture(view->texture, NULL, lcd_compose_pixels(), lcd_compose_width() * 4);
-    } else {
-        fill_sharp(view, powered);
+        if (lcd_compose(seconds)) {
+            SDL_UpdateTexture(view->texture, NULL, lcd_compose_pixels(), lcd_compose_width() * 4);
+            changed = true;
+        }
+    } else if (fill_sharp(view, powered) || changed) {
         SDL_UpdateTexture(view->texture, NULL, view->sharp, LCD_WIDTH * 4);
+        changed = true;
     }
+    return changed;
+}
+
+void view_render(view_t *view) {
     SDL_SetRenderDrawColor(view->renderer, 0, 0, 0, 255);
     SDL_RenderClear(view->renderer);
     SDL_RenderTexture(view->renderer, view->texture, NULL, &view->dest);

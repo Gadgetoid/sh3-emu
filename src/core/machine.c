@@ -1331,6 +1331,11 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
     uint32_t height = (ctl2 & 0x3FF) + 1;
     uint32_t base = m->regs[0x30 / 4] & 0xFFFFFFF0u;
     uint32_t stride = width * bpp / 8;
+    uint8_t shades[16];
+    for (uint32_t raw = 0; raw < (1u << bpp); raw++) {
+        uint32_t on_duty = lcd_shade(m, raw, bpp);
+        shades[raw] = bpp == 4 ? (uint8_t)on_duty : (uint8_t)((on_duty * 3 + 7) / 15 * 5);
+    }
     for (int y = 0; y < MACHINE_SCREEN_HEIGHT; y++) {
         for (int x = 0; x < MACHINE_SCREEN_WIDTH; x++) {
             uint8_t level = 0;
@@ -1338,9 +1343,7 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
                 uint32_t bit = (uint32_t)x * bpp;
                 uint32_t pa = base + (uint32_t)y * stride + bit / 8;
                 uint32_t byte = pa < DRAM_DECODE_END ? m->dram[pa & (m->dram_size - 1)] : 0;
-                uint32_t raw = (byte >> (8 - bpp - bit % 8)) & ((1u << bpp) - 1);
-                uint32_t on_duty = lcd_shade(m, raw, bpp);
-                level = bpp == 4 ? (uint8_t)on_duty : (uint8_t)((on_duty * 3 + 7) / 15 * 5);
+                level = shades[(byte >> (8 - bpp - bit % 8)) & ((1u << bpp) - 1)];
             }
             levels[y * MACHINE_SCREEN_WIDTH + x] = level;
         }

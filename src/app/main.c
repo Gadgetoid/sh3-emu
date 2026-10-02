@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #define WINDOW_SCALE     2
+#define IDLE_FRAME_NS    (SDL_NS_PER_SECOND / 60)
 #define MAX_FRAME_SLICE  0.1
 #define AUTOSAVE_SECONDS 60
 #define NOTICE_SECONDS   2
@@ -995,7 +996,10 @@ int main(int argc, char **argv) {
 
     while (running) {
         SDL_Event event;
+        uint64_t frame_start = SDL_GetTicksNS();
+        bool events_seen = false;
         while (SDL_PollEvent(&event)) {
+            events_seen = true;
             if (menu_event(&event)) {
                 if (menu_active()) {
                     release_keys(machine, held, -1);
@@ -1457,9 +1461,15 @@ int main(int argc, char **argv) {
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight(machine_backlight(machine));
         machine_screen(machine, lcd_framebuffer);
-        view_draw(view, (float)elapsed, machine_lcd_enabled(machine));
-        menu_draw(renderer);
-        SDL_RenderPresent(renderer);
+        bool screen_changed = view_update(view, (float)elapsed, machine_lcd_enabled(machine));
+        if (screen_changed || events_seen || menu_active()) {
+            view_render(view);
+            menu_draw(renderer);
+            SDL_RenderPresent(renderer);
+        } else {
+            uint64_t spent = SDL_GetTicksNS() - frame_start;
+            if (spent < IDLE_FRAME_NS) SDL_DelayNS(IDLE_FRAME_NS - spent);
+        }
     }
 
     free(picked);

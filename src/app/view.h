@@ -12,6 +12,7 @@ void           view_destroy(view_t *view);
 void           view_set_display(view_t *view, view_display_t display);
 view_display_t view_display(const view_t *view);
 void           view_source_size(view_display_t display, int *width, int *height);
-void           view_draw(view_t *view, float seconds, bool powered);
+bool           view_update(view_t *view, float seconds, bool powered);
+void           view_render(view_t *view);
 bool           view_screen_position(view_t *view, float window_x, float window_y, int *x, int *y);
 const uint32_t *view_image(view_t *view, int *width, int *height);
