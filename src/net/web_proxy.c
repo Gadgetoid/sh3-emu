@@ -263,6 +263,7 @@ static void fetch(const request_t *request, struct curl_slist *headers, const ch
     }
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_PROXY, "");
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, (long)CONNECT_TIMEOUT);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)TRANSFER_TIMEOUT);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
