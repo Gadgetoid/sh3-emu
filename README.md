@@ -36,7 +36,7 @@ Each file is identified by its contents, and if there are two CE 2.0 images the 
 
 ### First run
 
-Open the app, or run `velo`. It starts the last system used (CE 2.0 if there's a choice) and Velo > System switches between Windows CE 1.0 and Windows CE 2.0; a system with no ROM is greyed out. A ROM on the command line runs that ROM instead:
+Open the app, or run `velo`. It starts the last system used (CE 2.0 if there's a choice) and Machine > System switches between Windows CE 1.0 and Windows CE 2.0; a system with no ROM is greyed out. A ROM on the command line runs that ROM instead:
 
 ```
 velo
@@ -45,7 +45,7 @@ velo --memory=32 --serial=net --card=apps.img nk-ce2-merged.bin
 velo --help
 ```
 
-A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Velo > Set Clock from Host (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
+A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Machine > Set Clock from Host (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
 
 On macOS the menus are in the menu bar. On Linux they're in a bar along the top of the window, F10 opens it, and the arrow keys, Enter and Escape move through it.
 
@@ -53,15 +53,15 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 
 | Menu | Item | Shortcut |
 |---|---|---|
-| Velo | Power Button (suspend and resume) | Cmd-Shift-P |
-| Velo | Backlight (presses the Velo's backlight key) | Cmd-B |
-| Velo | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
-| Velo | Reset… (cold boot, clears RAM; confirmed in a dialog) | |
-| Velo | System: Windows CE 1.0, Windows CE 2.0 | |
-| Velo | Next Cold Boot: Memory (4 MB (original), 8, 16, 20 or 32 MB), Set Clock from Host | |
-| Velo | Pause | Cmd-P |
-| Velo | CPU Speed: 1x (original), 2x, 4x, 8x | |
-| Velo | Show Debug Output | |
+| Machine | Power Button (suspend and resume) | Cmd-Shift-P |
+| Machine | Backlight (presses the Velo's backlight key) | Cmd-B |
+| Machine | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
+| Machine | Reset… (cold boot, clears RAM; confirmed in a dialog) | |
+| Machine | System: Windows CE 1.0, Windows CE 2.0 | |
+| Machine | Next Cold Boot: Memory (4 MB (original), 8, 16, 20 or 32 MB), Set Clock from Host | |
+| Machine | Pause | Cmd-P |
+| Machine | CPU Speed: 1x (original), 2x, 4x, 8x | |
+| Machine | Show Debug Output | |
 | State | Save State, Load State | Cmd-S, Cmd-L |
 | State | Save Snapshot…, Load Snapshot… | Cmd-Ctrl-S, Cmd-Ctrl-L |
 | State | Show State Folder | |
@@ -79,7 +79,7 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 | PC Link | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |
 | PC Link | Velo Settings: Set Up Pocket IE Proxy, Connection Speed (19200 (original), 38400, 57600, 115200) | |
 
-Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11, the snapshot items have no shortcut, and desktops that lock the screen with Ctrl+Alt+L take that one from Load State. Linux menus say Computer for Mac and Pictures for Desktop, where screenshots go, and Velo has a Quit item (Ctrl+Alt+Q).
+Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11, the snapshot items have no shortcut, and desktops that lock the screen with Ctrl+Alt+L take that one from Load State. Linux menus say Computer for Mac and Pictures for Desktop, where screenshots go, and Machine has a Quit item (Ctrl+Alt+Q).
 
 CE 1.0 and 2.0 have no scroll wheel, so scrolling (a mouse wheel or two-finger scroll) presses the arrow keys instead: it scrolls Pocket IE and lists, and moves the caret in documents.
 
@@ -184,7 +184,7 @@ It sends a Lynx user agent upstream in place of Pocket IE's, which some sites bl
 
 Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator gives it the host's time in Pacific time, so once you pick your home city the clock is right. After that the clock keeps running while the emulator is closed, and survives a soft reset.
 
-Memory sets the RAM for the next cold boot (Velo > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
+Memory sets the RAM for the next cold boot (Machine > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD, sound and serial stay on the real clock, so only the CPU gets faster.
 
@@ -213,7 +213,7 @@ Unknown options, malformed values and events past the end of a run are errors or
 
 ## Debug output
 
-CE's debug output, from `OutputDebugString` in programs and the kernel's own messages (its boot banner, and a register dump when a program crashes), goes to `debug.log` in the data folder, which Velo > Show Debug Output opens. `velo --debug-output` and `headless --debug-output` also print it to stderr. The retail ROMs build these messages and then drop them, so the emulator reads each string where the OAL's `OEMWriteDebugString` would have sent it to the debug port. CE 1.0 also gates the kernel's messages behind a flag, so they're read where `NKDbgPrintfW` drops them. The log is moved to `debug.log.old` at launch once it passes 1 MB.
+CE's debug output, from `OutputDebugString` in programs and the kernel's own messages (its boot banner, and a register dump when a program crashes), goes to `debug.log` in the data folder, which Machine > Show Debug Output opens. `velo --debug-output` and `headless --debug-output` also print it to stderr. The retail ROMs build these messages and then drop them, so the emulator reads each string where the OAL's `OEMWriteDebugString` would have sent it to the debug port. CE 1.0 also gates the kernel's messages behind a flag, so they're read where `NKDbgPrintfW` drops them. The log is moved to `debug.log.old` at launch once it passes 1 MB.
 
 ## Windows CE 2.0 details
 
