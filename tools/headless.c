@@ -94,7 +94,7 @@ typedef struct {
     double   soft_reset_at;
     double   backlight_times[8];
     int      backlight_count;
-    double   cable_at, net_at, realtime;
+    double   cable_at, net_at, replug_at, realtime;
     uint32_t watches[MACHINE_WATCH_MAX];
     int      watch_count;
     net_gateway_options_t net_options;
@@ -111,7 +111,7 @@ typedef struct {
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
-    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND,
+    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT,
 };
 
@@ -136,6 +136,7 @@ static const option_t OPTIONS[] = {
     [OPT_NET] = { "net", "SECONDS", "connect COM1 to the PPP gateway and web proxy", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the Velo's RAPI port on a Unix socket, for velo-rapi --socket", 0 },
     [OPT_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
+    [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, as the app does after a speed change", 0 },
     [OPT_CABLE] = { "cable", "SECONDS", "connect a bare serial cable, with nothing at the other end", 0 },
     [OPT_CABLE_SEND] = { "cable-send", "SECONDS:TEXT", "send bytes down the cable (\\r and \\n allowed); anything CE sends is printed", 8 },
     [OPT_HEADING_OUTPUT] = { NULL, NULL, "Output and debugging", 0 },
@@ -213,6 +214,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_NET: return option_number(value, &run->net_at) && run->net_at >= 0;
     case OPT_RAPI: run->net_options.rapi_socket = value; return true;
     case OPT_USER_AGENT: run->net_options.user_agent = value; return true;
+    case OPT_REPLUG: return option_number(value, &run->replug_at) && run->replug_at >= 0;
     case OPT_CABLE: return option_number(value, &run->cable_at) && run->cable_at >= 0;
     case OPT_CABLE_SEND:
         if (!option_timed(value, &run->send_times[run->send_count], &rest)) return false;
@@ -248,7 +250,7 @@ static const option_spec_t SPEC = {
 
 int main(int argc, char **argv) {
     static run_t run;
-    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .cable_at = -1, .net_at = -1,
+    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .cable_at = -1, .net_at = -1, .replug_at = -1,
                    .net_options = { NET_GATEWAY_DEFAULT_USER_AGENT, NULL } };
     net_gateway_t *gateway = NULL;
     const char *positional[1];
@@ -270,6 +272,7 @@ int main(int argc, char **argv) {
     for (int k = 0; k < run.send_count; k++) if (run.send_times[k] > latest) latest = run.send_times[k];
     if (run.cable_at > latest) latest = run.cable_at;
     if (run.net_at > latest) latest = run.net_at;
+    if (run.replug_at >= 0 && run.replug_at + 2 > latest) latest = run.replug_at + 2;
     if (latest >= run.seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, run.seconds);
     size_t rom_size;
     uint8_t *rom = file_read(run.rom_path, &rom_size);
@@ -319,6 +322,13 @@ int main(int argc, char **argv) {
         if (run.net_at >= 0 && !gateway && (uint64_t)(run.net_at * MACHINE_CLOCK_HZ) < done + slice) {
             gateway = net_gateway_create(log_stderr, &run.net_options);
             machine_serial_connect(machine, true);
+        }
+        if (run.replug_at >= 0 && gateway && (uint64_t)(run.replug_at * MACHINE_CLOCK_HZ) < done + slice) {
+            net_gateway_destroy(gateway);
+            gateway = NULL;
+            machine_serial_connect(machine, false);
+            run.net_at = run.replug_at + 2;
+            run.replug_at = -1;
         }
         if (run.cable_at >= 0 && (uint64_t)(run.cable_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(run.cable_at * MACHINE_CLOCK_HZ) < done + slice) machine_serial_connect(machine, true);
         for (int k = 0; k < run.send_count; k++) {
