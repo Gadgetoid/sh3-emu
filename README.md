@@ -142,7 +142,7 @@ velo-rapi --help
 
 Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. Registry keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`. `--socket=PATH` picks another socket, such as one from `velo-headless --rapi=PATH`. CE 2.0's stock ROM lacks `rapisrv.exe`, the RAPI server; without it CE 2.0 reports "Out of Memory" when the cable is connected.
 
-CE's desktop connection runs at 19200 baud, about 1.6 KB/s. PC Link > Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x.
+CE's desktop connection runs at 19200 baud, about 1.6 KB/s. PC Link > Connection Speed, or `velo-rapi baud 115200`, makes a faster connection the PC Connection (on CE 1.0 it adds a hidden `` `Desktop @ 115200` `` connection to the registry; CE 2.0 has its own `` `Serial Port @ `` ones), and the menu ticks the speed in use; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x.
 
 ### Installing CE 1.0 software
 
@@ -204,7 +204,7 @@ velo-headless --help
 
 - `--tap=SECONDS:X:Y[:HOLD]` holds the pen for 0.5 s by default; use 0.08 for double taps. `--key` takes a Velo scancode in hex (the backlight key is 5E), and `--type` types text with `\n` for Enter.
 - `--pgm=FILE` saves the raw greyscale screen, and `--png=FILE` saves it through the simulated LCD, as the GUI draws it.
-- `--net=SECONDS` connects the PPP network, `--rapi=SOCKET` makes the Velo's RAPI port available for `velo-rapi --socket`, and `--realtime[=N]` paces the run at N times real time for anything driving it over RAPI (unpaced, an idle Velo runs about 1000 times faster). `--cable` and `--cable-send` connect a bare serial cable and send bytes down it.
+- `--net=SECONDS` connects the PPP network, `--rapi=SOCKET` makes the Velo's RAPI port available for `velo-rapi --socket`, and `--realtime[=N]` paces the run at N times real time for anything driving it over RAPI (unpaced, an idle Velo runs about 1000 times faster). `--cable` and `--cable-send` connect a bare serial cable and send bytes down it. `--replug=SECONDS` unplugs the `--net` cable and plugs it back in two seconds later.
 - `--watch-pc=VA` logs registers each time the CPU reaches an address; below 0x02000000 it matches in any process slot.
 - `--debug-output` prints CE's debug output (see Debug output).
 - SIGTERM or SIGINT ends a run early and still writes `--save`, `--pgm`, `--png` and `--wav`.

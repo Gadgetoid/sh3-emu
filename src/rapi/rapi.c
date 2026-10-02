@@ -331,6 +331,10 @@ rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
     return rapi;
 }
 
+uint32_t rapi_os_major(const rapi_t *rapi) {
+    return rapi->os_major;
+}
+
 void rapi_set_timeout(rapi_t *rapi, int seconds) {
     if (rapi->socket < 0 || seconds <= 0) return;
     struct timeval timeout = { seconds, 0 };

@@ -54,7 +54,21 @@ static bool select_connection(rapi_t *rapi, const char *entry) {
     return success;
 }
 
+static const char *ce2_connection(uint32_t baud) {
+    switch (baud) {
+    case 19200: return "`Serial Port @ 19200";
+    case 38400: return "`Serial Port @ 38400";
+    case 57600: return "`Serial Port @ 57600";
+    case 115200: return "`Serial Port @ 115k";
+    }
+    return NULL;
+}
+
 bool rapi_setup_connection(rapi_t *rapi, uint32_t baud) {
+    if (rapi_os_major(rapi) >= 2) {
+        const char *entry = ce2_connection(baud);
+        return entry && select_connection(rapi, entry);
+    }
     if (baud == DEFAULT_BAUD) return select_connection(rapi, DEFAULT_ENTRY);
     uint32_t key, type, length;
     uint8_t entry[RAPI_REG_DATA_MAX];
