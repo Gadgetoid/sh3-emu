@@ -24,8 +24,8 @@ static char typeable(uint32_t codepoint) {
     return 0;
 }
 
-size_t typer_start(typer_t *typer, int system, const char *utf8) {
-    typer->system = system;
+size_t typer_start(typer_t *typer, key_layout_t layout, const char *utf8) {
+    typer->layout = layout;
     typer->length = typer->position = 0;
     typer->pressed = false;
     typer->next_at = 0;
@@ -38,7 +38,7 @@ size_t typer_start(typer_t *typer, int system, const char *utf8) {
         char character = typeable(codepoint);
         uint8_t scancode;
         bool shifted;
-        if (character && key_text_find(typer->system, character, &scancode, &shifted)) typer->text[typer->length++] = character;
+        if (character && key_text_find(typer->layout, character, &scancode, &shifted)) typer->text[typer->length++] = character;
     }
     return typer->length;
 }
@@ -52,7 +52,7 @@ void typer_step(typer_t *typer, machine_t *machine) {
             typer->pressed = false;
             typer->position++;
         } else {
-            key_text_find(typer->system, typer->text[typer->position], &typer->scancode, &typer->shifted);
+            key_text_find(typer->layout, typer->text[typer->position], &typer->scancode, &typer->shifted);
             if (typer->shifted) machine_key(machine, KEY_TEXT_SHIFT, false);
             machine_key(machine, typer->scancode, false);
             typer->pressed = true;

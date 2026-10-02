@@ -168,6 +168,7 @@ struct machine {
     uint32_t rom2_pa;
     uint32_t entry_va;
     uint64_t rom_hash;
+    key_layout_t key_layout;
     machine_log_fn log;
 
     uint32_t regs[REG_COUNT];
@@ -1142,6 +1143,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->dram = calloc(1, m->dram_size);
     m->rom_hash = 0xCBF29CE484222325ull;
     for (size_t i = 0; i < rom_size; i++) m->rom_hash = (m->rom_hash ^ rom[i]) * 0x100000001B3ull;
+    static const char shadowed_keyboard[] = "keybddr.dll.rom";
+    m->key_layout = memmem(rom, rom_size, shadowed_keyboard, sizeof shadowed_keyboard - 1) ? KEY_LAYOUT_UPGRADE_CD : KEY_LAYOUT_ROM;
     apply_rom_patches(m);
     m->cpu.bus.context = m;
     m->cpu.bus.read = bus_read;
@@ -1518,6 +1521,10 @@ uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
 }
 
+key_layout_t machine_key_layout(machine_t *m) {
+    return m->key_layout;
+}
+
 int machine_rom_system(machine_t *m) {
     return m->rom_pa == ROM_PA ? 1 : 2;
 }
@@ -1703,6 +1710,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     uint8_t *rom2 = m->rom2;
     uint32_t rom2_size = m->rom2_size, rom2_pa = m->rom2_pa;
     uint64_t rom_hash = m->rom_hash;
+    key_layout_t key_layout = m->key_layout;
     machine_log_fn log = m->log;
     pccard_t card = m->pccard;
     FILE *image = m->card_socket.image;
@@ -1742,6 +1750,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->rom2_pa = rom2_pa;
     m->entry_va = entry_va;
     m->rom_hash = rom_hash;
+    m->key_layout = key_layout;
     m->log = log;
     m->cpu.bus = bus;
     memcpy(m->card_path, card_path, sizeof card_path);

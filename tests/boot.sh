@@ -193,6 +193,7 @@ if [ -f "$CE2_ROM" ]; then
     check ce2_double_tap 56b264bbdadf6f1db2f529f1327ca958870aad786d21518c320638ab8b018b07 --tap=21:30:20:0.08 --tap=21.12:30:20:0.08 --seconds=24
     ./headless "$ROM" --tap=21:15:227:0.1 --key=22:30 "--type=23.5:reset\\n" --tap=27:200:180:0.1 --seconds=60 --pgm="$OUT/ce2_warm_reset.pgm" > "$OUT/ce2_warm_reset.log" 2>&1
     if grep -q "boot block: warm reset" "$OUT/ce2_warm_reset.log" && [ "$(shasum -a 256 "$OUT/ce2_warm_reset.pgm" | cut -d' ' -f1)" = aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e ]; then echo "ok   ce2_warm_reset"; else echo "FAIL ce2_warm_reset"; exit 1; fi
+    check ce2_type_symbols 9ff064a21521aebd136842b817804a7d82a05e7d1c619698fc1dfb785f29155e --tap=21:15:227:0.1 --key=22:30 '--type=23.5:\=[]' --seconds=26
     python3 -c 'import struct, sys; d = open(sys.argv[1], "rb").read(); open(sys.argv[2], "wb").write(b"B000FF\n" + struct.pack("<II", 0x90001000, len(d)) + struct.pack("<III", 0x90001000, len(d), sum(d)) + d + struct.pack("<III", 0, 0x90001000, 0))' "$CE2_ROM" "$OUT/ce2.b000ff"
     ROM="$OUT/ce2.b000ff"
     check ce2_b000ff aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20

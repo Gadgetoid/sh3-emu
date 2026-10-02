@@ -13,8 +13,8 @@ typedef struct {
     bool     pressed, shifted;
     uint8_t  scancode;
     uint64_t next_at;
-    int      system;
+    key_layout_t layout;
 } typer_t;
 
-size_t typer_start(typer_t *typer, int system, const char *utf8);
+size_t typer_start(typer_t *typer, key_layout_t layout, const char *utf8);
 void   typer_step(typer_t *typer, machine_t *machine);

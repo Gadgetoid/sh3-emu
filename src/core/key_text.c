@@ -36,9 +36,9 @@ static bool find_in(const key_char_t *table, size_t count, char character, uint8
     return false;
 }
 
-bool key_text_find(int system, char character, uint8_t *scancode, bool *shifted) {
+bool key_text_find(key_layout_t layout, char character, uint8_t *scancode, bool *shifted) {
     bool listed;
-    if (system == 2) {
+    if (layout == KEY_LAYOUT_UPGRADE_CD) {
         bool found = find_in(ce2_key_chars, sizeof ce2_key_chars / sizeof ce2_key_chars[0], character, scancode, shifted, &listed);
         if (listed) return found;
     }

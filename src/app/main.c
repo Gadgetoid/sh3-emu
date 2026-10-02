@@ -61,10 +61,10 @@ static const key_binding_t key_bindings[] = {
     { SDLK_LEFT, 0x41 }, { SDLK_UP, 0x4A }, { SDLK_RIGHT, 0x32 }, { SDLK_DOWN, 0x49 },
 };
 
-static bool find_scancode(int system, SDL_Keycode key, uint8_t *scancode) {
+static bool find_scancode(key_layout_t layout, SDL_Keycode key, uint8_t *scancode) {
     if (key >= 0x20 && key < 0x7F) {
         bool shifted;
-        return key_text_find(system, (char)key, scancode, &shifted);
+        return key_text_find(layout, (char)key, scancode, &shifted);
     }
     for (size_t i = 0; i < sizeof key_bindings / sizeof key_bindings[0]; i++) {
         if (key_bindings[i].key == key) { *scancode = key_bindings[i].scancode; return true; }
@@ -1025,6 +1025,7 @@ int main(int argc, char **argv) {
     machine_t *machine = start_machine(rom_path, &settings, state_file, fresh, state, sizeof state, &startup_notice);
     if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
     int system = machine_rom_system(machine);
+    key_layout_t key_layout = machine_key_layout(machine);
 
     SDL_SetAppMetadata("Velo", options_version(), "velo-emu");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
@@ -1110,7 +1111,7 @@ int main(int argc, char **argv) {
             case SDL_EVENT_KEY_UP: {
                 bool down = event.type == SDL_EVENT_KEY_DOWN;
                 uint8_t scancode;
-                if (!find_scancode(system, event.key.key, &scancode)) break;
+                if (!find_scancode(key_layout, event.key.key, &scancode)) break;
                 if (down) {
                     if (event.key.repeat || (event.key.mod & SDL_KMOD_GUI) || held[scancode]) break;
                     held[scancode] = true;
@@ -1270,7 +1271,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PASTE: {
                 char *clipboard = SDL_GetClipboardText();
-                size_t typed = clipboard ? typer_start(&typer, system, clipboard) : 0;
+                size_t typed = clipboard ? typer_start(&typer, key_layout, clipboard) : 0;
                 SDL_free(clipboard);
                 snprintf(paste_notice, sizeof paste_notice, typed ? "typing %zu characters" : "nothing to type", typed);
                 notice = paste_notice;
