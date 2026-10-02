@@ -22,7 +22,8 @@ if pkg-config --exists slirp libcurl; then
     trap 'kill $SERVER 2>/dev/null || true' EXIT
     for attempt in 1 2 3 4 5 6 7 8 9 10; do python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:$PORT/page.html', timeout=1)" 2>/dev/null && break; sleep 1; done
     REWRITE='import re, sys; page = sys.stdin.buffer.read().decode("cp1252"); sys.exit(0 if "Caf\u00e9 \u201cquoted\u201d \u2014 dash</p><a href=\"http://example.com/next\">next</a></body>" in page and not re.search("script|style|svg|hidden", page, re.I) else 1)'
-    if ./proxycheck "http://127.0.0.1:$PORT/page.html" 2>/dev/null | python3 -c "$REWRITE"; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; ./proxycheck "http://127.0.0.1:$PORT/page.html" 2>&1 | head -40; exit 1; fi
+    ./proxycheck "http://127.0.0.1:$PORT/page.html" > "$OUT/page.txt" 2> "$OUT/page.log" || true
+    if python3 -c "$REWRITE" < "$OUT/page.txt"; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; cat "$OUT/page.log" "$OUT/page.txt"; exit 1; fi
     MOVED=$(./proxycheck "http://127.0.0.1:$PORT/folder" 2>/dev/null)
     if echo "$MOVED" | grep -q "^HTTP/1.0 301" && echo "$MOVED" | grep -q "^Content-Type: text/html" && echo "$MOVED" | grep -q "folder/\">here</A>"; then echo "ok   proxy_redirect"; else echo "FAIL proxy_redirect"; echo "$MOVED"; exit 1; fi
     XHTML=$(./proxycheck "http://127.0.0.1:$PORT/page.xhtml" 2>/dev/null)
