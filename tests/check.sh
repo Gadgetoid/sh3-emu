@@ -23,6 +23,10 @@ if pkg-config --exists slirp libcurl; then
     sleep 1
     PAGE=$(./proxycheck "http://127.0.0.1:$PORT/page.html" 2>/dev/null | iconv -f WINDOWS-1252 -t UTF-8)
     if echo "$PAGE" | grep -q 'Café “quoted” — dash</p><a href="http://example.com/next">next</a></body>' && ! echo "$PAGE" | grep -qiE 'script|style|svg|hidden'; then echo "ok   proxy_rewrite"; else echo "FAIL proxy_rewrite"; exit 1; fi
+    MOVED=$(./proxycheck "http://127.0.0.1:$PORT/folder" 2>/dev/null)
+    if echo "$MOVED" | grep -q "^HTTP/1.0 301" && echo "$MOVED" | grep -q "^Content-Type: text/html" && echo "$MOVED" | grep -q "folder/\">here</A>"; then echo "ok   proxy_redirect"; else echo "FAIL proxy_redirect"; echo "$MOVED"; exit 1; fi
+    XHTML=$(./proxycheck "http://127.0.0.1:$PORT/page.xhtml" 2>/dev/null)
+    if echo "$XHTML" | grep -q "^Content-Type: text/html" && echo "$XHTML" | grep -q "xhtml page" && ! echo "$XHTML" | grep -qi "<meta"; then echo "ok   proxy_xhtml"; else echo "FAIL proxy_xhtml"; echo "$XHTML"; exit 1; fi
     BODY='import sys, struct, hashlib; head, body = sys.stdin.buffer.read().split(b"\r\n\r\n", 1); print(body[:6].decode("latin-1"), *struct.unpack("<HH", body[6:10]), hashlib.sha256(body).hexdigest())'
     SVG=$(./proxycheck "http://127.0.0.1:$PORT/images.html" "http://127.0.0.1:$PORT/shapes.svg" 2>/dev/null | python3 -c "$BODY")
     PNG=$(./proxycheck "http://127.0.0.1:$PORT/gradient.png" 2>/dev/null | python3 -c "$BODY")

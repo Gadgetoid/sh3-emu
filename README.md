@@ -168,7 +168,7 @@ Cascading Menus and Mute start straight away in the taskbar, Paint is in Program
 
 ### Web proxy
 
-Pocket IE doesn't support modern HTTPS, so the network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the host. PC Link > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 picks it up after a soft reset. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`. Only Pocket IE's requests use it, and it opens no port on the host.
+Pocket IE doesn't support modern HTTPS, so the network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the host. PC Link > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 picks it up after a soft reset. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`. Only Pocket IE's requests use it, and it opens no port on the host. Google search refuses browsers this old; [DuckDuckGo Lite](http://lite.duckduckgo.com/lite/) works.
 
 Type addresses as `http://`: Pocket IE makes `https://` connections itself, not through the proxy, and they fail. For `http://` addresses without a port the proxy tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
 

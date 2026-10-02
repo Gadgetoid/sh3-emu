@@ -312,6 +312,10 @@ static void strip_markup(buffer_t *body) {
                 const char *close = find_nocase(p + 4, end, "-->");
                 skip_to = close ? close + 3 : end;
             }
+            if (!skip_to && opening_tag(p, end, "meta")) {
+                const char *tag_end = memchr(p, '>', (size_t)(end - p));
+                if (tag_end && find_nocase(p, tag_end, "content-type")) skip_to = tag_end + 1;
+            }
             for (size_t i = 0; !skip_to && i < sizeof elements / sizeof elements[0]; i++) {
                 if (!opening_tag(p, end, elements[i])) continue;
                 const char *tag_end = memchr(p, '>', (size_t)(end - p));
@@ -577,6 +581,30 @@ static void strip_secure_attribute(char *cookie) {
     }
 }
 
+static void browser_location(const char *location, char *out, size_t size) {
+    if (!strncasecmp(location, "https://", 8)) snprintf(out, size, "http://%s", location + 8);
+    else snprintf(out, size, "%s", location);
+}
+
+static void replace_with_moved_page(response_t *response, const char *location) {
+    buffer_t page = { 0 };
+    buffer_printf(&page, "<HTML><HEAD><TITLE>Moved</TITLE></HEAD><BODY>The document has moved <A HREF=\"");
+    for (const char *at = location; *at; at++) {
+        if (*at == '&') buffer_printf(&page, "&amp;");
+        else if (*at == '"') buffer_printf(&page, "&quot;");
+        else buffer_append(&page, at, 1);
+    }
+    buffer_printf(&page, "\">here</A>.</BODY></HTML>");
+    buffer_free(&response->body);
+    response->body = page;
+}
+
+static bool looks_like_html(const buffer_t *body) {
+    size_t at = 0;
+    while (at < body->length && isspace((unsigned char)body->data[at])) at++;
+    return body->length - at >= 5 && (!strncasecmp(body->data + at, "<!doc", 5) || !strncasecmp(body->data + at, "<html", 5));
+}
+
 static void send_response(int client, const request_t *request, response_t *response) {
     static const char *const passed[] = { "Last-Modified", "Expires", "Content-Disposition", "WWW-Authenticate" };
     char content_type[256] = "", mime[128] = "";
@@ -585,6 +613,16 @@ static void send_response(int client, const request_t *request, response_t *resp
     if (mime_length >= sizeof mime) mime_length = sizeof mime - 1;
     for (size_t i = 0; i < mime_length; i++) mime[i] = (char)tolower((unsigned char)content_type[i]);
     mime[mime_length] = 0;
+    char location[URL_MAX] = "";
+    if (*response->redirect) browser_location(response->redirect, location, sizeof location);
+    bool untyped = !*mime || !strcmp(mime, "application/octet-stream") || !strcmp(mime, "application/binary");
+    if (*location && response->status >= 300 && response->status < 400) {
+        replace_with_moved_page(response, location);
+        snprintf(mime, sizeof mime, "text/html");
+    } else if (!strcmp(mime, "application/xhtml+xml") || (untyped && looks_like_html(&response->body))) {
+        snprintf(mime, sizeof mime, "text/html");
+    }
+    if (!strcmp(mime, "text/html")) snprintf(content_type, sizeof content_type, "text/html");
     bool text = !strncmp(mime, "text/", 5);
 
     if (!strcmp(mime, "text/html")) {
@@ -609,11 +647,7 @@ static void send_response(int client, const request_t *request, response_t *resp
     buffer_t head = { 0 };
     buffer_printf(&head, "HTTP/1.0 %ld %s\r\n", status, reason_phrase(status));
     if (*content_type) buffer_printf(&head, "Content-Type: %s\r\n", text ? mime : content_type);
-    if (*response->redirect) {
-        const char *location = response->redirect;
-        if (!strncasecmp(location, "https://", 8)) buffer_printf(&head, "Location: http://%s\r\n", location + 8);
-        else buffer_printf(&head, "Location: %s\r\n", location);
-    }
+    if (*location) buffer_printf(&head, "Location: %s\r\n", location);
     char line[URL_MAX];
     const char *cursor = response->headers.data ? strstr(response->headers.data, "\r\n") : NULL;
     if (cursor) cursor += 2;
