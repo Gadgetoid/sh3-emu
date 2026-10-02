@@ -13,6 +13,8 @@
 #define BAR_PADDING      9.0f
 #define ROW_HEIGHT       24.0f
 #define SEPARATOR_HEIGHT 9.0f
+#define HEADING_HEIGHT   20.0f
+#define HEADING_INSET    12.0f
 #define MENU_PADDING     4.0f
 #define CHECK_COLUMN     26.0f
 #define ARROW_COLUMN     22.0f
@@ -32,7 +34,7 @@
 #define ASCII_FIRST 32
 #define ASCII_COUNT 95
 
-typedef enum { ITEM_ACTION, ITEM_SEPARATOR, ITEM_SUBMENU } item_kind_t;
+typedef enum { ITEM_ACTION, ITEM_SEPARATOR, ITEM_SUBMENU, ITEM_HEADING } item_kind_t;
 
 typedef struct {
     item_kind_t kind;
@@ -361,6 +363,9 @@ static int parse_menu(int *cursor, const char *title) {
         item_t item = { ITEM_ACTION, -1, -1, "", "", 0, SDL_KMOD_NONE };
         if (entry->kind == MENU_ENTRY_SEPARATOR) {
             item.kind = ITEM_SEPARATOR;
+        } else if (entry->kind == MENU_ENTRY_HEADING) {
+            item.kind = ITEM_HEADING;
+            snprintf(item.title, sizeof item.title, "%s", entry->title);
         } else if (entry->kind == MENU_ENTRY_SUBMENU) {
             item.kind = ITEM_SUBMENU;
             snprintf(item.title, sizeof item.title, "%s", entry->title);
@@ -390,12 +395,13 @@ static bool item_visible(const item_t *item) {
 }
 
 static bool item_selectable(const item_t *item) {
-    if (item->kind == ITEM_SEPARATOR || !item_visible(item)) return false;
+    if (item->kind == ITEM_SEPARATOR || item->kind == ITEM_HEADING || !item_visible(item)) return false;
     return item->kind == ITEM_SUBMENU || enabled[item->tag];
 }
 
 static float item_height(const item_t *item) {
-    return item->kind == ITEM_SEPARATOR ? SEPARATOR_HEIGHT : ROW_HEIGHT;
+    if (item->kind == ITEM_SEPARATOR) return SEPARATOR_HEIGHT;
+    return item->kind == ITEM_HEADING ? HEADING_HEIGHT : ROW_HEIGHT;
 }
 
 static void measure_menu(int menu, float *width, float *height) {
@@ -758,6 +764,11 @@ static void draw_level(level_t *level) {
         if (item->kind == ITEM_SEPARATOR) {
             fill_rect(canvas, 1, top + floorf(SEPARATOR_HEIGHT / 2), width - 2, 1, colours->separator);
             top += SEPARATOR_HEIGHT;
+            continue;
+        }
+        if (item->kind == ITEM_HEADING) {
+            draw_text(canvas, HEADING_INSET, top, HEADING_HEIGHT, item->title, colours->shortcut);
+            top += HEADING_HEIGHT;
             continue;
         }
         bool selectable = item_selectable(item);

@@ -372,7 +372,7 @@ static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t
         return message;
     }
     if (!files) return "drop files, a .load script or a card image";
-    if (!online) return "connect Serial > Network (PPP) to send files to the Velo";
+    if (!online) return "connect Devices > Network (PPP) to send files to the Velo";
     if (scripts >= 0) {
         snprintf(message, sizeof message, "installing %s", file_leaf_name(dropped->paths[scripts]));
         return desktop_load(desktop, dropped->paths[scripts]) ? message : "busy with the last transfer";
@@ -905,7 +905,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
 
 static const option_spec_t LAUNCH_SPEC = {
     "velo", "[OPTIONS] [ROM]",
-    "Emulates a Philips Velo 1. With no ROM it opens the last system used from the roms folder in its data folder; Run > System switches between Windows CE 1.0 and 2.0.",
+    "Emulates a Philips Velo 1. With no ROM it opens the last system used from the roms folder in its data folder; Velo > System switches between Windows CE 1.0 and 2.0.",
     LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
     "headless runs the machine without a window, for tests and scripts, and velo-rapi talks to a running Velo.",
 };
@@ -1220,12 +1220,9 @@ int main(int argc, char **argv) {
                 open_path(path);
                 break;
             }
-            case MENU_SHOW_SNAPSHOTS: {
-                char folder[1100];
-                snapshot_folder(folder, sizeof folder);
-                open_path(folder);
+            case MENU_QUIT:
+                running = false;
                 break;
-            }
             case MENU_MEMORY_4:
             case MENU_MEMORY_8:
             case MENU_MEMORY_16:
@@ -1234,7 +1231,7 @@ int main(int argc, char **argv) {
                 settings.memory = item == MENU_MEMORY_4 ? 4 : item == MENU_MEMORY_8 ? 8 : item == MENU_MEMORY_16 ? 16 : item == MENU_MEMORY_20 ? 20 : 32;
                 machine_set_memory(machine, settings.memory);
                 settings_save(&settings);
-                notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Run > Reset (clears the machine)";
+                notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Velo > Reset (clears the machine)";
                 notice_left = NOTICE_SECONDS * 3;
                 break;
             case MENU_HOST_TIME:
@@ -1384,7 +1381,7 @@ int main(int argc, char **argv) {
             menu_set_enabled(port_item, port_count > 0);
             menu_set_checked(port_item, port_count && serial.mode == SERIAL_DEVICE && !strcmp(settings.serial_device, ports[i]));
         }
-        menu_set_enabled(MENU_SERIAL_OFF, serial.mode != SERIAL_OFF);
+        menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_checked(MENU_SOUND, sound);

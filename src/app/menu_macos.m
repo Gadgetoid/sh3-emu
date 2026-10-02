@@ -83,6 +83,14 @@ void menu_install(SDL_Window *window) {
             }
             case MENU_ENTRY_END: depth--; break;
             case MENU_ENTRY_SEPARATOR: [menu addItem:[NSMenuItem separatorItem]]; break;
+            case MENU_ENTRY_HEADING: {
+                NSMenuItem *heading;
+                if (@available(macOS 14.0, *)) heading = [NSMenuItem sectionHeaderWithTitle:title];
+                else heading = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+                heading.enabled = NO;
+                [menu addItem:heading];
+                break;
+            }
             case MENU_ENTRY_ITEM: {
                 NSString *key = entry->key ? [NSString stringWithFormat:@"%c", entry->key] : @"";
                 add_item(menu, entry->tag, title, key, cocoa_modifiers(entry->modifiers));

@@ -36,7 +36,7 @@ Each file is identified by its contents, and if there are two CE 2.0 images the 
 
 ### First run
 
-Open the app, or run `velo`. It starts the last system used (CE 2.0 if there's a choice) and Run > System switches between Windows CE 1.0 and Windows CE 2.0; a system with no ROM is greyed out. A ROM on the command line runs that ROM instead:
+Open the app, or run `velo`. It starts the last system used (CE 2.0 if there's a choice) and Velo > System switches between Windows CE 1.0 and Windows CE 2.0; a system with no ROM is greyed out. A ROM on the command line runs that ROM instead:
 
 ```
 velo
@@ -45,7 +45,7 @@ velo --memory=32 --serial=net --card=apps.img nk-ce2-merged.bin
 velo --help
 ```
 
-A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Emulation > Use Host Date/Time (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
+A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Velo > Set Clock from Host (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
 
 On macOS the menus are in the menu bar. On Linux they're in a bar along the top of the window, F10 opens it, and the arrow keys, Enter and Escape move through it.
 
@@ -53,33 +53,33 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 
 | Menu | Item | Shortcut |
 |---|---|---|
-| Run | Power Button (suspend and resume) | Cmd-Shift-P |
-| Run | Pause | Cmd-P |
-| Run | System: Windows CE 1.0, Windows CE 2.0 | |
-| Run | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
-| Run | Reset… (cold boot, clears RAM; confirmed in a dialog) | Cmd-Shift-R |
-| Run | Save State, Load State, Show Saved State in Finder | Cmd-S, Cmd-L |
-| Run | Save Snapshot…, Load Snapshot…, Show Snapshots in Finder | Cmd-Ctrl-S, Cmd-Ctrl-L |
+| Velo | Power Button (suspend and resume) | Cmd-Shift-P |
+| Velo | Backlight (presses the Velo's backlight key) | Cmd-B |
+| Velo | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
+| Velo | Reset… (cold boot, clears RAM; confirmed in a dialog) | |
+| Velo | System: Windows CE 1.0, Windows CE 2.0 | |
+| Velo | Next Cold Boot: Memory (4 MB (original), 8, 16, 20 or 32 MB), Set Clock from Host | |
+| Velo | Pause | Cmd-P |
+| Velo | CPU Speed: 1x (original), 2x, 4x, 8x | |
+| Velo | Show Debug Output | |
+| State | Save State, Load State | Cmd-S, Cmd-L |
+| State | Save Snapshot…, Load Snapshot… | Cmd-Ctrl-S, Cmd-Ctrl-L |
+| State | Show State Folder | |
 | Edit | Copy Screen (a PNG of the screen as shown) | Cmd-C |
 | Edit | Paste as Typing (types the clipboard; curly quotes and dashes become plain ones, other characters are skipped) | Cmd-V |
 | Edit | Save Screenshot to Desktop | Cmd-Shift-S |
 | View | 50%, 75%, Actual Size, 150%, 200%; Zoom In and Zoom Out | Cmd-0, Cmd-=, Cmd-- |
-| View | Full Screen | Cmd-Ctrl-F |
 | View | Simulated LCD (glass, ghosting and backlight) or Sharp Pixels (plain greys at 480 x 240) | |
-| Card | Insert Card Image…, Eject Card | Cmd-O, Cmd-E |
-| Serial | Network (PPP), Pseudo-terminal, Host Serial Port (the detected ports), Disconnect | Cmd-Shift-N |
-| Serial | Connect Network at Launch | |
-| Desktop | Send Files to Velo…, Copy My Documents to Mac… | |
-| Desktop | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |
-| Desktop | Set Up Pocket IE Proxy | |
-| Desktop | Desktop Connection Speed: 19200 (original), 38400, 57600, 115200 | |
-| Emulation | Backlight (presses the Velo's backlight key) | Cmd-B |
-| Emulation | Sound | |
-| Emulation | Use Host Date/Time (at the next cold boot) | |
-| Emulation | Memory (at the next cold boot): 4 MB (original), 8, 16, 20 or 32 MB | |
-| Emulation | CPU Speed: 1x (original), 2x, 4x, 8x | |
+| View | Full Screen | Cmd-Ctrl-F |
+| Devices | PC Card: Insert Card Image…, Eject Card | Cmd-O, Cmd-E |
+| Devices | Serial Port: Not Connected, Network (PPP), Pseudo-terminal, Host Serial Port (the detected ports) | Cmd-Shift-N for Network |
+| Devices | Connect Network at Launch | |
+| Devices | Sound | |
+| PC Link | Send Files to Velo…, Copy My Documents to Mac… | |
+| PC Link | Shared Folder…, Sync Shared Folder Now, Stop Sharing Folder | |
+| PC Link | Velo Settings: Set Up Pocket IE Proxy, Connection Speed (19200 (original), 38400, 57600, 115200) | |
 
-Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11, the snapshot items have no shortcut, and desktops that lock the screen with Ctrl+Alt+L take that one from Load State. Linux menus say File Manager for Finder, Computer for Mac and Pictures for Desktop, where screenshots go.
+Shortcuts use Cmd on macOS and Ctrl+Alt on Linux, so Cmd-Shift-P is Shift+Ctrl+Alt+P; plain Ctrl and Alt go to the Velo. On Linux Full Screen is F11, the snapshot items have no shortcut, and desktops that lock the screen with Ctrl+Alt+L take that one from Load State. Linux menus say Computer for Mac and Pictures for Desktop, where screenshots go, and Velo has a Quit item (Ctrl+Alt+Q).
 
 CE 1.0 and 2.0 have no scroll wheel, so scrolling (a mouse wheel or two-finger scroll) presses the arrow keys instead: it scrolls Pocket IE and lists, and moves the caret in documents.
 
@@ -106,23 +106,23 @@ tools/mkcard.sh card.img 32 ~/Downloads/SOFTWARE
 velo --card=card.img
 ```
 
-It uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. Insert it with Card > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later. To change its contents on the host, eject it first; on macOS `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` mounts it, and on Linux `mcopy -i card.img@@512` copies to and from it.
+It uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. Insert it with Devices > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later. To change its contents on the host, eject it first; on macOS `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` mounts it, and on Linux `mcopy -i card.img@@512` copies to and from it.
 
 ## Serial and networking
 
-Serial > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator responds with `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the host at 10.0.2.2 and DNS at 10.0.2.3. CE's sockets reach the host and the internet (outgoing only); 10.0.2.2 is the host's loopback.
+Devices > Network (PPP), or `--serial=net`, plugs COM1 into a built-in PPP server on a libslirp user-mode network. Connecting the cable starts CE's own desktop connection: CE sends `CLIENT`, the emulator responds with `CLIENTSERVER`, and PPP comes up with the Velo at 10.0.2.15, the host at 10.0.2.2 and DNS at 10.0.2.3. CE's sockets reach the host and the internet (outgoing only); 10.0.2.2 is the host's loopback.
 
-Serial > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its path in the title bar and on stderr, for a terminal or PPP tools.
+Devices > Pseudo-terminal, or `--serial=pty`, puts COM1 on a pty and prints its path in the title bar and on stderr, for a terminal or PPP tools.
 
-Serial > Host Serial Port, or `--serial=/dev/cu.usbserial-XXXX`, connects COM1 to a real port: the menu lists `/dev/cu.*` on macOS and `/dev/ttyUSB*` and `/dev/ttyACM*` on Linux, refreshed as devices come and go. The port is raw, with no flow control and modem lines ignored, and follows the baud rate CE sets (nearest standard rate). It's kept as `serial_device=` in `emu.ini`.
+Devices > Host Serial Port, or `--serial=/dev/cu.usbserial-XXXX`, connects COM1 to a real port: the menu lists `/dev/cu.*` on macOS and `/dev/ttyUSB*` and `/dev/ttyACM*` on Linux, refreshed as devices come and go. The port is raw, with no flow control and modem lines ignored, and follows the baud rate CE sets (nearest standard rate). It's kept as `serial_device=` in `emu.ini`.
 
 Without libslirp the build still works, with no Network (PPP) option.
 
-### Desktop connection
+### PC Link
 
 With PPP up, CE connects to the desktop at 10.0.2.2 port 5679, as it did with Handheld PC Explorer, and the emulator accepts the connection, sending the ping CE 2.0 requires every few seconds. The desktop then reaches the Velo with RAPI, CE's remote API, on its port 990, which the emulator makes available as `rapi.sock` in the data folder, with no TCP port. The protocol follows [SynCE](https://sourceforge.net/projects/synce/)'s librapi2.
 
-The Desktop menu uses it:
+The PC Link menu uses it:
 
 - Send Files to Velo… copies files into `\My Documents`, and Copy My Documents to Mac… copies `\My Documents`, with its folders, into a host folder.
 - Shared Folder… pairs a host folder with `\My Documents` and syncs them each time the Velo connects, or with Sync Shared Folder Now. A file changed on one side is copied to the other. A file deleted on one side, and unchanged on the other since the last sync, is deleted there too (to the Trash). When both sides changed a file, the host keeps its copy and the Velo's arrives as `name (Velo).ext`. Uploads that don't fit in the Velo's free storage are skipped, and empty folders aren't removed. The pairing is kept as `shared_folder=` in `emu.ini`.
@@ -142,7 +142,7 @@ velo-rapi --help
 
 Velo paths are relative to `\My Documents` unless they start with `/` or `\`; both separate folders. Registry keys start with `HKCU`, `HKLM`, `HKCR` or `HKU`. `--socket=PATH` picks another socket, such as one from `velo-headless --rapi=PATH`. CE 2.0's stock ROM lacks `rapisrv.exe`, the RAPI server; without it CE 2.0 reports "Out of Memory" when the cable is connected.
 
-CE's desktop connection runs at 19200 baud, about 1.6 KB/s. Desktop > Desktop Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x.
+CE's desktop connection runs at 19200 baud, about 1.6 KB/s. PC Link > Connection Speed, or `velo-rapi baud 115200`, adds a hidden `` `Desktop @ 115200` `` connection to the Velo's registry and makes it the PC Connection; the menu then reconnects the cable, and with `velo-rapi` it applies from the next connection. At 115200 the emulated CPU sets the pace: about 1.9 KB/s at CPU Speed 1x and 5.8 KB/s at 4x.
 
 ### Installing CE 1.0 software
 
@@ -168,7 +168,7 @@ Cascading Menus and Mute start straight away in the taskbar, Paint is in Program
 
 ### Web proxy
 
-Pocket IE doesn't support modern HTTPS, so the network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the host. Desktop > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 picks it up after a soft reset. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`. Only Pocket IE's requests use it, and it opens no port on the host.
+Pocket IE doesn't support modern HTTPS, so the network has a web proxy at 10.0.2.4 port 8080 that fetches pages with libcurl on the host. PC Link > Set Up Pocket IE Proxy, or `velo-rapi proxy on`, sets it in the Velo's registry for Pocket IE's next start; CE 2.0 picks it up after a soft reset. By hand: in Pocket IE, View > Options > Proxy Server, tick Use Proxy Server, enter `10.0.2.4` and port `8080`. Only Pocket IE's requests use it, and it opens no port on the host.
 
 Type addresses as `http://`: Pocket IE makes `https://` connections itself, not through the proxy, and they fail. For `http://` addresses without a port the proxy tries HTTPS first, then plain HTTP. Before a response reaches the Velo it:
 
@@ -184,7 +184,7 @@ It sends a Lynx user agent upstream in place of Pocket IE's, which some sites bl
 
 Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator gives it the host's time in Pacific time, so once you pick your home city the clock is right. After that the clock keeps running while the emulator is closed, and survives a soft reset.
 
-Memory sets the RAM for the next cold boot (Run > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
+Memory sets the RAM for the next cold boot (Velo > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD, sound and serial stay on the real clock, so only the CPU gets faster.
 
@@ -213,7 +213,7 @@ Unknown options, malformed values and events past the end of a run are errors or
 
 ## Debug output
 
-CE's debug output, from `OutputDebugString` in programs and the kernel's own messages (its boot banner, and a register dump when a program crashes), goes to `debug.log` in the data folder, which Emulation > Show Debug Output opens. `velo --debug-output` and `headless --debug-output` also print it to stderr. The retail ROMs build these messages and then drop them, so the emulator reads each string where the OAL's `OEMWriteDebugString` would have sent it to the debug port. CE 1.0 also gates the kernel's messages behind a flag, so they're read where `NKDbgPrintfW` drops them. The log is moved to `debug.log.old` at launch once it passes 1 MB.
+CE's debug output, from `OutputDebugString` in programs and the kernel's own messages (its boot banner, and a register dump when a program crashes), goes to `debug.log` in the data folder, which Velo > Show Debug Output opens. `velo --debug-output` and `headless --debug-output` also print it to stderr. The retail ROMs build these messages and then drop them, so the emulator reads each string where the OAL's `OEMWriteDebugString` would have sent it to the debug port. CE 1.0 also gates the kernel's messages behind a flag, so they're read where `NKDbgPrintfW` drops them. The log is moved to `debug.log.old` at launch once it passes 1 MB.
 
 ## Windows CE 2.0 details
 
