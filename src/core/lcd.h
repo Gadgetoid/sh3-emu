@@ -11,6 +11,7 @@ extern uint8_t lcd_framebuffer[LCD_WIDTH * LCD_HEIGHT];
 
 void      lcd_compose_setup(int cell);
 bool      lcd_compose(float seconds);
+void      lcd_compose_dirty(int *x, int *y, int *width, int *height);
 void      lcd_invalidate(void);
 bool      lcd_needs_compose(void);
 uint32_t *lcd_compose_pixels(void);

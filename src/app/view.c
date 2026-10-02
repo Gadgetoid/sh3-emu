@@ -107,7 +107,10 @@ bool view_update(view_t *view, float seconds, bool powered) {
     bool changed = layout(view);
     if (view->display == VIEW_SIMULATED) {
         if (lcd_compose(seconds)) {
-            SDL_UpdateTexture(view->texture, NULL, lcd_compose_pixels(), lcd_compose_width() * 4);
+            SDL_Rect dirty;
+            lcd_compose_dirty(&dirty.x, &dirty.y, &dirty.w, &dirty.h);
+            int stride = lcd_compose_width();
+            SDL_UpdateTexture(view->texture, &dirty, lcd_compose_pixels() + (size_t)dirty.y * stride + dirty.x, stride * 4);
             changed = true;
         }
     } else if (fill_sharp(view, powered) || changed) {
