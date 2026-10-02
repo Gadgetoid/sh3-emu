@@ -32,8 +32,9 @@
 
 #define WINDOW_SCALE     2
 #define IDLE_FRAME_NS    (SDL_NS_PER_SECOND / 60)
-#define RUN_BUDGET_NS    (10 * SDL_NS_PER_MS)
+#define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
+#define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
 #define MAX_FRAME_SLICE  0.1
 #define AUTOSAVE_SECONDS 60
 #define NOTICE_SECONDS   2
@@ -108,6 +109,45 @@ static void scroller_step(scroller_t *scroller, machine_t *machine) {
     if (scroller->pressed) scroller->pending--;
     scroller->pressed = !scroller->pressed;
     scroller->next_at = now + SCROLL_STEP;
+}
+
+typedef struct {
+    SDL_Mutex  *lock;
+    SDL_Thread *thread;
+    machine_t  *machine;
+    bool        paused, stop, restart;
+    SDL_AtomicInt waiting;
+} runner_t;
+
+static int run_machine(void *context) {
+    runner_t *runner = context;
+    double owed = 0;
+    uint64_t last = SDL_GetTicksNS();
+    for (;;) {
+        SDL_LockMutex(runner->lock);
+        if (runner->stop) {
+            SDL_UnlockMutex(runner->lock);
+            return 0;
+        }
+        uint64_t now = SDL_GetTicksNS();
+        if (runner->restart || runner->paused) {
+            owed = 0;
+            runner->restart = false;
+        } else {
+            owed += (double)(now - last) * MACHINE_CLOCK_HZ / SDL_NS_PER_SECOND;
+            if (owed > RUN_MAX_BEHIND) owed = RUN_MAX_BEHIND;
+            uint64_t hold_until = now + RUN_HOLD_NS;
+            while (owed >= RUN_SLICE_CYCLES && SDL_GetTicksNS() < hold_until && !SDL_GetAtomicInt(&runner->waiting)) {
+                machine_run(runner->machine, RUN_SLICE_CYCLES);
+                owed -= RUN_SLICE_CYCLES;
+            }
+        }
+        last = now;
+        bool caught_up = owed < RUN_SLICE_CYCLES;
+        SDL_UnlockMutex(runner->lock);
+        if (caught_up) SDL_DelayNS(SDL_NS_PER_MS / 2);
+        while (SDL_GetAtomicInt(&runner->waiting)) SDL_DelayNS(SDL_NS_PER_MS / 10);
+    }
 }
 
 static void release_keys(machine_t *machine, bool *held, int only_modifiers_up) {
@@ -963,7 +1003,7 @@ int main(int argc, char **argv) {
     bool held[256] = { false };
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
-    double owed = 0, since_autosave = 0, notice_left = 0;
+    double since_autosave = 0, notice_left = 0;
     uint64_t power_release_at = 0, backlight_release_at = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
@@ -990,10 +1030,16 @@ int main(int argc, char **argv) {
         if (!notice) { notice = result; notice_left = NOTICE_SECONDS * 2; }
     }
 
+    static runner_t runner;
+    runner = (runner_t){ SDL_CreateMutex(), NULL, machine, false, false, true, { 0 } };
+    runner.thread = SDL_CreateThread(run_machine, "velo-machine", &runner);
     while (running) {
         SDL_Event event;
         uint64_t frame_start = SDL_GetTicksNS();
         bool events_seen = false;
+        SDL_SetAtomicInt(&runner.waiting, 1);
+        SDL_LockMutex(runner.lock);
+        SDL_SetAtomicInt(&runner.waiting, 0);
         while (SDL_PollEvent(&event)) {
             events_seen = true;
             if (menu_event(&event)) {
@@ -1120,7 +1166,8 @@ int main(int argc, char **argv) {
                     serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
                 }
                 power_release_at = backlight_release_at = 0;
-                owed = 0;
+                runner.machine = machine;
+                runner.restart = true;
                 notice = switch_notice ? switch_notice : wanted == 1 ? "switched to CE 1.0" : "switched to CE 2.0";
                 notice_left = NOTICE_SECONDS * 2;
                 break;
@@ -1428,15 +1475,7 @@ int main(int argc, char **argv) {
             since_autosave = 0;
             machine_save(machine, state, (int64_t)time(NULL));
         }
-        if (!paused) {
-            owed += elapsed * MACHINE_CLOCK_HZ;
-            uint64_t run_until = SDL_GetTicksNS() + RUN_BUDGET_NS;
-            while (owed >= RUN_SLICE_CYCLES && SDL_GetTicksNS() < run_until) {
-                machine_run(machine, RUN_SLICE_CYCLES);
-                owed -= RUN_SLICE_CYCLES;
-            }
-            if (owed >= RUN_SLICE_CYCLES) owed = 0;
-        }
+        runner.paused = paused;
         typer_step(&typer, machine);
         scroller_step(&scroller, machine);
         serial_pump(&serial, machine);
@@ -1466,7 +1505,9 @@ int main(int argc, char **argv) {
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight(machine_backlight(machine));
         machine_screen(machine, lcd_framebuffer);
-        bool screen_changed = view_update(view, (float)elapsed, machine_lcd_enabled(machine));
+        bool lcd_on = machine_lcd_enabled(machine);
+        SDL_UnlockMutex(runner.lock);
+        bool screen_changed = view_update(view, (float)elapsed, lcd_on);
         if (screen_changed || events_seen || menu_active()) {
             view_render(view);
             menu_draw(renderer);
@@ -1477,6 +1518,13 @@ int main(int argc, char **argv) {
         }
     }
 
+    SDL_SetAtomicInt(&runner.waiting, 1);
+    SDL_LockMutex(runner.lock);
+    runner.stop = true;
+    SDL_SetAtomicInt(&runner.waiting, 0);
+    SDL_UnlockMutex(runner.lock);
+    SDL_WaitThread(runner.thread, NULL);
+    SDL_DestroyMutex(runner.lock);
     free(picked);
     machine_save(machine, state, (int64_t)time(NULL));
     serial_close(&serial, machine);
