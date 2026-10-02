@@ -4,4 +4,4 @@
 
 #define KEY_TEXT_SHIFT 0x51
 
-bool key_text_find(char character, uint8_t *scancode, bool *shifted);
+bool key_text_find(int system, char character, uint8_t *scancode, bool *shifted);

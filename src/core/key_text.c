@@ -18,13 +18,29 @@ static const key_char_t key_chars[] = {
     { ']', '}', 0x46 }, { '\'', '"', 0x2E }, { '\n', 0, 0x4B }, { '\t', 0, 0x11 },
 };
 
-bool key_text_find(char character, uint8_t *scancode, bool *shifted) {
-    for (size_t i = 0; i < sizeof key_chars / sizeof key_chars[0]; i++) {
-        bool is_shifted = key_chars[i].shifted && key_chars[i].shifted == character;
-        if (key_chars[i].plain != character && !is_shifted) continue;
-        *scancode = key_chars[i].scancode;
+static const key_char_t ce2_key_chars[] = {
+    { '=', '+', 0x46 }, { '[', '{', 0x4F }, { ']', '}', 0x50 }, { '\\', '|', 0x31 }, { '`', '~', 0 },
+};
+
+static bool find_in(const key_char_t *table, size_t count, char character, uint8_t *scancode, bool *shifted, bool *listed) {
+    for (size_t i = 0; i < count; i++) {
+        bool is_shifted = table[i].shifted && table[i].shifted == character;
+        if (table[i].plain != character && !is_shifted) continue;
+        *listed = true;
+        if (!table[i].scancode) return false;
+        *scancode = table[i].scancode;
         *shifted = is_shifted;
         return true;
     }
+    *listed = false;
     return false;
+}
+
+bool key_text_find(int system, char character, uint8_t *scancode, bool *shifted) {
+    bool listed;
+    if (system == 2) {
+        bool found = find_in(ce2_key_chars, sizeof ce2_key_chars / sizeof ce2_key_chars[0], character, scancode, shifted, &listed);
+        if (listed) return found;
+    }
+    return find_in(key_chars, sizeof key_chars / sizeof key_chars[0], character, scancode, shifted, &listed);
 }

@@ -12,6 +12,7 @@
 #include "app/menu.h"
 #include "app/typer.h"
 #include "app/view.h"
+#include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
 #include "net/net_gateway.h"
@@ -53,24 +54,17 @@ typedef struct {
 } key_binding_t;
 
 static const key_binding_t key_bindings[] = {
-    { SDLK_A, 0x14 }, { SDLK_B, 0x2B }, { SDLK_C, 0x2A }, { SDLK_D, 0x2C }, { SDLK_E, 0x28 },
-    { SDLK_F, 0x34 }, { SDLK_G, 0x38 }, { SDLK_H, 0x40 }, { SDLK_I, 0x45 }, { SDLK_J, 0x3C },
-    { SDLK_K, 0x44 }, { SDLK_L, 0x36 }, { SDLK_M, 0x3B }, { SDLK_N, 0x33 }, { SDLK_O, 0x3E },
-    { SDLK_P, 0x4D }, { SDLK_Q, 0x26 }, { SDLK_R, 0x30 }, { SDLK_S, 0x24 }, { SDLK_T, 0x2D },
-    { SDLK_U, 0x3D }, { SDLK_V, 0x23 }, { SDLK_W, 0x18 }, { SDLK_X, 0x22 }, { SDLK_Y, 0x35 },
-    { SDLK_Z, 0x12 },
-    { SDLK_0, 0x47 }, { SDLK_1, 0x13 }, { SDLK_2, 0x16 }, { SDLK_3, 0x15 }, { SDLK_4, 0x25 },
-    { SDLK_5, 0x17 }, { SDLK_6, 0x27 }, { SDLK_7, 0x2F }, { SDLK_8, 0x37 }, { SDLK_9, 0x3F },
-    { SDLK_SPACE, 0x21 }, { SDLK_TAB, 0x11 }, { SDLK_BACKSPACE, 0x39 }, { SDLK_RETURN, 0x4B },
+    { SDLK_TAB, 0x11 }, { SDLK_BACKSPACE, 0x39 }, { SDLK_RETURN, 0x4B },
     { SDLK_ESCAPE, 0x29 }, { SDLK_LSHIFT, 0x51 }, { SDLK_RSHIFT, 0x51 }, { SDLK_LCTRL, 0x01 },
     { SDLK_RCTRL, 0x01 }, { SDLK_LALT, 0x19 }, { SDLK_RALT, 0x09 },
     { SDLK_LEFT, 0x41 }, { SDLK_UP, 0x4A }, { SDLK_RIGHT, 0x32 }, { SDLK_DOWN, 0x49 },
-    { SDLK_SEMICOLON, 0x4C }, { SDLK_EQUALS, 0x4F }, { SDLK_COMMA, 0x43 }, { SDLK_MINUS, 0x4E },
-    { SDLK_PERIOD, 0x3A }, { SDLK_SLASH, 0x42 }, { SDLK_GRAVE, 0x31 }, { SDLK_LEFTBRACKET, 0x48 },
-    { SDLK_BACKSLASH, 0x50 }, { SDLK_RIGHTBRACKET, 0x46 }, { SDLK_APOSTROPHE, 0x2E },
 };
 
-static bool find_scancode(SDL_Keycode key, uint8_t *scancode) {
+static bool find_scancode(int system, SDL_Keycode key, uint8_t *scancode) {
+    if (key >= 0x20 && key < 0x7F) {
+        bool shifted;
+        return key_text_find(system, (char)key, scancode, &shifted);
+    }
     for (size_t i = 0; i < sizeof key_bindings / sizeof key_bindings[0]; i++) {
         if (key_bindings[i].key == key) { *scancode = key_bindings[i].scancode; return true; }
     }
@@ -1018,7 +1012,7 @@ int main(int argc, char **argv) {
             case SDL_EVENT_KEY_UP: {
                 bool down = event.type == SDL_EVENT_KEY_DOWN;
                 uint8_t scancode;
-                if (!find_scancode(event.key.key, &scancode)) break;
+                if (!find_scancode(system, event.key.key, &scancode)) break;
                 if (down) {
                     if (event.key.repeat || (event.key.mod & SDL_KMOD_GUI) || held[scancode]) break;
                     held[scancode] = true;
@@ -1176,7 +1170,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PASTE: {
                 char *clipboard = SDL_GetClipboardText();
-                size_t typed = clipboard ? typer_start(&typer, clipboard) : 0;
+                size_t typed = clipboard ? typer_start(&typer, system, clipboard) : 0;
                 SDL_free(clipboard);
                 snprintf(paste_notice, sizeof paste_notice, typed ? "typing %zu characters" : "nothing to type", typed);
                 notice = paste_notice;

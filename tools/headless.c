@@ -42,7 +42,7 @@ static void type_text(machine_t *machine, const char *text) {
         if (ch == '\\' && c[1] == 'n') { ch = '\n'; c++; }
         uint8_t scancode;
         bool shifted;
-        if (!key_text_find(ch, &scancode, &shifted)) continue;
+        if (!key_text_find(machine_rom_system(machine), ch, &scancode, &shifted)) continue;
         if (shifted) machine_key(machine, KEY_TEXT_SHIFT, false);
         machine_key(machine, scancode, false);
         machine_run(machine, MACHINE_CLOCK_HZ / 50);
