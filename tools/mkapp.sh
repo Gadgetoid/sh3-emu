@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 app=${1:-Velo.app}
-version=$(git describe --always --dirty 2>/dev/null || echo unknown)
+version=${VERSION:-$(git describe --always --dirty 2>/dev/null || echo unknown)}
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
 cp velo velo-rapi "$app/Contents/MacOS/"

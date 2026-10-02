@@ -73,6 +73,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
+          prerelease: ${{ contains(github.ref_name, '-') }}
           files: |
             *.zip
             *.deb

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 out=${1:-dist}
-version=${VERSION:-0.1+git$(date +%Y%m%d)}
+version=$(printf "%s" "${VERSION:-0.1+git$(date +%Y%m%d)}" | tr - "~")
 arch=$(dpkg --print-architecture)
 package=velo-emu
 root=$(mktemp -d)
