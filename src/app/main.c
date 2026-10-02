@@ -1426,7 +1426,7 @@ int main(int argc, char **argv) {
             since_autosave = 0;
             machine_save(machine, state, (int64_t)time(NULL));
         }
-        if (!paused && !machine_halted(machine)) {
+        if (!paused) {
             owed += elapsed * MACHINE_CLOCK_HZ;
             uint64_t cycles = (uint64_t)owed;
             owed -= (double)cycles;

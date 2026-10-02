@@ -19,8 +19,6 @@ void       machine_set_log(machine_t *machine, machine_log_fn log);
 void       machine_run(machine_t *machine, uint64_t cycles);
 uint64_t   machine_cycles(machine_t *machine);
 uint32_t   machine_pc(machine_t *machine);
-bool       machine_halted(machine_t *machine);
-const char *machine_halt_reason(machine_t *machine);
 
 bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
@@ -37,7 +35,6 @@ size_t machine_audio(machine_t *machine, int16_t *samples, size_t max, uint32_t 
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
-const char *machine_card_path(machine_t *machine);
 
 void   machine_serial_connect(machine_t *machine, bool connected);
 bool   machine_serial_connected(machine_t *machine);
@@ -65,4 +62,3 @@ void machine_set_host_clock(machine_t *machine, bool enabled);
 void machine_set_debug_output(machine_t *machine, machine_debug_fn sink, void *context);
 
 void machine_dump_state(machine_t *machine);
-bool machine_read_virtual(machine_t *machine, uint32_t va, uint32_t *value);

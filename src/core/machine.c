@@ -169,8 +169,6 @@ struct machine {
     uint32_t entry_va;
     uint64_t rom_hash;
     machine_log_fn log;
-    bool halted;
-    char halt_reason[256];
 
     uint32_t regs[REG_COUNT];
     pccard_t pccard;
@@ -1261,7 +1259,7 @@ static void reset_machine(machine_t *m, bool keep_ram);
 
 void machine_run(machine_t *m, uint64_t cycles) {
     uint64_t target = m->cpu.cycles + cycles;
-    while (!m->halted && m->cpu.cycles < target) {
+    while (m->cpu.cycles < target) {
         if (m->suspended) {
             run_suspended(m, target);
             continue;
@@ -1291,8 +1289,6 @@ void machine_run(machine_t *m, uint64_t cycles) {
 
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
 uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
-bool machine_halted(machine_t *m) { return m->halted; }
-const char *machine_halt_reason(machine_t *m) { return m->halt_reason; }
 
 static uint32_t mfio_driven(const machine_t *m) {
     return m->mfio_dout & m->mfio_direc & m->mfio_sel;
@@ -1396,9 +1392,6 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "\n");
 }
 
-bool machine_read_virtual(machine_t *m, uint32_t va, uint32_t *value) {
-    return mips_read_virtual(&m->cpu, va, 4, value);
-}
 
 #define STATE_FIELDS(X) \
     X(cpu_gpr, m->cpu.gpr) X(cpu_hi, m->cpu.hi) X(cpu_lo, m->cpu.lo) X(cpu_pc, m->cpu.pc) \
@@ -1840,10 +1833,6 @@ void machine_eject_card(machine_t *m) {
     cancel_pending_card(m);
     pccard_eject(&m->card_socket);
     m->card_path[0] = 0;
-}
-
-const char *machine_card_path(machine_t *m) {
-    return m->pccard.inserted ? m->card_path : NULL;
 }
 
 bool machine_card_inserted(machine_t *m) {

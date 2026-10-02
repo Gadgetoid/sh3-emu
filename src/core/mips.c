@@ -196,12 +196,6 @@ void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va) {
     tlb_fault(cpu, MIPS_EXC_TLBL, va);
 }
 
-bool mips_read_virtual(mips_cpu_t *cpu, uint32_t va, int size, uint32_t *value) {
-    uint32_t pa;
-    if (translate(cpu, va, false, &pa) != TRANSLATE_OK) return false;
-    return cpu->bus.read(cpu->bus.context, pa, size, value);
-}
-
 static bool fetch(mips_cpu_t *cpu, uint32_t va, uint32_t *instruction) {
     if (va & 3) { address_fault(cpu, MIPS_EXC_ADEL, va); return false; }
     uint32_t vpn = va & ENTRYHI_VPN_MASK;

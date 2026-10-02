@@ -299,7 +299,7 @@ int main(int argc, char **argv) {
     uint64_t cycles_start = machine_cycles(machine);
     uint64_t total = (uint64_t)(run.seconds * MACHINE_CLOCK_HZ);
     uint64_t slice = MACHINE_CLOCK_HZ / 10;
-    for (uint64_t done = 0; done < total && !machine_halted(machine) && !stop_requested; done += slice) {
+    for (uint64_t done = 0; done < total && !stop_requested; done += slice) {
         for (int k = 0; k < run.key_count; k++) {
             uint64_t at = (uint64_t)(run.key_times[k] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
