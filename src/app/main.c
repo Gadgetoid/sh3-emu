@@ -31,6 +31,8 @@
 
 #define WINDOW_SCALE     2
 #define IDLE_FRAME_NS    (SDL_NS_PER_SECOND / 60)
+#define RUN_BUDGET_NS    (10 * SDL_NS_PER_MS)
+#define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define MAX_FRAME_SLICE  0.1
 #define AUTOSAVE_SECONDS 60
 #define NOTICE_SECONDS   2
@@ -1434,9 +1436,12 @@ int main(int argc, char **argv) {
         }
         if (!paused) {
             owed += elapsed * MACHINE_CLOCK_HZ;
-            uint64_t cycles = (uint64_t)owed;
-            owed -= (double)cycles;
-            machine_run(machine, cycles);
+            uint64_t run_until = SDL_GetTicksNS() + RUN_BUDGET_NS;
+            while (owed >= RUN_SLICE_CYCLES && SDL_GetTicksNS() < run_until) {
+                machine_run(machine, RUN_SLICE_CYCLES);
+                owed -= RUN_SLICE_CYCLES;
+            }
+            if (owed >= RUN_SLICE_CYCLES) owed = 0;
         }
         typer_step(&typer, machine);
         scroller_step(&scroller, machine);
