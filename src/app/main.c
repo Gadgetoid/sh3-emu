@@ -37,6 +37,8 @@
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
 #define MAX_FRAME_SLICE  0.1
 #define AUTOSAVE_SECONDS 60
+#define BACKUP_SECONDS   600
+#define BACKUP_KEEP      10
 #define NOTICE_SECONDS   2
 #define POWER_PRESS_SECONDS 0.2
 #define BACKLIGHT_PRESS_SECONDS 0.1
@@ -567,6 +569,79 @@ static void snapshot_folder(char *path, size_t size) {
     SDL_CreateDirectory(path);
 }
 
+static void backup_path(const char *state, char *prefix, size_t prefix_size, char *path, size_t size) {
+    char folder[1100];
+    snapshot_folder(folder, sizeof folder);
+    snprintf(folder + strlen(folder), sizeof folder - strlen(folder), "/Backups");
+    SDL_CreateDirectory(folder);
+    char name[256];
+    snprintf(name, sizeof name, "%s", file_leaf_name(state));
+    char *extension = strrchr(name, '.');
+    if (extension && extension != name) *extension = 0;
+    time_t now = time(NULL);
+    struct tm local;
+    localtime_r(&now, &local);
+    char stamp[64];
+    strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
+    snprintf(prefix, prefix_size, "%s ", name);
+    snprintf(path, size, "%s/%s%s.state", folder, prefix, stamp);
+}
+
+static int compare_name_pointers(const void *a, const void *b) {
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+static void prune_backups(const char *path, const char *prefix) {
+    char folder[1100];
+    snprintf(folder, sizeof folder, "%s", path);
+    char *slash = strrchr(folder, '/');
+    if (!slash) return;
+    *slash = 0;
+    DIR *dir = opendir(folder);
+    if (!dir) return;
+    char *names[256];
+    int count = 0;
+    size_t prefix_length = strlen(prefix);
+    struct dirent *entry;
+    while ((entry = readdir(dir)) && count < 256) {
+        if (strncmp(entry->d_name, prefix, prefix_length) || !has_extension(entry->d_name, ".state")) continue;
+        names[count] = strdup(entry->d_name);
+        if (names[count]) count++;
+    }
+    closedir(dir);
+    qsort(names, (size_t)count, sizeof names[0], compare_name_pointers);
+    for (int i = 0; i < count; i++) {
+        if (i < count - BACKUP_KEEP) {
+            char old[1400];
+            snprintf(old, sizeof old, "%s/%s", folder, names[i]);
+            remove(old);
+        }
+        free(names[i]);
+    }
+}
+
+static bool backup_machine(machine_t *machine, const char *state) {
+    char prefix[300], path[1400];
+    backup_path(state, prefix, sizeof prefix, path, sizeof path);
+    bool saved = machine_save(machine, path, (int64_t)time(NULL));
+    if (saved) prune_backups(path, prefix);
+    return saved;
+}
+
+static bool backup_file(const char *state) {
+    size_t size;
+    uint8_t *contents = file_read(state, &size);
+    if (!contents) return false;
+    char prefix[300], path[1400];
+    backup_path(state, prefix, sizeof prefix, path, sizeof path);
+    FILE *file = fopen(path, "wb");
+    bool written = file && fwrite(contents, 1, size, file) == size;
+    if (file && fclose(file) != 0) written = false;
+    free(contents);
+    if (written) prune_backups(path, prefix);
+    return written;
+}
+
 static void snapshot_default_name(char *path, size_t size) {
     char folder[1100];
     snapshot_folder(folder, sizeof folder);
@@ -869,7 +944,10 @@ static machine_t *start_machine(const char *rom_path, const settings_t *settings
     start_debug_log(rom_path);
     if (state_file) snprintf(state, state_size, "%s", state_file);
     else state_path(state, state_size, machine, rom_path);
-    if (fresh) return machine;
+    if (fresh) {
+        backup_file(state);
+        return machine;
+    }
     int64_t saved_at;
     if (machine_load(machine, state, &saved_at)) {
         machine_advance_clock(machine, (int64_t)time(NULL) - saved_at);
@@ -1078,7 +1156,7 @@ int main(int argc, char **argv) {
     bool held[256] = { false };
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
-    double since_autosave = 0, notice_left = 0;
+    double since_autosave = 0, since_backup = 0, notice_left = 0;
     uint64_t power_release_at = 0, backlight_release_at = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
@@ -1303,13 +1381,18 @@ int main(int argc, char **argv) {
                 break;
             }
             case MENU_RESET:
-                if (confirm_reset(window)) machine_reset(machine);
+                if (!confirm_reset(window)) break;
+                notice = backup_machine(machine, state) ? "reset; the machine before it is in Snapshots/Backups" : "reset";
+                notice_left = NOTICE_SECONDS * 3;
+                since_backup = 0;
+                machine_reset(machine);
                 break;
             case MENU_SAVE_STATE:
                 notice = machine_save(machine, state, (int64_t)time(NULL)) ? "state saved" : "could not save state";
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_LOAD_STATE:
+                backup_machine(machine, state);
                 if (machine_load(machine, state, NULL)) {
                     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
                     notice = "state loaded";
@@ -1487,6 +1570,7 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS * 2;
             } else if (picked->kind == PICK_LOAD_SNAPSHOT) {
                 static char snapshot_notice[1200];
+                if (machine_state_matches(machine, picked->paths[0])) backup_machine(machine, state);
                 if (machine_load(machine, picked->paths[0], NULL)) {
                     serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
                     snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked->paths[0]));
@@ -1594,7 +1678,12 @@ int main(int argc, char **argv) {
         }
         set_title(window, system, notice, paused, machine_suspended(machine));
         since_autosave += elapsed;
+        if (!paused) since_backup += elapsed;
         since_port_scan -= elapsed;
+        if (since_backup >= BACKUP_SECONDS) {
+            since_backup = 0;
+            backup_machine(machine, state);
+        }
         if (since_autosave >= AUTOSAVE_SECONDS) {
             since_autosave = 0;
             machine_save(machine, state, (int64_t)time(NULL));
