@@ -106,6 +106,7 @@ static void scroller_add(scroller_t *scroller, float vertical, float horizontal)
 
 static void scroller_step(scroller_t *scroller, machine_t *machine) {
     uint64_t now = machine_cycles(machine);
+    if (scroller->next_at > now + SCROLL_STEP) scroller->next_at = now;
     if (!scroller->pending || now < scroller->next_at) return;
     machine_key(machine, scroller->scancode, scroller->pressed);
     if (scroller->pressed) scroller->pending--;
@@ -122,12 +123,21 @@ typedef enum { INPUT_PEN, INPUT_KEY } input_kind_t;
 typedef struct {
     struct { uint64_t at; input_kind_t kind; bool down; int x, y; uint8_t scancode; } events[INPUT_QUEUE];
     int      count;
-    uint64_t last_at;
+    uint64_t last_at, seen;
 } input_queue_t;
+
+static void input_rebase(input_queue_t *input, uint64_t now) {
+    if (now < input->seen) {
+        for (int i = 0; i < input->count; i++) input->events[i].at = now;
+        input->last_at = now;
+    }
+    input->seen = now;
+}
 
 static void input_add(input_queue_t *input, machine_t *machine, input_kind_t kind, bool down, int x, int y, uint8_t scancode) {
     if (input->count == INPUT_QUEUE) return;
     uint64_t now = machine_cycles(machine);
+    input_rebase(input, now);
     uint64_t spacing = kind == INPUT_PEN ? PEN_MIN_CYCLES : KEY_MIN_CYCLES;
     uint64_t at = input->last_at + spacing > now ? input->last_at + spacing : now;
     input->events[input->count].at = at;
@@ -147,6 +157,7 @@ static void pen_move(input_queue_t *input, machine_t *machine, int x, int y) {
 
 static void input_step(input_queue_t *input, machine_t *machine) {
     uint64_t now = machine_cycles(machine);
+    input_rebase(input, now);
     int done = 0;
     while (done < input->count && input->events[done].at <= now) {
         if (input->events[done].kind == INPUT_PEN) machine_touch(machine, input->events[done].down, input->events[done].x, input->events[done].y);
@@ -159,7 +170,7 @@ static void input_step(input_queue_t *input, machine_t *machine) {
 
 static void input_clear(input_queue_t *input) {
     input->count = 0;
-    input->last_at = 0;
+    input->last_at = input->seen = 0;
 }
 
 typedef struct {
