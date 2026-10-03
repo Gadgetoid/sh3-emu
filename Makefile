@@ -105,16 +105,23 @@ run: $(PROG)
 app: $(PROG) $(VELORAPI) $(VELOSTATE) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh Velo.app
 
-vdisk:
-	for version in 1 2; do \
-		cmake -S guest/vdisk -B $(BUILD)/guest/vdisk/ce$$version -DCMAKE_TOOLCHAIN_FILE=$(abspath $(VELO_TOOLCHAIN))/cmake/velo-ce.cmake -DVELO_CE_VERSION=$$version && \
-		cmake --build $(BUILD)/guest/vdisk/ce$$version || exit 1; \
+GUEST_COMPONENTS = $(patsubst guest/%/CMakeLists.txt,%,$(wildcard guest/*/CMakeLists.txt))
+
+guest:
+	for component in $(GUEST_COMPONENTS); do \
+		for version in 1 2; do \
+			cmake -S guest/$$component -B $(BUILD)/guest/$$component/ce$$version -DCMAKE_TOOLCHAIN_FILE=$(abspath $(VELO_TOOLCHAIN))/cmake/velo-ce.cmake -DVELO_CE_VERSION=$$version && \
+			cmake --build $(BUILD)/guest/$$component/ce$$version || exit 1; \
+			cp guest/$$component/$$component.reg $(BUILD)/guest/$$component/ce$$version/ || exit 1; \
+		done; \
 	done
+
+vdisk: guest
 
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE) Velo.app
 
-.PHONY: all run clean test check app icons vdisk FORCE
+.PHONY: all run clean test check app icons guest vdisk FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/velo_state.d $(BUILD)/tools/icon.d
 

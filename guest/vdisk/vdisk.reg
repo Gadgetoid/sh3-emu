@@ -1,0 +1,7 @@
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\Drivers\BuiltIn\VDisk]
+"Dll"="vdisk.dll"
+"Entry"="VDiskStart"
+"Keep"=dword:00000001
+"Order"=dword:00000003
