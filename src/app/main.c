@@ -9,7 +9,9 @@
 #include <time.h>
 
 #include "app/desktop.h"
+#include "app/dialog.h"
 #include "app/menu.h"
+#include "app/profiles.h"
 #include "app/typer.h"
 #include "app/view.h"
 #include "core/key_text.h"
@@ -687,6 +689,7 @@ typedef struct {
     uint32_t scale;
     uint32_t connect_at_launch;
     uint32_t system;
+    char     machine[64];
     char     serial_device[1024];
     uint32_t display;
     char     user_agent[256];
@@ -743,6 +746,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "scale=%u", &value) == 1 && scale_index(value) >= 0) settings.scale = value;
         else if (sscanf(line, "connect_at_launch=%u", &value) == 1) settings.connect_at_launch = value;
         else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
+        else if (!strncmp(line, "machine=", 8)) copy_setting(settings.machine, sizeof settings.machine, line + 8);
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
         else if (!strncmp(line, "user_agent=", 11)) copy_setting(settings.user_agent, sizeof settings.user_agent, line + 11);
         else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
@@ -757,24 +761,28 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nsystem=%u\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
-            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->system, settings->serial_device, settings->user_agent,
-            settings->shared_folder);
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nsystem=%u\nmachine=%s\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
+            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->system, settings->machine, settings->serial_device,
+            settings->user_agent, settings->shared_folder);
     fclose(file);
 }
 
-static bool confirm_reset(SDL_Window *window) {
+static bool confirm_action(SDL_Window *window, const char *title, const char *message, const char *action) {
     const SDL_MessageBoxButtonData buttons[] = {
         { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel" },
-        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Reset" },
+        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, action },
     };
-    const SDL_MessageBoxData dialog = {
-        SDL_MESSAGEBOX_WARNING, window, "Reset the Velo?",
-        "A reset is a cold boot: it clears RAM, including files, settings and installed programs. Soft Reset keeps them.",
-        (int)(sizeof buttons / sizeof buttons[0]), buttons, NULL,
-    };
+    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_WARNING, window, title, message, (int)(sizeof buttons / sizeof buttons[0]), buttons, NULL };
     int chosen = 0;
     return SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1;
+}
+
+static bool confirm_reset(SDL_Window *window, const char *name) {
+    char title[160];
+    snprintf(title, sizeof title, "Reset %s?", name);
+    return confirm_action(window, title,
+                          "A reset is a cold boot back to the factory state: it clears RAM, including files, settings and installed programs. A backup of the machine goes in Snapshots/Backups first. Soft Reset keeps them.",
+                          "Reset");
 }
 
 static void open_path(const char *path) {
@@ -818,11 +826,9 @@ static void reveal_file(const char *path) {
 #endif
 }
 
-static const char *SYSTEM_NAMES[] = { "", "CE 1.0", "CE 2.0" };
-
-static void set_title(SDL_Window *window, int system, const char *notice, bool paused, bool suspended) {
-    char base[64], title[1400];
-    snprintf(base, sizeof base, "%s (%s)", WINDOW_TITLE, SYSTEM_NAMES[system]);
+static void set_title(SDL_Window *window, const char *name, const char *notice, bool paused, bool suspended) {
+    char base[200], title[1400];
+    snprintf(base, sizeof base, "%s (%s)", WINDOW_TITLE, name);
     if (notice) snprintf(title, sizeof title, "%s: %s", base, notice);
     else if (paused) snprintf(title, sizeof title, "%s, paused", base);
     else if (suspended) snprintf(title, sizeof title, "%s, suspended", base);
@@ -847,17 +853,19 @@ static void rom_folder(char *path, size_t size) {
 #define ROM_PROBE_CACHE 32
 
 typedef struct {
-    char   path[1024];
-    off_t  size;
-    time_t modified;
-    int    system;
+    char     path[1024];
+    off_t    size;
+    time_t   modified;
+    int      system;
+    uint32_t screens;
 } rom_probe_t;
 
 static rom_probe_t rom_probes[ROM_PROBE_CACHE];
 static int rom_probe_count = 0;
 static int rom_probe_next = 0;
 
-static int rom_system(const char *path) {
+static int rom_system(const char *path, uint32_t *screens) {
+    *screens = 0;
     size_t size;
     uint8_t *rom = file_read(path, &size);
     if (!rom) return 0;
@@ -866,16 +874,22 @@ static int rom_system(const char *path) {
     free(rom);
     if (!machine) return 0;
     int system = machine_rom_system(machine);
+    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
+        if (machine_screen_supported(machine, SCREEN_PRESETS[i])) *screens |= 1u << i;
+    }
     machine_destroy(machine);
     return system;
 }
 
-static int cached_rom_system(const char *path, const struct stat *info) {
+static int cached_rom_system(const char *path, const struct stat *info, uint32_t *screens) {
     rom_probe_t *probe = NULL;
     for (int i = 0; i < rom_probe_count && !probe; i++) {
         if (!strcmp(rom_probes[i].path, path)) probe = &rom_probes[i];
     }
-    if (probe && probe->size == info->st_size && probe->modified == info->st_mtime) return probe->system;
+    if (probe && probe->size == info->st_size && probe->modified == info->st_mtime) {
+        *screens = probe->screens;
+        return probe->system;
+    }
     if (!probe) {
         if (rom_probe_count < ROM_PROBE_CACHE) {
             probe = &rom_probes[rom_probe_count++];
@@ -887,7 +901,8 @@ static int cached_rom_system(const char *path, const struct stat *info) {
     }
     probe->size = info->st_size;
     probe->modified = info->st_mtime;
-    probe->system = rom_system(path);
+    probe->system = rom_system(path, &probe->screens);
+    *screens = probe->screens;
     return probe->system;
 }
 
@@ -904,7 +919,8 @@ static void find_roms(rom_set_t *roms) {
         if (snprintf(path, sizeof path, "%s/%s", folder, entry->d_name) >= (int)sizeof path) continue;
         struct stat info;
         if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < ROM_MIN_BYTES || info.st_size > ROM_MAX_BYTES) continue;
-        int system = cached_rom_system(path, &info);
+        uint32_t screens;
+        int system = cached_rom_system(path, &info, &screens);
         size_t size = (size_t)info.st_size;
         if (!system || size <= roms->size[system]) continue;
         memcpy(roms->path[system], path, sizeof path);
@@ -927,8 +943,80 @@ static bool no_roms_dialog(void) {
     return false;
 }
 
-static machine_t *start_machine(const char *rom_path, const settings_t *settings, const char *state_file, bool fresh,
+const uint32_t DIALOG_MEMORY_SIZES[DIALOG_MEMORY_COUNT] = { 4, 8, 16, 20, 32 };
+
+static void machines_folder(char *path, size_t size) {
+    char base[1024];
+    data_folder(base, sizeof base);
+    snprintf(path, size, "%s/machines", base);
+    SDL_CreateDirectory(path);
+}
+
+static uint32_t probe_rom(const char *path, char *label, size_t label_size) {
+    struct stat info;
+    if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < ROM_MIN_BYTES || info.st_size > ROM_MAX_BYTES) return 0;
+    uint32_t screens;
+    int system = cached_rom_system(path, &info, &screens);
+    if (!system) return 0;
+    snprintf(label, label_size, "%s: %s", system == 1 ? "CE 1.0" : "CE 2.0", file_leaf_name(path));
+    return screens;
+}
+
+static int list_roms(dialog_rom_t *roms, int max) {
+    char folder[1100];
+    rom_folder(folder, sizeof folder);
+    DIR *dir = opendir(folder);
+    if (!dir) return 0;
+    int count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) && count < max) {
+        if (entry->d_name[0] == '.') continue;
+        dialog_rom_t *rom = &roms[count];
+        if (snprintf(rom->path, sizeof rom->path, "%s/%s", folder, entry->d_name) >= (int)sizeof rom->path) continue;
+        rom->screens = probe_rom(rom->path, rom->label, sizeof rom->label);
+        if (rom->screens) count++;
+    }
+    closedir(dir);
+    return count;
+}
+
+static int profile_system(const profile_t *profile) {
+    struct stat info;
+    uint32_t screens;
+    if (stat(profile->rom, &info) != 0) return 0;
+    return cached_rom_system(profile->rom, &info, &screens);
+}
+
+static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
+    size_t rom_size;
+    uint8_t *rom = file_read(rom_path, &rom_size);
+    if (!rom) return false;
+    char error[256];
+    machine_t *machine = machine_create(rom, rom_size, error, sizeof error);
+    free(rom);
+    if (!machine) return false;
+    state_path(state, size, machine, rom_path);
+    machine_destroy(machine);
+    return true;
+}
+
+static void migrate_profiles(profiles_t *profiles, const rom_set_t *roms, const settings_t *settings, const char *folder) {
+    static const char *NAMES[] = { "", "Windows CE 1.0", "Windows CE 2.0" };
+    for (int system = 1; system <= 2; system++) {
+        if (!roms->path[system][0]) continue;
+        profile_t profile = { .memory = settings->memory, .screen = settings->screen, .host_time = settings->host_time != 0 };
+        snprintf(profile.name, sizeof profile.name, "%s", NAMES[system]);
+        snprintf(profile.rom, sizeof profile.rom, "%s", roms->path[system]);
+        if (!legacy_state_path(profile.rom, profile.state, sizeof profile.state)) continue;
+        profile_make_unique(profiles, &profile, folder);
+        profile_save(&profile, folder);
+        profiles_load(profiles, folder);
+    }
+}
+
+static machine_t *start_machine(const profile_t *profile, uint32_t speed, const char *state_file, bool fresh,
                                 char *state, size_t state_size, const char **notice) {
+    const char *rom_path = profile->rom;
     static char message[1400];
     *notice = NULL;
     size_t rom_size;
@@ -947,13 +1035,14 @@ static machine_t *start_machine(const char *rom_path, const settings_t *settings
         return NULL;
     }
     machine_set_log(machine, log_message);
-    machine_set_memory(machine, settings->memory);
-    machine_set_screen(machine, settings->screen);
-    machine_set_speed(machine, settings->speed);
-    machine_set_host_clock(machine, settings->host_time != 0);
+    machine_set_memory(machine, profile->memory);
+    machine_set_screen(machine, profile->screen);
+    machine_set_speed(machine, speed);
+    machine_set_host_clock(machine, profile->host_time);
     machine_set_debug_output(machine, print_debug_line, NULL);
     start_debug_log(rom_path);
     if (state_file) snprintf(state, state_size, "%s", state_file);
+    else if (profile->state[0]) snprintf(state, state_size, "%s", profile->state);
     else state_path(state, state_size, machine, rom_path);
     if (fresh) {
         backup_file(state);
@@ -1037,24 +1126,25 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
 typedef struct {
     settings_t   *settings;
     serial_mode_t serial_mode;
-    const char   *card, *disk, *state_file;
+    const char   *card, *disk, *state_file, *machine;
     bool          fresh;
 } launch_t;
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_DISK, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
+    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_DISK, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT,
 };
 
 static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_HEADING_MACHINE] = { NULL, NULL, "Machine", 0 },
+    [LAUNCH_MACHINE] = { "machine", "NAME", "open the machine with this name (from Machine > Machines)", 0 },
     [LAUNCH_STATE] = { "state", "FILE", "load, save and autosave FILE instead of the ROM's own state", 0 },
     [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
     [LAUNCH_CARD] = { "card", "IMAGE", "insert a PC Card image", 0 },
     [LAUNCH_DISK] = { "disk", "IMAGE", "attach a disk image to the paravirtual disk (needs vdisk.dll in the guest)", 0 },
-    [LAUNCH_MEMORY] = { "memory", "MB", "RAM for the next cold boot: 4, 8, 16, 20 or 32", 0 },
-    [LAUNCH_SCREEN] = { "screen", "WxH", "screen for the next cold boot: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
+    [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 4, 8, 16, 20 or 32", 0 },
+    [LAUNCH_SCREEN] = { "screen", "WxH", "screen for a ROM given on the command line: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
     [LAUNCH_SERIAL] = { "serial", "net|pty|off|PORT", "COM1 on the PPP network, a pseudo-terminal, nothing, or a host serial port such as /dev/cu.usbserial-1", 0 },
@@ -1071,6 +1161,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
     (void)error;
     (void)error_size;
     switch (option) {
+    case LAUNCH_MACHINE: launch->machine = value; return true;
     case LAUNCH_STATE: launch->state_file = value; return true;
     case LAUNCH_FRESH: launch->fresh = true; return true;
     case LAUNCH_CARD: launch->card = value; return true;
@@ -1102,7 +1193,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
 
 static const option_spec_t LAUNCH_SPEC = {
     "velo", "[OPTIONS] [ROM]",
-    "Emulates a Philips Velo 1. With no ROM it opens the last system used from the roms folder in its data folder; Machine > System switches between Windows CE 1.0 and 2.0.",
+    "Emulates a Philips Velo 1. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
     LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
     "headless runs the machine without a window, for tests and scripts, and velo-rapi talks to a running Velo.",
 };
@@ -1111,7 +1202,7 @@ int main(int argc, char **argv) {
     const char *rom_path = NULL;
     migrate_old_folders();
     settings_t settings = settings_load();
-    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, false };
+    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, NULL, false };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
@@ -1123,17 +1214,36 @@ int main(int argc, char **argv) {
     bool fresh = launch.fresh;
     static rom_set_t roms;
     find_roms(&roms);
-    if (!rom_path) {
-        int system = settings.system == 1 || settings.system == 2 ? (int)settings.system : 0;
-        if (!system || !roms.path[system][0]) system = roms.path[2][0] ? 2 : roms.path[1][0] ? 1 : 0;
-        if (!system) return no_roms_dialog() ? 0 : 1;
-        rom_path = roms.path[system];
+    char profiles_folder[1100];
+    machines_folder(profiles_folder, sizeof profiles_folder);
+    static profiles_t profiles;
+    profiles_load(&profiles, profiles_folder);
+    if (!profiles.count) migrate_profiles(&profiles, &roms, &settings, profiles_folder);
+    static profile_t current;
+    int current_index = -1;
+    if (rom_path) {
+        current = (profile_t){ .memory = settings.memory, .screen = settings.screen, .host_time = settings.host_time != 0 };
+        snprintf(current.rom, sizeof current.rom, "%s", rom_path);
+        snprintf(current.name, sizeof current.name, "%s", file_leaf_name(rom_path));
+    } else {
+        if (launch.machine) {
+            current_index = profile_find(&profiles, launch.machine);
+            if (current_index < 0) { fprintf(stderr, "no machine called %s\n", launch.machine); return 2; }
+        } else {
+            current_index = settings.machine[0] ? profile_find(&profiles, settings.machine) : -1;
+            if (current_index < 0) current_index = profiles.count ? 0 : -1;
+        }
+        if (current_index < 0) return no_roms_dialog() ? 0 : 1;
+        current = profiles.entries[current_index];
     }
     char state[1100];
     const char *startup_notice = NULL;
-    machine_t *machine = start_machine(rom_path, &settings, state_file, fresh, state, sizeof state, &startup_notice);
+    machine_t *machine = start_machine(&current, settings.speed, state_file, fresh, state, sizeof state, &startup_notice);
     if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
-    int system = machine_rom_system(machine);
+    if (current_index >= 0) {
+        snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
+        settings_save(&settings);
+    }
     key_layout_t key_layout = machine_key_layout(machine);
     screen_size_t screen = machine_screen_size(machine);
     lcd_set_size(screen.width, screen.height);
@@ -1287,6 +1397,7 @@ int main(int argc, char **argv) {
         }
 
         release_keys(&input, machine, held, menu_modifiers());
+        int switch_to = -1;
         for (int item = menu_poll(); item >= 0; item = menu_poll()) {
             release_keys(&input, machine, held, -1);
             switch (item) {
@@ -1296,47 +1407,67 @@ int main(int argc, char **argv) {
                 break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
-            case MENU_SYSTEM_CE1:
-            case MENU_SYSTEM_CE2: {
-                int wanted = item == MENU_SYSTEM_CE1 ? 1 : 2;
-                if (wanted == system || !roms.path[wanted][0]) break;
-                if (desktop_busy(desktop)) {
-                    notice = "busy with a desktop transfer";
-                    notice_left = NOTICE_SECONDS;
-                    break;
-                }
-                const char *switch_notice = NULL;
-                char next_state[sizeof state];
-                machine_t *next = start_machine(roms.path[wanted], &settings, NULL, false, next_state, sizeof next_state, &switch_notice);
-                if (!next) {
-                    notice = switch_notice;
+            case MENU_NEW_MACHINE: {
+                static dialog_rom_t rom_list[32];
+                int rom_count = list_roms(rom_list, 32);
+                dialog_machine_t chosen = { .memory = 4, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .host_time = settings.host_time != 0 };
+                if (rom_count) snprintf(chosen.rom, sizeof chosen.rom, "%s", current.rom);
+                events_seen = true;
+                if (!dialog_new_machine(window, rom_list, rom_count, probe_rom, &chosen)) break;
+                profile_t made = { .screen = chosen.screen, .memory = chosen.memory, .host_time = chosen.host_time };
+                snprintf(made.rom, sizeof made.rom, "%s", chosen.rom);
+                if (chosen.name[0]) snprintf(made.name, sizeof made.name, "%s", chosen.name);
+                else profile_default_name(&made, profile_system(&made), made.name, sizeof made.name);
+                profile_make_unique(&profiles, &made, profiles_folder);
+                if (!profile_save(&made, profiles_folder)) {
+                    notice = "could not save the new machine";
                     notice_left = NOTICE_SECONDS * 2;
                     break;
                 }
-                serial_mode_t mode = serial.mode;
-                serial_close(&serial, machine);
-                if (pen_down) machine_touch(machine, false, 0, 0);
-                input_clear(&input);
-                pen_down = false;
-                typer.length = typer.position = 0;
-                machine_save(machine, state, (int64_t)time(NULL));
-                machine_destroy(machine);
-                machine = next;
-                memcpy(state, next_state, sizeof state);
-                system = wanted;
-                key_layout = machine_key_layout(machine);
-                settings.system = (uint32_t)wanted;
-                settings_save(&settings);
-                serial_reconnect_at = 0;
-                if (mode != SERIAL_OFF) {
-                    serial_reconnect_mode = mode;
-                    serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
+                profiles_load(&profiles, profiles_folder);
+                if (current.id[0]) current_index = profile_find(&profiles, current.id);
+                switch_to = profile_find(&profiles, made.id);
+                break;
+            }
+            case MENU_MANAGE_MACHINES: {
+                const char *names[PROFILES_MAX];
+                for (int i = 0; i < profiles.count; i++) names[i] = profiles.entries[i].name;
+                int chosen = current_index >= 0 ? current_index : 0;
+                events_seen = true;
+                dialog_manage_t action = profiles.count ? dialog_manage_machines(window, names, profiles.count, current_index, &chosen) : DIALOG_MANAGE_CLOSE;
+                if (action == DIALOG_MANAGE_CLOSE || chosen < 0 || chosen >= profiles.count) break;
+                profile_t picked_profile = profiles.entries[chosen];
+                static char manage_notice[300];
+                if (action == DIALOG_MANAGE_RESET) {
+                    if (!confirm_reset(window, picked_profile.name)) break;
+                    if (chosen == current_index) {
+                        backup_machine(machine, state);
+                        since_backup = 0;
+                        machine_reset(machine);
+                    } else {
+                        backup_file(picked_profile.state);
+                        remove(picked_profile.state);
+                    }
+                    snprintf(manage_notice, sizeof manage_notice, "reset %s; the machine before it is in Snapshots/Backups", picked_profile.name);
+                } else {
+                    if (chosen == current_index) {
+                        notice = "switch to another machine before deleting this one";
+                        notice_left = NOTICE_SECONDS * 3;
+                        break;
+                    }
+                    char title[160];
+                    snprintf(title, sizeof title, "Delete %s?", picked_profile.name);
+                    if (!confirm_action(window, title, "This removes the machine and its saved state. A backup of the state goes in Snapshots/Backups first.", "Delete")) break;
+                    backup_file(picked_profile.state);
+                    profile_delete(&picked_profile, profiles_folder);
+                    char current_id[sizeof current.id];
+                    snprintf(current_id, sizeof current_id, "%s", current.id);
+                    profiles_load(&profiles, profiles_folder);
+                    current_index = current_id[0] ? profile_find(&profiles, current_id) : -1;
+                    snprintf(manage_notice, sizeof manage_notice, "deleted %s", picked_profile.name);
                 }
-                power_release_at = backlight_release_at = 0;
-                runner.machine = machine;
-                runner.restart = true;
-                notice = switch_notice ? switch_notice : wanted == 1 ? "switched to CE 1.0" : "switched to CE 2.0";
-                notice_left = NOTICE_SECONDS * 2;
+                notice = manage_notice;
+                notice_left = NOTICE_SECONDS * 3;
                 break;
             }
             case MENU_SCALE_50:
@@ -1391,13 +1522,6 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS;
                 break;
             }
-            case MENU_RESET:
-                if (!confirm_reset(window)) break;
-                notice = backup_machine(machine, state) ? "reset; the machine before it is in Snapshots/Backups" : "reset";
-                notice_left = NOTICE_SECONDS * 3;
-                since_backup = 0;
-                machine_reset(machine);
-                break;
             case MENU_SAVE_STATE:
                 notice = machine_save(machine, state, (int64_t)time(NULL)) ? "state saved" : "could not save state";
                 notice_left = NOTICE_SECONDS;
@@ -1442,35 +1566,6 @@ int main(int argc, char **argv) {
             case MENU_QUIT:
                 running = false;
                 break;
-            case MENU_MEMORY_4:
-            case MENU_MEMORY_8:
-            case MENU_MEMORY_16:
-            case MENU_MEMORY_20:
-            case MENU_MEMORY_32:
-                settings.memory = item == MENU_MEMORY_4 ? 4 : item == MENU_MEMORY_8 ? 8 : item == MENU_MEMORY_16 ? 16 : item == MENU_MEMORY_20 ? 20 : 32;
-                machine_set_memory(machine, settings.memory);
-                settings_save(&settings);
-                notice = machine_memory(machine) == settings.memory ? "memory unchanged" : "memory changes after Machine > Reset (clears the machine)";
-                notice_left = NOTICE_SECONDS * 3;
-                break;
-            case MENU_SCREEN_480X240:
-            case MENU_SCREEN_640X240:
-            case MENU_SCREEN_640X480:
-            case MENU_SCREEN_800X600: {
-                screen_size_t wanted = SCREEN_PRESETS[item - MENU_SCREEN_480X240];
-                if (!machine_set_screen(machine, wanted)) break;
-                settings.screen = wanted;
-                settings_save(&settings);
-                screen_size_t current = machine_screen_size(machine);
-                notice = current.width == wanted.width && current.height == wanted.height ? "screen unchanged" : "screen changes after Machine > Reset (clears the machine)";
-                notice_left = NOTICE_SECONDS * 3;
-                break;
-            }
-            case MENU_HOST_TIME:
-                settings.host_time = !settings.host_time;
-                machine_set_host_clock(machine, settings.host_time != 0);
-                settings_save(&settings);
-                break;
             case MENU_SPEED_1:
             case MENU_SPEED_2:
             case MENU_SPEED_4:
@@ -1500,6 +1595,10 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS;
                 break;
             default:
+                if (item >= MENU_MACHINE_FIRST && item <= MENU_MACHINE_LAST && item - MENU_MACHINE_FIRST < profiles.count && item - MENU_MACHINE_FIRST != current_index) {
+                    switch_to = item - MENU_MACHINE_FIRST;
+                    break;
+                }
                 if (item >= MENU_SERIAL_PORT_FIRST && item <= MENU_SERIAL_PORT_LAST && item - MENU_SERIAL_PORT_FIRST < port_count) {
                     snprintf(settings.serial_device, sizeof settings.serial_device, "%s", ports[item - MENU_SERIAL_PORT_FIRST]);
                     settings_save(&settings);
@@ -1548,6 +1647,50 @@ int main(int argc, char **argv) {
                 notice = "card ejected";
                 notice_left = NOTICE_SECONDS;
                 break;
+            }
+        }
+        if (switch_to >= 0 && switch_to < profiles.count && switch_to != current_index) {
+            if (desktop_busy(desktop)) {
+                notice = "busy with a desktop transfer";
+                notice_left = NOTICE_SECONDS;
+            } else {
+                const char *switch_notice = NULL;
+                char next_state[sizeof state];
+                profile_t next_profile = profiles.entries[switch_to];
+                machine_t *next = start_machine(&next_profile, settings.speed, NULL, false, next_state, sizeof next_state, &switch_notice);
+                if (!next) {
+                    notice = switch_notice;
+                    notice_left = NOTICE_SECONDS * 2;
+                } else {
+                    serial_mode_t mode = serial.mode;
+                    serial_close(&serial, machine);
+                    if (pen_down) machine_touch(machine, false, 0, 0);
+                    input_clear(&input);
+                    pen_down = false;
+                    typer.length = typer.position = 0;
+                    machine_save(machine, state, (int64_t)time(NULL));
+                    machine_destroy(machine);
+                    machine = next;
+                    memcpy(state, next_state, sizeof state);
+                    current = next_profile;
+                    current_index = switch_to;
+                    key_layout = machine_key_layout(machine);
+                    snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
+                    settings_save(&settings);
+                    serial_reconnect_at = 0;
+                    if (mode != SERIAL_OFF) {
+                        serial_reconnect_mode = mode;
+                        serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
+                    }
+                    power_release_at = backlight_release_at = 0;
+                    since_backup = 0;
+                    runner.machine = machine;
+                    runner.restart = true;
+                    static char switched_notice[160];
+                    snprintf(switched_notice, sizeof switched_notice, "switched to %s", current.name);
+                    notice = switch_notice ? switch_notice : switched_notice;
+                    notice_left = NOTICE_SECONDS * 2;
+                }
             }
         }
         bool velo_online = serial.gateway && net_gateway_online(serial.gateway);
@@ -1651,22 +1794,14 @@ int main(int argc, char **argv) {
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_checked(MENU_SOUND, sound);
-        menu_set_checked(MENU_MEMORY_4, machine_memory_next(machine) == 4);
-        menu_set_checked(MENU_MEMORY_8, machine_memory_next(machine) == 8);
-        menu_set_checked(MENU_MEMORY_16, machine_memory_next(machine) == 16);
-        menu_set_checked(MENU_MEMORY_20, machine_memory_next(machine) == 20);
-        menu_set_checked(MENU_MEMORY_32, machine_memory_next(machine) == 32);
-        screen_size_t screen_next = machine_screen_next(machine);
-        for (int screen_item = MENU_SCREEN_480X240; screen_item <= MENU_SCREEN_800X600; screen_item++) {
-            screen_size_t preset = SCREEN_PRESETS[screen_item - MENU_SCREEN_480X240];
-            menu_set_enabled(screen_item, machine_screen_supported(machine, preset));
-            menu_set_checked(screen_item, screen_next.width == preset.width && screen_next.height == preset.height);
+        for (int i = 0; i < PROFILES_MAX; i++) {
+            int machine_item = MENU_MACHINE_FIRST + i;
+            menu_set_hidden(machine_item, i >= profiles.count);
+            if (i >= profiles.count) continue;
+            menu_set_title(machine_item, profiles.entries[i].name);
+            menu_set_checked(machine_item, i == current_index);
         }
-        menu_set_checked(MENU_HOST_TIME, settings.host_time != 0);
-        menu_set_checked(MENU_SYSTEM_CE1, system == 1);
-        menu_set_checked(MENU_SYSTEM_CE2, system == 2);
-        menu_set_enabled(MENU_SYSTEM_CE1, system == 1 || roms.path[1][0]);
-        menu_set_enabled(MENU_SYSTEM_CE2, system == 2 || roms.path[2][0]);
+        menu_set_enabled(MENU_NEW_MACHINE, profiles.count < PROFILES_MAX);
         menu_set_checked(MENU_CONNECT_AT_LAUNCH, settings.connect_at_launch != 0);
         for (int scale_item = MENU_SCALE_50; scale_item <= MENU_SCALE_200; scale_item++) menu_set_checked(scale_item, settings.scale == SCALES[scale_item - MENU_SCALE_50]);
         menu_set_enabled(MENU_ZOOM_IN, settings.scale < SCALES[SCALE_COUNT - 1]);
@@ -1687,7 +1822,7 @@ int main(int argc, char **argv) {
             notice_left -= elapsed;
             if (notice_left <= 0) notice = NULL;
         }
-        set_title(window, system, notice, paused, machine_suspended(machine));
+        set_title(window, current.name, notice, paused, machine_suspended(machine));
         since_autosave += elapsed;
         if (!paused) since_backup += elapsed;
         since_port_scan -= elapsed;

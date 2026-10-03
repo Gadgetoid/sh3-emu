@@ -36,7 +36,7 @@ Each file is identified by its contents, and if there are two CE 2.0 images the 
 
 ### First run
 
-Open the app, or run `velo`. It starts the last system used (CE 2.0 if there's a choice) and Machine > System switches between Windows CE 1.0 and Windows CE 2.0; a system with no ROM is greyed out. A ROM on the command line runs that ROM instead:
+Open the app, or run `velo`. It starts the last machine used. Each machine is a ROM plus fixed hardware (screen size and memory) with its own saved state; Machine > New Machine… makes one and the machines are listed in the Machine menu, which switches between them. The first launch makes a Windows CE 1.0 and a Windows CE 2.0 machine from the ROMs in the roms folder, keeping any existing saved states. `--machine=NAME` opens a machine by name. A ROM on the command line runs that ROM instead, with its own saved state outside the machine list:
 
 ```
 velo
@@ -45,7 +45,7 @@ velo --memory=32 --serial=net --card=apps.img nk-ce2-merged.bin
 velo --help
 ```
 
-A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With Machine > Set Clock from Host (on by default) the clock starts at the host's time, so pick your home city in the wizard and it's right.
+A first boot goes through the setup wizard: touch calibration, time zone, date and owner. The mouse is the stylus; hold it on each calibration target for about half a second. Host keys map to the Velo keyboard. With "Set the clock from this computer" (on by default when making a machine) the clock starts at the host's time, so pick your home city in the wizard and it's right.
 
 On macOS the menus are in the menu bar. On Linux they're in a bar along the top of the window, F10 opens it, and the arrow keys, Enter and Escape move through it.
 
@@ -56,9 +56,7 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 | Machine | Power Button (suspend and resume) | Cmd-Shift-P |
 | Machine | Backlight (presses the Velo's backlight key) | Cmd-B |
 | Machine | Soft Reset (restarts CE, keeping RAM and the object store, like the reset button) | Cmd-R |
-| Machine | Reset… (cold boot, clears RAM; confirmed in a dialog) | |
-| Machine | System: Windows CE 1.0, Windows CE 2.0 | |
-| Machine | Next Cold Boot: Memory (4 MB (original), 8, 16, 20 or 32 MB), Screen (480 x 240 (original), 640 x 240, 640 x 480, 800 x 600), Set Clock from Host | |
+| Machine | Machines: the machine list (switching saves the current machine and opens the other), New Machine…, Manage Machines… (Reset… back to the factory state, Delete…) | |
 | Machine | Pause | Cmd-P |
 | Machine | CPU Speed: 1x (original), 2x, 4x, 8x | |
 | Machine | Show Debug Output | |
@@ -94,7 +92,7 @@ Each ROM has its own saved machine, `state-ROM-HASH.bin` in the data folder. It'
 
 Snapshots are named copies of the machine, in `snapshots` in the data folder by default. Loading one is a restore point: autosave carries on to the ROM's own state.
 
-Backups go in `snapshots/Backups`: a copy of the machine every 10 minutes it runs, and one just before Reset…, Load State and Load Snapshot… replace it, and before `--fresh` starts over the saved state. The newest 10 per state are kept. Load one with State > Load Snapshot….
+Backups go in `snapshots/Backups`: a copy of the machine every 10 minutes it runs, and one just before a reset, Load State and Load Snapshot… replace it, and before a machine is deleted, and before `--fresh` starts over the saved state. The newest 10 per state are kept. Load one with State > Load Snapshot….
 
 If a serial cable was connected when the state was saved, the restored machine starts with it unplugged and plugs it back in two seconds later, so CE dials again instead of reusing a PPP session that no longer exists. If the state's card image has gone, the card starts out ejected and a newly inserted one goes in a second later, so CE registers the removal first.
 
@@ -205,13 +203,15 @@ Type addresses as `http://`: Pocket IE makes `https://` connections itself, not 
 
 It sends a Lynx user agent upstream in place of Pocket IE's, which some sites block, and sites generally serve text browsers their simplest pages. Set it with `user_agent=` in `emu.ini` or `--user-agent=TEXT`; an empty value passes Pocket IE's own through. Through the proxy, `127.0.0.1` is the host's loopback.
 
-## Clock, memory, screen and speed
+## Machines, clock, memory, screen and speed
 
-Use Host Date/Time sets the clock at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator gives it the host's time in Pacific time, so once you pick your home city the clock is right. After that the clock keeps running while the emulator is closed, and survives a soft reset.
+Machine > New Machine… picks the name (left blank, it's made from the other settings), the ROM (from the roms folder, or Other ROM File… for any other, such as a patched or merged image), the screen size, the memory and whether to set the clock from the host. These are fixed for the life of the machine. Machine > Manage Machines… resets a machine to its factory state or deletes it; both back up its state first, and the running machine can't be deleted. Machines are kept as `machines/*.ini` in the data folder, each with its saved state beside it, and switching or quitting saves the machine.
 
-Memory sets the RAM for the next cold boot (Machine > Reset…) or `--memory=`. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
+A machine made with the clock set from the host gets the host's time at a cold boot. CE starts at noon on 1 January (1996 for CE 1.0, 1997 for CE 2.0) in its default time zone, Pacific; with the option on, the emulator gives it the host's time in Pacific time, so once you pick your home city the clock is right. After that the clock keeps running while the emulator is closed, and survives a soft reset.
 
-Screen sets the display size for the next cold boot, or `--screen=WxH`. The emulator patches the display setup in the loaded ROM (the kernel's LCD controller setup and GWES's or the display driver's size, stride and framebuffer), keeping the original refresh rate, and moves the framebuffer out of the way of the larger image. CE 1.0 runs at any of the sizes; the merged CE 2.0 image at up to 640 x 480; the CE 2.0 upgrade ROM on its own at 640 x 240, as its display driver faults at taller sizes. Sizes a ROM can't run are greyed out. The ROM files aren't changed, and a saved machine keeps the screen it was booted with. Some of CE's own dialogs, such as the setup wizard's, keep their 480 x 240 layout.
+Memory is the machine's RAM, or `--memory=` for a ROM given on the command line. CE uses at most 16 MB of built-in RAM; 20 MB and 32 MB add a 16 MB DRAM Miniature Card, the Velo's own memory expansion, which CE maps as a second RAM region (20,348 KB and 32,636 KB in Control Panel > System). CE 2.0 needs 12 MB, so give it 20 or 32. A saved machine keeps the memory it was booted with.
+
+Screen is the machine's display size, or `--screen=WxH` for a ROM given on the command line. The emulator patches the display setup in the loaded ROM (the kernel's LCD controller setup and GWES's or the display driver's size, stride and framebuffer), keeping the original refresh rate, and moves the framebuffer out of the way of the larger image. CE 1.0 runs at any of the sizes; the merged CE 2.0 image at up to 640 x 480; the CE 2.0 upgrade ROM on its own at 640 x 240, as its display driver faults at taller sizes. Sizes a ROM can't run are greyed out in New Machine. The ROM files aren't changed, and a saved machine keeps the screen it was booted with. Some of CE's own dialogs, such as the setup wizard's, keep their 480 x 240 layout.
 
 CPU Speed runs that many instructions per 36.864 MHz clock tick; `--speed=` does the same. Timers, the RTC, the LCD, sound and serial stay on the real clock, so only the CPU gets faster.
 
