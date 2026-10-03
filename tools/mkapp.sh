@@ -4,7 +4,7 @@ app=${1:-Velo.app}
 version=${VERSION:-$(git describe --always --dirty 2>/dev/null || echo unknown)}
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
-cp velo velo-rapi "$app/Contents/MacOS/"
+cp velo velo-rapi velo-state "$app/Contents/MacOS/"
 
 icons=${ICONS:-build/icons}
 iconset=$(mktemp -d)/Velo.iconset
@@ -54,13 +54,14 @@ bundle() {
 
 bundle "$app/Contents/MacOS/velo"
 bundle "$app/Contents/MacOS/velo-rapi"
-for binary in "$app/Contents/MacOS/velo" "$app/Contents/MacOS/velo-rapi" "$app/Contents/Frameworks/"*.dylib; do
+bundle "$app/Contents/MacOS/velo-state"
+for binary in "$app/Contents/MacOS/velo" "$app/Contents/MacOS/velo-rapi" "$app/Contents/MacOS/velo-state" "$app/Contents/Frameworks/"*.dylib; do
     [ -f "$binary" ] || continue
     for path in $(otool -l "$binary" | awk '/LC_RPATH/ { found = 1 } found && $1 == "path" { print $2; found = 0 }'); do
         install_name_tool -delete_rpath "$path" "$binary" 2>/dev/null || true
     done
 done
-for binary in "$app/Contents/MacOS/velo" "$app/Contents/MacOS/velo-rapi"; do
+for binary in "$app/Contents/MacOS/velo" "$app/Contents/MacOS/velo-rapi" "$app/Contents/MacOS/velo-state"; do
     install_name_tool -add_rpath "@executable_path/../Frameworks" "$binary" 2>/dev/null || true
 done
 
@@ -68,5 +69,6 @@ for library in "$app/Contents/Frameworks/"*.dylib; do
     [ -f "$library" ] && codesign --force --sign - "$library"
 done
 codesign --force --sign - "$app/Contents/MacOS/velo-rapi"
+codesign --force --sign - "$app/Contents/MacOS/velo-state"
 codesign --force --sign - "$app"
 echo "built $app ($version)"

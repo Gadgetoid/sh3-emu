@@ -102,7 +102,7 @@ $(BUILD)/%.o: %.m
 run: $(PROG)
 	./$(PROG) $(ROM)
 
-app: $(PROG) $(VELORAPI) icons
+app: $(PROG) $(VELORAPI) $(VELOSTATE) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh Velo.app
 
 vdisk:

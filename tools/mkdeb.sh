@@ -7,12 +7,13 @@ package=velo-emu
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT
 
-make -s all headless velo-rapi icons
+make -s all headless velo-rapi velo-state icons
 icons=${BUILD:-build}/icons
 
 install -D -m 755 velo "$root/usr/bin/velo"
 install -D -m 755 headless "$root/usr/bin/velo-headless"
 install -D -m 755 velo-rapi "$root/usr/bin/velo-rapi"
+install -D -m 755 velo-state "$root/usr/bin/velo-state"
 install -D -m 644 README.md "$root/usr/share/doc/$package/README.md"
 install -D -m 644 LICENSE "$root/usr/share/doc/$package/LICENSE"
 install -D -m 644 assets/velo.svg "$root/usr/share/icons/hicolor/scalable/apps/$package.svg"
@@ -55,7 +56,7 @@ EOF
 work=$(mktemp -d)
 mkdir -p "$work/debian"
 printf 'Source: %s\n\nPackage: %s\nArchitecture: any\n' "$package" "$package" > "$work/debian/control"
-depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/bin/velo" "$root/usr/bin/velo-headless" "$root/usr/bin/velo-rapi" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/bin/velo" "$root/usr/bin/velo-headless" "$root/usr/bin/velo-rapi" "$root/usr/bin/velo-state" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
 rm -rf "$work"
 
 size=$(du -sk "$root/usr" | cut -f1)
@@ -76,8 +77,8 @@ Description: Philips Velo 1 handheld PC emulator
  Pocket IE, and desktop connection tools.
  .
  velo is the emulator, velo-headless runs it without a window for tests and
- scripts, and velo-rapi talks to a running Velo over RAPI. ROMs are not
- included.
+ scripts, velo-rapi talks to a running Velo over RAPI, and velo-state reads
+ files and the registry from a saved state. ROMs are not included.
 EOF
 
 mkdir -p "$out"

@@ -16,8 +16,8 @@ With the CE 2.0 upgrade's applications, a library of period software on a PC Car
 
 ### Install
 
-- **macOS (Apple silicon):** `Velo.app`, from a release or `make app` (see Building). It isn't notarised, so macOS blocks a downloaded copy the first time it opens: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine Velo.app`. A copy built with `make app` opens normally. `velo-rapi` is inside it, at `Velo.app/Contents/MacOS/velo-rapi`.
-- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `velo`, `velo-headless` and `velo-rapi`, with a desktop entry.
+- **macOS (Apple silicon):** `Velo.app`, from a release or `make app` (see Building). It isn't notarised, so macOS blocks a downloaded copy the first time it opens: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine Velo.app`. A copy built with `make app` opens normally. `velo-rapi` and `velo-state` are inside it, in `Velo.app/Contents/MacOS`.
+- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `velo`, `velo-headless`, `velo-rapi` and `velo-state`, with a desktop entry.
 - **From source:** see Building.
 
 ### ROMs
