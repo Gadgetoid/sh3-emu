@@ -37,8 +37,10 @@
 void mips_reset(mips_cpu_t *cpu, uint32_t entry) {
     mips_bus_t bus = cpu->bus;
     uint32_t speed = cpu->speed;
+    mips_debug_t *debug = cpu->debug;
     memset(cpu, 0, sizeof *cpu);
     cpu->bus = bus;
+    cpu->debug = debug;
     cpu->speed = speed ? speed : 1;
     cpu->pc = entry;
     cpu->next_pc = entry + 4;
@@ -99,6 +101,8 @@ static void tlb_probe(mips_cpu_t *cpu) {
 
 static void raise_exception(mips_cpu_t *cpu, uint32_t code, uint32_t faulting_pc, bool in_delay_slot) {
     cpu->exceptions[code & 15]++;
+    if (cpu->debug && cpu->debug->exception && code != MIPS_EXC_INT && code != MIPS_EXC_SYS)
+        cpu->debug->exception(cpu->debug->context, code, faulting_pc, (cpu->cp0[CP0_STATUS] & STATUS_KUC) != 0);
     uint32_t cause = cpu->cp0[CP0_CAUSE] & ~(CAUSE_BD | CAUSE_CODE_MASK | (3u << CAUSE_CE_SHIFT));
     cause |= code << 2;
     if (in_delay_slot) {
@@ -200,6 +204,11 @@ static bool load(mips_cpu_t *cpu, uint32_t va, int size, uint32_t *value) {
     if (va & (uint32_t)(size - 1)) { address_fault(cpu, MIPS_EXC_ADEL, va); return false; }
     uint32_t pa;
     if (!translate_or_fault(cpu, va, false, &pa)) return false;
+    if (cpu->debug && cpu->debug->data && cpu->debug->access(cpu->debug->context, va, size, false)) {
+        cpu->debug->stop = true;
+        cpu->debug->undo = true;
+        return false;
+    }
     if (pa < cpu->bus.dram_end) {
         *value = read_dram(cpu->bus.dram + (pa & cpu->bus.dram_mask), size);
         return true;
@@ -215,6 +224,11 @@ static bool store(mips_cpu_t *cpu, uint32_t va, int size, uint32_t value) {
     if (va & (uint32_t)(size - 1)) { address_fault(cpu, MIPS_EXC_ADES, va); return false; }
     uint32_t pa;
     if (!translate_or_fault(cpu, va, true, &pa)) return false;
+    if (cpu->debug && cpu->debug->data && cpu->debug->access(cpu->debug->context, va, size, true)) {
+        cpu->debug->stop = true;
+        cpu->debug->undo = true;
+        return false;
+    }
     if (pa < cpu->bus.dram_end) {
         write_dram(cpu->bus.dram + (pa & cpu->bus.dram_mask), size, value);
         return true;
@@ -497,6 +511,28 @@ static uint32_t watch_bit(uint32_t va) {
     return (va >> 2) & 4095;
 }
 
+void mips_debug_filter_add(mips_debug_t *debug, uint32_t va) {
+    uint32_t bit = watch_bit(va);
+    debug->filter[bit >> 5] |= 1u << (bit & 31);
+}
+
+bool mips_user_mode(const mips_cpu_t *cpu) {
+    return (cpu->cp0[CP0_STATUS] & STATUS_KUC) != 0;
+}
+
+uint32_t mips_asid(const mips_cpu_t *cpu) {
+    return tlb_pid(cpu);
+}
+
+static bool debug_stops_before(mips_cpu_t *cpu, uint32_t pc) {
+    mips_debug_t *debug = cpu->debug;
+    if (!debug->every) {
+        uint32_t bit = watch_bit(pc);
+        if (!(debug->filter[bit >> 5] >> (bit & 31) & 1)) return false;
+    }
+    return debug->before(debug->context, pc);
+}
+
 void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
     cpu->yield = false;
     memset(cpu->watch_filter, 0, sizeof cpu->watch_filter);
@@ -523,10 +559,29 @@ void mips_run(mips_cpu_t *cpu, uint64_t until_cycle) {
             if (slot_relative ? (current_pc & (MIPS_SLOT_SIZE - 1)) == va : current_pc == va) cpu->on_watch(cpu->bus.context, current_pc);
         }
         if (cpu->fault) continue;
+        if (cpu->debug) {
+            if (debug_stops_before(cpu, current_pc)) {
+                cpu->debug->stop = true;
+                break;
+            }
+            cpu->debug->pc = current_pc;
+        }
+        uint32_t next_pc = cpu->next_pc;
+        bool in_delay_slot = cpu->in_delay_slot;
         cpu->pc = cpu->next_pc;
         cpu->next_pc = cpu->pc + 4;
         cpu->next_in_delay_slot = false;
         cpu->in_delay_slot = current_in_delay_slot;
         execute(cpu, instruction);
+        if (cpu->debug && cpu->debug->stop) {
+            if (cpu->debug->undo) {
+                cpu->debug->undo = false;
+                cpu->pc = current_pc;
+                cpu->next_pc = next_pc;
+                cpu->next_in_delay_slot = current_in_delay_slot;
+                cpu->in_delay_slot = in_delay_slot;
+            }
+            break;
+        }
     }
 }

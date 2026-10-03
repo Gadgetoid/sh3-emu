@@ -72,6 +72,19 @@ typedef struct {
 } mips_fetch_cache_t;
 #define MIPS_SLOT_SIZE 0x02000000u
 
+typedef struct {
+    void    *context;
+    bool   (*before)(void *context, uint32_t pc);
+    bool   (*access)(void *context, uint32_t va, int size, bool write);
+    void   (*exception)(void *context, uint32_t code, uint32_t pc, bool user);
+    uint32_t filter[128];
+    uint32_t pc;
+    bool     every;
+    bool     data;
+    bool     stop;
+    bool     undo;
+} mips_debug_t;
+
 struct mips_cpu {
     uint32_t gpr[32];
     uint32_t hi, lo;
@@ -96,6 +109,7 @@ struct mips_cpu {
     int      watch_count;
     uint32_t watch_filter[128];
     void   (*on_watch)(void *context, uint32_t pc);
+    mips_debug_t *debug;
 };
 
 void mips_reset(mips_cpu_t *cpu, uint32_t entry);
@@ -104,3 +118,6 @@ void mips_run(mips_cpu_t *cpu, uint64_t until_cycle);
 bool mips_translate(mips_cpu_t *cpu, uint32_t va, bool write, uint32_t *pa);
 void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va);
 void mips_flush_translations(mips_cpu_t *cpu);
+void mips_debug_filter_add(mips_debug_t *debug, uint32_t va);
+bool mips_user_mode(const mips_cpu_t *cpu);
+uint32_t mips_asid(const mips_cpu_t *cpu);

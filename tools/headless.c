@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "core/gdb.h"
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
@@ -19,6 +20,16 @@ static volatile sig_atomic_t stop_requested = 0;
 static void request_stop(int signal_number) {
     (void)signal_number;
     stop_requested = 1;
+}
+
+static gdb_t *debugger;
+
+static void advance(machine_t *machine, uint64_t cycles) {
+    if (!debugger) {
+        machine_run(machine, cycles);
+        return;
+    }
+    if (!gdb_run(debugger, cycles)) stop_requested = 1;
 }
 
 static double wall_seconds(void) {
@@ -45,10 +56,10 @@ static void type_text(machine_t *machine, const char *text) {
         if (!key_text_find(machine_key_layout(machine), ch, &scancode, &shifted)) continue;
         if (shifted) machine_key(machine, KEY_TEXT_SHIFT, false);
         machine_key(machine, scancode, false);
-        machine_run(machine, MACHINE_CLOCK_HZ / 50);
+        advance(machine, MACHINE_CLOCK_HZ / 50);
         machine_key(machine, scancode, true);
         if (shifted) machine_key(machine, KEY_TEXT_SHIFT, true);
-        machine_run(machine, MACHINE_CLOCK_HZ / 50);
+        advance(machine, MACHINE_CLOCK_HZ / 50);
     }
 }
 
@@ -114,13 +125,17 @@ typedef struct {
     uint32_t memory, speed;
     screen_size_t screen;
     bool     debug_output;
+    bool     seconds_given;
+    int      gdb_port;
+    const char *gdb_process;
 } run_t;
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DISK, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_INSERT_DISK, OPT_EJECT_DISK,
     OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
-    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT,
+    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_GDB,
+    OPT_GDB_PROCESS,
 };
 
 static const option_t OPTIONS[] = {
@@ -160,11 +175,17 @@ static const option_t OPTIONS[] = {
     [OPT_TRACE_PC] = { "trace-pc", NULL, "print the program counter every emulated second", 0 },
     [OPT_WATCH_PC] = { "watch-pc", "VA", "log calls reaching an address (slot-relative below 0x02000000)", MACHINE_WATCH_MAX },
     [OPT_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr", 0 },
+    [OPT_GDB] = { "gdb", "PORT", "wait for GDB on 127.0.0.1:PORT before running; runs until GDB detaches or kills, unless --seconds is given", 0 },
+    [OPT_GDB_PROCESS] = { "gdb-process", "NAME", "debug one process, e.g. maths.exe: breakpoints below 0x02000000 only stop there, and GDB stops when it starts", 0 },
 };
+
+
+static bool print_debug_output;
 
 static void print_debug_line(void *context, const char *line) {
     (void)context;
-    fprintf(stderr, "debug: %s\n", line);
+    if (print_debug_output) fprintf(stderr, "debug: %s\n", line);
+    if (debugger) gdb_debug_line(debugger, line);
 }
 
 static bool parse_option(void *context, int option, const char *value, char *error, size_t error_size) {
@@ -173,7 +194,9 @@ static bool parse_option(void *context, int option, const char *value, char *err
     long integer;
     const char *rest;
     switch (option) {
-    case OPT_SECONDS: return option_number(value, &run->seconds) && run->seconds > 0;
+    case OPT_SECONDS:
+        run->seconds_given = true;
+        return option_number(value, &run->seconds) && run->seconds > 0;
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
@@ -255,6 +278,11 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_WAV: run->wav = value; return true;
     case OPT_TRACE_PC: run->trace_pc = true; return true;
     case OPT_DEBUG_OUTPUT: run->debug_output = true; return true;
+    case OPT_GDB:
+        if (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535) return false;
+        run->gdb_port = (int)integer;
+        return true;
+    case OPT_GDB_PROCESS: run->gdb_process = value; return true;
     case OPT_WATCH_PC:
         if (!option_integer(value, 0, &integer) || integer < 0) return false;
         run->watches[run->watch_count++] = (uint32_t)integer;
@@ -285,6 +313,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     run.rom_path = positional[0];
+    if (run.gdb_port && !run.seconds_given) run.seconds = 1e7;
     double latest = run.soft_reset_at;
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
     for (int t = 0; t < run.tap_count; t++) if (run.tap_times[t] > latest) latest = run.tap_times[t];
@@ -312,12 +341,24 @@ int main(int argc, char **argv) {
     }
     if (run.speed) machine_set_speed(machine, run.speed);
     machine_set_host_clock(machine, run.host_time);
-    if (run.debug_output) machine_set_debug_output(machine, print_debug_line, NULL);
+    print_debug_output = run.debug_output;
+    if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
     if (run.load) machine_serial_connect(machine, false);
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     if (run.disk && !machine_insert_disk(machine, run.disk, false)) { fprintf(stderr, "cannot open disk image %s\n", run.disk); return 1; }
+    if (run.gdb_process && !run.gdb_port) {
+        fprintf(stderr, "headless: --gdb-process needs --gdb\n");
+        return 2;
+    }
+    if (run.gdb_port) {
+        debugger = gdb_create(machine, run.gdb_port, log_stderr);
+        if (!debugger) { fprintf(stderr, "cannot listen for GDB on port %d\n", run.gdb_port); return 1; }
+        if (run.gdb_process && !gdb_set_process(debugger, run.gdb_process)) fprintf(stderr, "gdb: waiting for %s to start\n", run.gdb_process);
+        fprintf(stderr, "gdb: waiting for a connection: target remote :%d\n", run.gdb_port);
+        gdb_wait_for_client(debugger);
+    }
     screen_size_t screen = machine_screen_size(machine);
     for (int t = 0; t < run.tap_count; t++) {
         if (run.tap_x[t] >= screen.width || run.tap_y[t] >= screen.height) {
@@ -343,7 +384,7 @@ int main(int argc, char **argv) {
             uint64_t at = (uint64_t)(run.key_times[k] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 machine_key(machine, (uint8_t)run.key_codes[k], false);
-                machine_run(machine, MACHINE_CLOCK_HZ / 20);
+                advance(machine, MACHINE_CLOCK_HZ / 20);
                 machine_key(machine, (uint8_t)run.key_codes[k], true);
             }
         }
@@ -351,7 +392,7 @@ int main(int argc, char **argv) {
             uint64_t at = (uint64_t)(run.tap_times[t] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 machine_touch(machine, true, run.tap_x[t], run.tap_y[t]);
-                machine_run(machine, (uint64_t)(run.tap_hold[t] * MACHINE_CLOCK_HZ));
+                advance(machine, (uint64_t)(run.tap_hold[t] * MACHINE_CLOCK_HZ));
                 machine_touch(machine, false, run.tap_x[t], run.tap_y[t]);
             }
         }
@@ -388,7 +429,7 @@ int main(int argc, char **argv) {
             uint64_t at = (uint64_t)(run.backlight_times[b] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 machine_backlight_button(machine, true);
-                machine_run(machine, MACHINE_CLOCK_HZ / 10);
+                advance(machine, MACHINE_CLOCK_HZ / 10);
                 machine_backlight_button(machine, false);
             }
         }
@@ -405,14 +446,14 @@ int main(int argc, char **argv) {
             uint64_t at = (uint64_t)(run.power_times[b] * MACHINE_CLOCK_HZ);
             if (at >= done && at < done + slice) {
                 machine_power_button(machine, true);
-                machine_run(machine, MACHINE_CLOCK_HZ / 5);
+                advance(machine, MACHINE_CLOCK_HZ / 5);
                 machine_power_button(machine, false);
             }
         }
         if (gateway) {
             uint64_t step = MACHINE_CLOCK_HZ / 100;
             for (uint64_t ran = 0; ran < slice; ran += step) {
-                machine_run(machine, step);
+                advance(machine, step);
                 pace(machine, run.realtime, wall_start, cycles_start);
                 uint8_t buffer[4096];
                 size_t count;
@@ -421,7 +462,7 @@ int main(int argc, char **argv) {
                 while ((count = net_gateway_to_guest(gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
             }
         } else {
-            machine_run(machine, slice);
+            advance(machine, slice);
             pace(machine, run.realtime, wall_start, cycles_start);
         }
         {
@@ -462,6 +503,7 @@ int main(int argc, char **argv) {
     }
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     net_gateway_destroy(gateway);
+    gdb_destroy(debugger);
     machine_destroy(machine);
     free(rom);
     return 0;

@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "core/key_text.h"
+#include "core/mips.h"
 #include "core/screen.h"
 
 #define MACHINE_CLOCK_HZ      36864000u
@@ -18,6 +19,9 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
 void       machine_destroy(machine_t *machine);
 void       machine_set_log(machine_t *machine, machine_log_fn log);
 void       machine_run(machine_t *machine, uint64_t cycles);
+mips_cpu_t *machine_cpu(machine_t *machine);
+bool       machine_read_physical(machine_t *machine, uint32_t pa, uint8_t *data, uint32_t length);
+bool       machine_write_physical(machine_t *machine, uint32_t pa, const uint8_t *data, uint32_t length);
 uint64_t   machine_cycles(machine_t *machine);
 uint32_t   machine_pc(machine_t *machine);
 

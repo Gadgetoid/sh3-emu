@@ -245,6 +245,7 @@ velo-headless --help
 - `--net=SECONDS` connects the PPP network, `--rapi=SOCKET` makes the Velo's RAPI port available for `velo-rapi --socket`, and `--realtime[=N]` paces the run at N times real time for anything driving it over RAPI (unpaced, an idle Velo runs about 1000 times faster). `--cable` and `--cable-send` connect a bare serial cable and send bytes down it. `--replug=SECONDS` unplugs the `--net` cable and plugs it back in two seconds later.
 - `--watch-pc=VA` logs registers each time the CPU reaches an address; below 0x02000000 it matches in any process slot.
 - `--debug-output` prints CE's debug output (see Debug output).
+- `--gdb=PORT` and `--gdb-process=NAME` wait for GDB before running (see Debugging with GDB).
 - SIGTERM or SIGINT ends a run early and still writes `--save`, `--pgm`, `--png` and `--wav`.
 
 Unknown options, malformed values and events past the end of a run are errors or warnings, rather than being ignored. All three tools take `--help` and `--version`, and options that take a value accept `--name=VALUE` or `--name VALUE`.
@@ -252,6 +253,23 @@ Unknown options, malformed values and events past the end of a run are errors or
 ## Debug output
 
 CE's debug output, from `OutputDebugString` in programs and the kernel's own messages (its boot banner, and a register dump when a program crashes), goes to `debug.log` in the data folder, which Machine > Show Debug Output opens. `velo --debug-output` and `headless --debug-output` also print it to stderr. The retail ROMs build these messages and then drop them, so the emulator reads each string where the OAL's `OEMWriteDebugString` would have sent it to the debug port. CE 1.0 also gates the kernel's messages behind a flag, so they're read where `NKDbgPrintfW` drops them. The log is moved to `debug.log.old` at launch once it passes 1 MB.
+
+## Debugging with GDB
+
+`headless --gdb=PORT` waits for GDB on 127.0.0.1:PORT before running, and then runs until GDB detaches or kills it, or until `--seconds` if that's given. `velo --gdb=PORT` listens while the Velo runs, and GDB can attach and detach at any time. Any GDB with MIPS support works as the client: `gdb-multiarch` on Linux, or Homebrew's `gdb` on macOS.
+
+```
+velo-headless nk.bin --load=state.bin --card=card.img --gdb=2159 --gdb-process=maths.exe
+gdb maths.elf -ex 'target remote :2159'
+```
+
+Breakpoints and watchpoints are kept by the emulator, so guest memory isn't changed, and memory reads and writes go through CE's own page tables for the process being debugged. Every process runs at the same low addresses, so `--gdb-process=NAME`, or `monitor process NAME` in GDB, picks one: a breakpoint below 0x02000000 then only stops there. If the process isn't running yet, GDB stops when it starts.
+
+When a program crashes, GDB stops with SIGSEGV, SIGBUS, SIGILL, SIGFPE or SIGTRAP at the faulting instruction, with the registers as they were. CE has already started its own handling by then, so continuing lets CE end the program. CE's debug output appears in GDB while it runs.
+
+DLLs the process loads are reported to GDB, which loads symbols for them from the `.elf` beside each DLL (`set solib-search-path` to the build folder), so breakpoints in a DLL work before it's loaded. `monitor modules` lists the loaded modules with an `add-symbol-file` command for each.
+
+`monitor help` lists the rest: `processes`, `process`, `modules`, `libraries elf|dll`, `catch on|off` and `output on|off`. This works on CE 1.0 and 2.0. Threads aren't reported to GDB yet; it sees one thread, the one that's running.
 
 ## Windows CE 2.0 details
 
