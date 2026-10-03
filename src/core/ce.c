@@ -97,6 +97,12 @@ bool ce_ready(ce_t *ce) {
 }
 
 int ce_current_process(ce_t *ce) {
+    uint32_t current, section;
+    if (physical_word(ce, KDATA_PA + KDATA_SECTIONS, &current) && current) {
+        for (int slot = 1; slot <= CE_PROCESS_MAX; slot++) {
+            if (physical_word(ce, KDATA_PA + KDATA_SECTIONS + (uint32_t)slot * 4, &section) && section == current) return slot - 1;
+        }
+    }
     return (int)mips_asid(machine_cpu(ce->machine));
 }
 
