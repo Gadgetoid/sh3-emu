@@ -27,6 +27,7 @@
 #define FAULT_HISTORY      8
 #define RUN_QUANTUM        (MACHINE_CLOCK_HZ / 100)
 #define LIBRARY_CHECK_QUANTA 10
+#define EXIT_CHECK_QUANTA  5
 #define FILE_MAX           16
 #define FILE_PATH_MAX      260
 #define AGENT_TIMEOUT      (MACHINE_CLOCK_HZ * 5ull)
@@ -161,6 +162,8 @@ struct gdb {
     uint32_t run_status;
     uint32_t run_pid;
     bool     run_replied;
+    bool     run_active;
+    int      exit_check;
 
     uint32_t     breakpoints[BREAKPOINT_MAX];
     int          breakpoint_count;
@@ -1151,6 +1154,8 @@ static void handle_vrun(gdb_t *gdb, const char *packet) {
         return;
     }
     gdb->debug.stop = false;
+    gdb->run_active = true;
+    gdb->exit_check = 0;
     halt(gdb);
 }
 
@@ -1195,23 +1200,43 @@ static bool kill_run_process(gdb_t *gdb) {
     return true;
 }
 
+static void forget_inferior(gdb_t *gdb) {
+    gdb->inferior = false;
+    gdb->halted = false;
+    gdb->run_active = false;
+    gdb->waiting_for_process = false;
+    gdb->process = -1;
+    gdb->process_name[0] = 0;
+    gdb->breakpoint_count = 0;
+    gdb->watchpoint_count = 0;
+    gdb->post_mortem = false;
+    update_debug(gdb);
+}
+
+static void check_run_exit(gdb_t *gdb) {
+    if (++gdb->exit_check < EXIT_CHECK_QUANTA) return;
+    gdb->exit_check = 0;
+    char name[CE_NAME_MAX];
+    if (gdb->process >= 0 && ce_process_name(&gdb->ce, gdb->process, name, sizeof name) && !strcasecmp(name, gdb->process_name)) return;
+    logf_gdb(gdb, "gdb: %s has exited\n", gdb->process_name);
+    forget_inferior(gdb);
+    gdb->run_sequence = 0;
+    send_packet(gdb, "W00");
+}
+
 static void handle_vkill(gdb_t *gdb) {
     bool started = gdb->run_sequence != 0;
     if (started && !kill_run_process(gdb)) logf_gdb(gdb, "gdb: debugmgr couldn't end the program\n");
     gdb->run_sequence = 0;
-    gdb->inferior = false;
-    gdb->halted = false;
-    gdb->waiting_for_process = false;
-    gdb->breakpoint_count = 0;
-    gdb->watchpoint_count = 0;
-    update_debug(gdb);
+    forget_inferior(gdb);
     send_packet(gdb, "OK");
 }
 
 static void handle_packet(gdb_t *gdb, const char *packet) {
     switch (packet[0]) {
     case '?':
-        send_stop_reply(gdb);
+        if (gdb->inferior) send_stop_reply(gdb);
+        else send_packet(gdb, "W00");
         return;
     case 'g':
         handle_read_registers(gdb);
@@ -1261,10 +1286,9 @@ static void handle_packet(gdb_t *gdb, const char *packet) {
         return;
     case 'k':
         if (gdb->extended) {
-            kill_run_process(gdb);
-            gdb->inferior = false;
-            gdb->halted = false;
-            update_debug(gdb);
+            if (gdb->run_sequence) kill_run_process(gdb);
+            gdb->run_sequence = 0;
+            forget_inferior(gdb);
             return;
         }
         gdb->killed = true;
@@ -1272,6 +1296,10 @@ static void handle_packet(gdb_t *gdb, const char *packet) {
         return;
     case '!':
         gdb->extended = true;
+        gdb->inferior = false;
+        gdb->halted = false;
+        gdb->run_active = false;
+        update_debug(gdb);
         send_packet(gdb, "OK");
         return;
     case 'D':
@@ -1294,7 +1322,10 @@ static void handle_packet(gdb_t *gdb, const char *packet) {
             gdb->library_hash = current_library_hash(gdb);
             handle_xfer(gdb, packet, "libraries", xml, length);
         }
-        else if (!strcmp(packet, "qAttached")) send_packet(gdb, "1");
+        else if (!strcmp(packet, "qAttached")) send_packet(gdb, gdb->run_active ? "0" : "1");
+        else if (!strcmp(packet, "qfThreadInfo")) send_packet(gdb, gdb->inferior ? "m1" : "l");
+        else if (!strcmp(packet, "qsThreadInfo")) send_packet(gdb, "l");
+        else if (!strcmp(packet, "qC")) send_packet(gdb, gdb->inferior ? "QC1" : "");
         else if (!strncmp(packet, "qRcmd,", 6)) handle_monitor(gdb, packet);
         else if (!strcmp(packet, "qSymbol::")) send_packet(gdb, "OK");
         else send_packet(gdb, "");
@@ -1513,6 +1544,7 @@ void gdb_after_run(gdb_t *gdb) {
         return;
     }
     if (gdb->client >= 0 && !gdb->halted && gdb->inferior) check_libraries(gdb);
+    if (gdb->client >= 0 && !gdb->halted && gdb->run_active) check_run_exit(gdb);
 }
 
 void gdb_set_machine(gdb_t *gdb, machine_t *machine) {
