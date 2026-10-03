@@ -127,7 +127,7 @@ A disk separate from the PC Card slot, backed by an image file you can swap whil
 - CE 2.0 mounts it as a storage card folder alongside a PC Card: whichever mounts first is `\Storage Card`, the other `\Storage Card2`.
 - CE 1.0 mounts it as `\PC Card`. CE 1.0 only mounts one FAT volume, so use either the paravirtual disk or a PC Card storage card, not both.
 
-Build the drivers with velo-toolchain (`make vdisk`, which looks for it in `../velo-toolchain`; set `VELO_TOOLCHAIN=PATH` otherwise). They land in `build/guest/vdisk/ce1` and `ce2`. Install the one for the system once, over RAPI with the machine connected, then soft reset:
+The driver is one of the Guest Additions in `guest/` (see `guest/README.md`), which velo-emu-ce-2.0 can also build into a card or ROM. Build them with velo-toolchain (`make guest`, which looks for it in `../velo-toolchain`; set `VELO_TOOLCHAIN=PATH` otherwise). The driver lands in `build/guest/vdisk/ce1` and `ce2`. Install the one for the system once, over RAPI with the machine connected, then soft reset:
 
 ```
 velo-rapi put build/guest/vdisk/ce2/vdisk.dll /Windows/vdisk.dll
