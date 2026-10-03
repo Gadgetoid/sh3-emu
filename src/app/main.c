@@ -397,7 +397,7 @@ static void serial_pump(serial_t *serial, machine_t *machine) {
         while ((got = read(serial->pty, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, (size_t)got);
     }
 }
-typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT, PICK_CARD } pick_kind_t;
+typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_DISK, PICK_NEW_DISK } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -431,6 +431,15 @@ typedef struct {
     char paths[PICK_MAX][1024];
     int  count;
 } dropped_t;
+
+#define BLANK_DISK_BYTES (32 * 1024 * 1024)
+
+static bool create_blank_disk(const char *path) {
+    FILE *file = fopen(path, "wb");
+    if (!file) return false;
+    bool sized = fseek(file, BLANK_DISK_BYTES - 1, SEEK_SET) == 0 && fputc(0, file) == 0;
+    return fclose(file) == 0 && sized;
+}
 
 static bool has_extension(const char *path, const char *extension) {
     const char *dot = strrchr(path, '.');
@@ -1381,6 +1390,21 @@ int main(int argc, char **argv) {
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_CARD, window, filters, 2, NULL, false);
                 break;
             }
+            case MENU_INSERT_DISK: {
+                static const SDL_DialogFileFilter filters[] = { { "Disk images", "img;bin;raw" }, { "All files", "*" } };
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_DISK, window, filters, 2, NULL, false);
+                break;
+            }
+            case MENU_NEW_DISK: {
+                static const SDL_DialogFileFilter filters[] = { { "Disk images", "img" } };
+                SDL_ShowSaveFileDialog(pick_done, (void *)(intptr_t)PICK_NEW_DISK, window, filters, 1, "Velo Disk.img");
+                break;
+            }
+            case MENU_EJECT_DISK:
+                machine_eject_disk(machine);
+                notice = "disk ejected";
+                notice_left = NOTICE_SECONDS;
+                break;
             default:
                 if (item >= MENU_SERIAL_PORT_FIRST && item <= MENU_SERIAL_PORT_LAST && item - MENU_SERIAL_PORT_FIRST < port_count) {
                     snprintf(settings.serial_device, sizeof settings.serial_device, "%s", ports[item - MENU_SERIAL_PORT_FIRST]);
@@ -1437,6 +1461,17 @@ int main(int argc, char **argv) {
             if (picked->kind == PICK_CARD) {
                 notice = machine_insert_card(machine, picked->paths[0]) ? "card inserted" : "could not open card image";
                 notice_left = NOTICE_SECONDS;
+            } else if (picked->kind == PICK_DISK) {
+                notice = machine_insert_disk(machine, picked->paths[0], false) ? "disk inserted" : "could not open disk image";
+                notice_left = NOTICE_SECONDS;
+            } else if (picked->kind == PICK_NEW_DISK) {
+                static char disk_notice[1200];
+                char path[1100];
+                snprintf(path, sizeof path, "%s%s", picked->paths[0], has_extension(picked->paths[0], ".img") ? "" : ".img");
+                bool made = create_blank_disk(path) && machine_insert_disk(machine, path, false);
+                snprintf(disk_notice, sizeof disk_notice, made ? "inserted new disk %s; the Velo offers to format it" : "could not create %s", file_leaf_name(path));
+                notice = disk_notice;
+                notice_left = NOTICE_SECONDS * 2;
             } else if (picked->kind == PICK_SEND) {
                 const char *files[PICK_MAX + 1];
                 for (int i = 0; i < picked->count; i++) files[i] = picked->paths[i];
@@ -1500,6 +1535,7 @@ int main(int argc, char **argv) {
             menu_set_checked(baud_item, link_baud && link_baud * 20 > speed * 19 && link_baud * 20 < speed * 21);
         }
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
+        menu_set_enabled(MENU_EJECT_DISK, machine_disk_inserted(machine));
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
         menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
         reap_reveal_children();

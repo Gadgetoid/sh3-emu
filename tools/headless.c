@@ -94,6 +94,11 @@ typedef struct {
     double   power_times[8];
     int      power_count;
     double   soft_reset_at;
+    double   disk_insert_times[4];
+    const char *disk_insert_images[4];
+    int      disk_insert_count;
+    double   disk_eject_times[4];
+    int      disk_eject_count;
     double   backlight_times[8];
     int      backlight_count;
     double   cable_at, net_at, replug_at, realtime;
@@ -113,7 +118,7 @@ typedef struct {
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DISK, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
-    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
+    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_INSERT_DISK, OPT_EJECT_DISK,
     OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT,
 };
@@ -137,6 +142,8 @@ static const option_t OPTIONS[] = {
     [OPT_POWER] = { "power", "SECONDS", "press the power button for 200 ms", 8 },
     [OPT_BACKLIGHT] = { "backlight", "SECONDS", "press the backlight button for 100 ms", 8 },
     [OPT_SOFT_RESET] = { "soft-reset", "SECONDS", "soft-reset the machine", 0 },
+    [OPT_INSERT_DISK] = { "insert-disk", "SECONDS:IMAGE", "attach a disk image to the paravirtual disk, replacing any attached", 4 },
+    [OPT_EJECT_DISK] = { "eject-disk", "SECONDS", "detach the paravirtual disk's image", 4 },
     [OPT_HEADING_NET] = { NULL, NULL, "Serial and network", 0 },
     [OPT_NET] = { "net", "SECONDS", "connect COM1 to the PPP gateway and web proxy", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the Velo's RAPI port on a Unix socket, for velo-rapi --socket", 0 },
@@ -218,6 +225,14 @@ static bool parse_option(void *context, int option, const char *value, char *err
         run->backlight_times[run->backlight_count++] = number;
         return true;
     case OPT_SOFT_RESET: return option_number(value, &run->soft_reset_at) && run->soft_reset_at >= 0;
+    case OPT_INSERT_DISK:
+        if (!option_timed(value, &run->disk_insert_times[run->disk_insert_count], &rest)) return false;
+        run->disk_insert_images[run->disk_insert_count++] = rest;
+        return true;
+    case OPT_EJECT_DISK:
+        if (!option_number(value, &number) || number < 0) return false;
+        run->disk_eject_times[run->disk_eject_count++] = number;
+        return true;
     case OPT_NET: return option_number(value, &run->net_at) && run->net_at >= 0;
     case OPT_RAPI: run->net_options.rapi_socket = value; return true;
     case OPT_USER_AGENT: run->net_options.user_agent = value; return true;
@@ -277,6 +292,8 @@ int main(int argc, char **argv) {
     for (int b = 0; b < run.backlight_count; b++) if (run.backlight_times[b] > latest) latest = run.backlight_times[b];
     for (int k = 0; k < run.type_count; k++) if (run.type_times[k] > latest) latest = run.type_times[k];
     for (int k = 0; k < run.send_count; k++) if (run.send_times[k] > latest) latest = run.send_times[k];
+    for (int k = 0; k < run.disk_insert_count; k++) if (run.disk_insert_times[k] > latest) latest = run.disk_insert_times[k];
+    for (int k = 0; k < run.disk_eject_count; k++) if (run.disk_eject_times[k] > latest) latest = run.disk_eject_times[k];
     if (run.cable_at > latest) latest = run.cable_at;
     if (run.net_at > latest) latest = run.net_at;
     if (run.replug_at >= 0 && run.replug_at + 2 > latest) latest = run.replug_at + 2;
@@ -374,6 +391,14 @@ int main(int argc, char **argv) {
                 machine_run(machine, MACHINE_CLOCK_HZ / 10);
                 machine_backlight_button(machine, false);
             }
+        }
+        for (int k = 0; k < run.disk_insert_count; k++) {
+            uint64_t at = (uint64_t)(run.disk_insert_times[k] * MACHINE_CLOCK_HZ);
+            if (at >= done && at < done + slice && !machine_insert_disk(machine, run.disk_insert_images[k], false)) fprintf(stderr, "cannot open disk image %s\n", run.disk_insert_images[k]);
+        }
+        for (int k = 0; k < run.disk_eject_count; k++) {
+            uint64_t at = (uint64_t)(run.disk_eject_times[k] * MACHINE_CLOCK_HZ);
+            if (at >= done && at < done + slice) machine_eject_disk(machine);
         }
         if (run.soft_reset_at >= 0 && (uint64_t)(run.soft_reset_at * MACHINE_CLOCK_HZ) >= done && (uint64_t)(run.soft_reset_at * MACHINE_CLOCK_HZ) < done + slice) machine_soft_reset(machine);
         for (int b = 0; b < run.power_count; b++) {

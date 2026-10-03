@@ -102,8 +102,10 @@ app: $(PROG) $(VELORAPI) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh Velo.app
 
 vdisk:
-	cmake -S guest/vdisk -B $(BUILD)/guest/vdisk -DCMAKE_TOOLCHAIN_FILE=$(abspath $(VELO_TOOLCHAIN))/cmake/velo-ce.cmake -DVELO_CE_VERSION=2
-	cmake --build $(BUILD)/guest/vdisk
+	for version in 1 2; do \
+		cmake -S guest/vdisk -B $(BUILD)/guest/vdisk/ce$$version -DCMAKE_TOOLCHAIN_FILE=$(abspath $(VELO_TOOLCHAIN))/cmake/velo-ce.cmake -DVELO_CE_VERSION=$$version && \
+		cmake --build $(BUILD)/guest/vdisk/ce$$version || exit 1; \
+	done
 
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app

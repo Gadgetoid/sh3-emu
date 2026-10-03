@@ -72,6 +72,7 @@ On macOS the menus are in the menu bar. On Linux they're in a bar along the top 
 | View | Simulated LCD (glass, ghosting and backlight) or Sharp Pixels (plain greys, one per screen pixel) | |
 | View | Full Screen | Cmd-Ctrl-F |
 | Devices | PC Card: Insert Card Image…, Eject Card | Cmd-O, Cmd-E |
+| Devices | Paravirtual Disk: Insert Disk Image…, New Disk Image…, Eject Disk (needs the guest driver) | |
 | Devices | Serial Port: Not Connected, Network (PPP), Pseudo-terminal, Host Serial Port (the detected ports) | Cmd-Shift-N for Network |
 | Devices | Connect Network at Launch | |
 | Devices | Sound | |
@@ -108,23 +109,26 @@ velo --card=card.img
 
 It uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. Insert it with Devices > Insert Card Image… or `--card=IMAGE`; the image path is kept in the saved state. Inserting over a card ejects the old one and inserts the new one a second later. To change its contents on the host, eject it first; on macOS `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` mounts it, and on Linux `mcopy -i card.img@@512` copies to and from it.
 
-### Paravirtual disk (experimental, CE 2.0)
+### Paravirtual disk (experimental)
 
-A second disk, separate from the PC Card slot, backed by an image file. It's emulator-only hardware (a few registers and a sector buffer at physical `0x10800000`) with a small block driver (`guest/vdisk`) under CE 2.0's FATFS. Tested on the merged CE 2.0 image. With it attached, CE 2.0 mounts it as `\Storage Card` and a PC Card becomes `\Storage Card2`.
+A disk separate from the PC Card slot, backed by an image file you can swap while the Velo runs. It's emulator-only hardware (a few registers and a sector buffer at physical `0x10800000`) with a small driver, `guest/vdisk`, that registers a disk with CE's FATFS when an image is inserted and removes it when it's ejected.
 
-Build the driver with velo-toolchain (`make vdisk`, which looks for it in `../velo-toolchain`; set `VELO_TOOLCHAIN=PATH` otherwise), then install it once over RAPI, with the machine connected (the upgrade ROM on its own has no RAPI server, so copy the file from a card and set the registry another way there):
+- CE 2.0 mounts it as a storage card folder alongside a PC Card: whichever mounts first is `\Storage Card`, the other `\Storage Card2`.
+- CE 1.0 mounts it as `\PC Card`. CE 1.0 only mounts one FAT volume, so use either the paravirtual disk or a PC Card storage card, not both.
+
+Build the drivers with velo-toolchain (`make vdisk`, which looks for it in `../velo-toolchain`; set `VELO_TOOLCHAIN=PATH` otherwise). They land in `build/guest/vdisk/ce1` and `ce2`. Install the one for the system once, over RAPI with the machine connected, then soft reset:
 
 ```
-velo-rapi put build/guest/vdisk/vdisk.dll /Windows/vdisk.dll
+velo-rapi put build/guest/vdisk/ce2/vdisk.dll /Windows/vdisk.dll
 velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Dll string vdisk.dll
-velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Prefix string DSK
-velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Index dword 2
-velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Order dword 0
-velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk FSD string FATFS.DLL
-velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Ioctl dword 4
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Entry string VDiskStart
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Keep dword 1
+velo-rapi reg set HKLM/Drivers/BuiltIn/VDisk Order dword 3
 ```
 
-Attach an image with `--disk=IMAGE` (velo and headless) and soft reset; CE mounts it once the shell is up. Any `mkcard.sh` image works, and so does a blank file (`mkfile 32m disk.img` on macOS, `truncate -s 32M disk.img` on Linux), which CE offers to format. The image path is kept in the saved state. The driver is only loaded at boot, so attaching or changing the image needs a soft reset, and there is no CE 1.0 driver.
+The CE 2.0 upgrade ROM on its own has no RAPI server; tested on CE 1.0 and the merged CE 2.0 image.
+
+Then use Devices > Insert Disk Image…, New Disk Image… (a blank 32 MB image, which the Velo offers to format) and Eject Disk, or `--disk=IMAGE` at launch. The driver checks for changes twice a second and mounts once the shell is up. Any `mkcard.sh` image works. The image path is kept in the saved state. Headless has `--disk=IMAGE`, `--insert-disk=SECONDS:IMAGE` and `--eject-disk=SECONDS`.
 
 ## Serial and networking
 

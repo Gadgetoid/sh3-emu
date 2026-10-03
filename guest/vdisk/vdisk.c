@@ -6,6 +6,13 @@
 #define VDISK_SECTOR      512u
 #define VDISK_MAX_SECTORS 32u
 #define VDISK_MAGIC       0x4B534456u
+#define VDISK_UNCACHED    0xA0000000u
+#if _WIN32_WCE >= 200
+#define VDISK_INDEX       9
+#else
+#define VDISK_INDEX       1
+#endif
+#define POLL_MS           500
 
 enum {
     REG_MAGIC = 0x00 / 4,
@@ -15,6 +22,7 @@ enum {
     REG_COUNT = 0x14 / 4,
     REG_COMMAND = 0x18 / 4,
     REG_STATUS = 0x1C / 4,
+    REG_CHANGES = 0x20 / 4,
 };
 
 enum { COMMAND_READ = 1, COMMAND_WRITE = 2 };
@@ -28,7 +36,6 @@ enum { STATUS_OK, STATUS_RANGE, STATUS_IO, STATUS_NO_MEDIA, STATUS_READ_ONLY };
 #define DISK_IOCTL_GETINFO      1
 #define DISK_IOCTL_READ         2
 #define DISK_IOCTL_WRITE        3
-#define DISK_IOCTL_INITIALIZED  4
 #define DISK_IOCTL_SETINFO      5
 #define DISK_IOCTL_FORMAT_MEDIA 6
 
@@ -66,18 +73,20 @@ typedef struct {
     SG_BUF sr_sglist[1];
 } SG_REQ;
 
-typedef struct {
-    HANDLE p_hDevice;
-    HKEY   p_hKey;
-} POST_INIT_BUF;
-
-BOOL WINAPI VirtualCopy(void *destination, void *source, DWORD size, DWORD protection);
+void WINAPI SetLastError(DWORD error);
+BOOL WINAPI IsAPIReady(DWORD api);
+HANDLE WINAPI RegisterDevice(LPCWSTR prefix, DWORD index, LPCWSTR library, DWORD context);
+BOOL WINAPI DeregisterDevice(HANDLE device);
 BOOL WINAPI VirtualFree(void *address, DWORD size, DWORD type);
+#if _WIN32_WCE >= 200
+BOOL WINAPI VirtualCopy(void *destination, void *source, DWORD size, DWORD protection);
 BOOL WINAPI LoadFSD(HANDLE device, LPCWSTR fsd);
 void *WINAPI MapPtrToProcess(void *pointer, HANDLE process);
 HANDLE WINAPI GetCallerProcess(void);
-void WINAPI SetLastError(DWORD error);
-BOOL WINAPI IsAPIReady(DWORD api);
+#else
+#define VIRTUAL_COPY_TRAP 0xFFFFDFF3u
+typedef BOOL (*virtual_copy_t)(void *destination, void *source, DWORD size, DWORD protection);
+#endif
 
 typedef struct {
     SG_REQ *request;
@@ -88,8 +97,6 @@ static volatile DWORD *registers;
 static volatile BYTE *buffer;
 static CRITICAL_SECTION lock;
 static DISK_INFO info;
-static HANDLE device;
-static WCHAR file_system[32];
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, void *reserved) {
     return TRUE;
@@ -105,19 +112,71 @@ static void describe(void) {
     info.di_flags = DISK_INFO_FLAG_MBR | DISK_INFO_FLAG_CHS_UNCERTAIN;
 }
 
-DWORD DSK_Init(DWORD context) {
-    if (!registers) {
-        void *window = VirtualAlloc(0, VDISK_WINDOW, MEM_RESERVE, PAGE_NOACCESS);
-        if (!window) return 0;
-        if (!VirtualCopy(window, (void *)(VDISK_PHYSICAL >> 8), VDISK_WINDOW, PAGE_READWRITE | PAGE_NOCACHE | PAGE_PHYSICAL)) {
-            VirtualFree(window, 0, MEM_RELEASE);
-            return 0;
-        }
-        registers = window;
-        buffer = (volatile BYTE *)window + VDISK_BUFFER;
-        InitializeCriticalSection(&lock);
+static BOOL map_device(void) {
+    if (registers) return TRUE;
+    void *window = VirtualAlloc(0, VDISK_WINDOW, MEM_RESERVE, PAGE_NOACCESS);
+    if (!window) return FALSE;
+#if _WIN32_WCE >= 200
+    BOOL mapped = VirtualCopy(window, (void *)(VDISK_PHYSICAL >> 8), VDISK_WINDOW, PAGE_READWRITE | PAGE_NOCACHE | PAGE_PHYSICAL);
+#else
+    BOOL mapped = ((virtual_copy_t)VIRTUAL_COPY_TRAP)(window, (void *)(VDISK_UNCACHED | VDISK_PHYSICAL), VDISK_WINDOW, PAGE_READWRITE | PAGE_NOCACHE);
+#endif
+    if (!mapped) {
+        VirtualFree(window, 0, MEM_RELEASE);
+        return FALSE;
     }
-    if (registers[REG_MAGIC] != VDISK_MAGIC) return 0;
+    if (((volatile DWORD *)window)[REG_MAGIC] != VDISK_MAGIC) return FALSE;
+    InitializeCriticalSection(&lock);
+    buffer = (volatile BYTE *)window + VDISK_BUFFER;
+    registers = window;
+    return TRUE;
+}
+
+static void *caller_pointer(void *pointer) {
+#if _WIN32_WCE >= 200
+    return MapPtrToProcess(pointer, GetCallerProcess());
+#else
+    return pointer;
+#endif
+}
+
+static HANDLE register_disk(void) {
+    HANDLE disk = RegisterDevice(L"DSK", VDISK_INDEX, L"vdisk.dll", 0);
+#if _WIN32_WCE >= 200
+    if (disk && !LoadFSD(disk, L"FATFS.DLL")) {
+        DeregisterDevice(disk);
+        disk = 0;
+    }
+#endif
+    return disk;
+}
+
+static DWORD WINAPI watch_media(void *parameter) {
+    HANDLE disk = 0;
+    DWORD seen = registers[REG_CHANGES] - 1;
+    while (!IsAPIReady(SH_WMGR)) Sleep(POLL_MS);
+    for (;;) {
+        DWORD changes = registers[REG_CHANGES];
+        if (changes != seen) {
+            if (disk) DeregisterDevice(disk);
+            disk = registers[REG_SECTORS] ? register_disk() : 0;
+            seen = changes;
+        }
+        Sleep(POLL_MS);
+    }
+    return 0;
+}
+
+BOOL VDiskStart(void) {
+    if (!map_device() || !LoadLibraryW(L"vdisk.dll")) return FALSE;
+    HANDLE thread = CreateThread(NULL, 0, watch_media, NULL, 0, NULL);
+    if (!thread) return FALSE;
+    CloseHandle(thread);
+    return TRUE;
+}
+
+DWORD DSK_Init(DWORD context) {
+    if (!map_device() || !registers[REG_SECTORS]) return 0;
     describe();
     return 1;
 }
@@ -136,7 +195,7 @@ static BYTE *cursor_span(cursor_t *cursor, DWORD *available) {
         SG_BUF *piece = &cursor->request->sr_sglist[cursor->index];
         if (cursor->offset < piece->sb_len) {
             *available = piece->sb_len - cursor->offset;
-            return (BYTE *)MapPtrToProcess(piece->sb_buf, GetCallerProcess()) + cursor->offset;
+            return (BYTE *)caller_pointer(piece->sb_buf) + cursor->offset;
         }
         cursor->index++;
         cursor->offset = 0;
@@ -189,22 +248,6 @@ static DWORD transfer(SG_REQ *request, BOOL write) {
     return ERROR_SUCCESS;
 }
 
-static DWORD WINAPI mount_when_ready(void *parameter) {
-    while (!IsAPIReady(SH_WMGR)) Sleep(250);
-    if (registers[REG_SECTORS]) LoadFSD(device, file_system);
-    return 0;
-}
-
-static BOOL load_file_system(POST_INIT_BUF *post) {
-    DWORD type, size = sizeof file_system;
-    if (RegQueryValueExW(post->p_hKey, L"FSD", NULL, &type, (BYTE *)file_system, &size) != ERROR_SUCCESS || type != REG_SZ) return TRUE;
-    device = post->p_hDevice;
-    HANDLE thread = CreateThread(NULL, 0, mount_when_ready, NULL, 0, NULL);
-    if (!thread) return FALSE;
-    CloseHandle(thread);
-    return TRUE;
-}
-
 BOOL DSK_IOControl(DWORD handle, DWORD code, BYTE *in, DWORD in_size, BYTE *out, DWORD out_size, DWORD *returned) {
     if (!in && code != DISK_IOCTL_FORMAT_MEDIA) {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -231,8 +274,6 @@ BOOL DSK_IOControl(DWORD handle, DWORD code, BYTE *in, DWORD in_size, BYTE *out,
             if (returned) *returned = request->sr_num_sec * VDISK_SECTOR;
             return TRUE;
         }
-        case DISK_IOCTL_INITIALIZED:
-            return load_file_system((POST_INIT_BUF *)in);
         case DISK_IOCTL_FORMAT_MEDIA:
             return TRUE;
     }
