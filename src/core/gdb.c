@@ -13,6 +13,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifdef MSG_NOSIGNAL
+#define SEND_FLAGS MSG_NOSIGNAL
+#else
+#define SEND_FLAGS 0
+#endif
+
 #include "core/ce.h"
 
 #define PACKET_MAX         0x4000
@@ -219,7 +225,7 @@ static void close_client(gdb_t *gdb) {
 
 static bool send_all(gdb_t *gdb, const char *data, size_t length) {
     while (length) {
-        ssize_t sent = send(gdb->client, data, length, 0);
+        ssize_t sent = send(gdb->client, data, length, SEND_FLAGS);
         if (sent < 0 && errno == EINTR) continue;
         if (sent <= 0) {
             close_client(gdb);
@@ -973,6 +979,9 @@ static bool accept_client(gdb_t *gdb, bool wait) {
     if (client < 0) return false;
     int on = 1;
     setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &on, sizeof on);
+#ifdef SO_NOSIGPIPE
+    setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof on);
+#endif
     gdb->client = client;
     gdb->no_ack = false;
     gdb->library_hash = 0;
