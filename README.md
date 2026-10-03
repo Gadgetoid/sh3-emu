@@ -89,7 +89,7 @@ The backlight is under CE's control: the backlight key toggles it, and the Backl
 
 ## Saved state and snapshots
 
-Each ROM has its own saved machine, `state-ROM-HASH.bin` in the data folder. It's saved on quit, every minute and by Save State, and restored on launch with the clock advanced by the time away; `--fresh` cold boots instead, and `--state=FILE` uses FILE for loading, saving and autosaving. Load State returns to the last save. A state only loads with the ROM it was made with, and states from older builds load, with any new fields at their defaults; one that can't be read is renamed with `.old` appended.
+Each ROM has its own saved machine, `state-ROM-HASH.bin` in the data folder. It's saved on quit, every minute and by Save State, and restored on launch with the clock advanced by the time away; `--fresh` cold boots instead, and `--state=FILE` uses FILE for loading, saving and autosaving. Load State returns to the last save. A state only loads with the ROM it was made with, and states from older builds load, with any new fields at their defaults; one that can't be read is renamed with `.old` appended. States are saved gzip-compressed (a 33 MB machine saves as about 2 MB); uncompressed states from older builds still load, but older builds can't read compressed ones.
 
 Snapshots are named copies of the machine, in `snapshots` in the data folder by default. Loading one is a restore point: autosave carries on to the ROM's own state.
 

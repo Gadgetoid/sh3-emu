@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <zlib.h>
 
 #include "core/mips.h"
 #include "core/pccard.h"
@@ -30,6 +31,8 @@
 #define BOOT_BLOCK_SIZE  0x1000u
 
 static const char STATE_MAGIC[16] = "VELO1 STATE v2";
+#define STATE_READ_CHUNK (1u << 20)
+#define STATE_READ_MAX   (256u << 20)
 
 #define REG_COUNT 128
 
@@ -1445,29 +1448,61 @@ void machine_dump_state(machine_t *m) {
     X(eeprom_in_ack, m->eeprom_in_ack) X(eeprom_scl, m->eeprom_scl) X(eeprom_sda, m->eeprom_sda) \
     X(eeprom_sda_out, m->eeprom_sda_out)
 
-static bool write_record(FILE *file, const char *name, const void *data, uint32_t size) {
+static bool write_bytes(gzFile file, const void *data, uint32_t size) {
+    return size == 0 || gzwrite(file, data, size) == (int)size;
+}
+
+static bool write_record(gzFile file, const char *name, const void *data, uint32_t size) {
     uint8_t length = (uint8_t)strlen(name);
-    return fwrite(&length, 1, 1, file) == 1 && fwrite(name, length, 1, file) == 1 &&
-           fwrite(&size, sizeof size, 1, file) == 1 && (size == 0 || fwrite(data, size, 1, file) == 1);
+    return write_bytes(file, &length, 1) && write_bytes(file, name, length) && write_bytes(file, &size, sizeof size) && write_bytes(file, data, size);
+}
+
+static uint8_t *read_state(const char *path, size_t *length) {
+    gzFile file = gzopen(path, "rb");
+    if (!file) return NULL;
+    size_t capacity = STATE_READ_CHUNK, used = 0;
+    uint8_t *data = malloc(capacity);
+    while (data) {
+        if (used == capacity) {
+            uint8_t *grown = capacity < STATE_READ_MAX ? realloc(data, capacity * 2) : NULL;
+            if (!grown) {
+                free(data);
+                data = NULL;
+                break;
+            }
+            data = grown;
+            capacity *= 2;
+        }
+        int got = gzread(file, data + used, (unsigned)(capacity - used));
+        if (got < 0) {
+            free(data);
+            data = NULL;
+            break;
+        }
+        if (got == 0) break;
+        used += (size_t)got;
+    }
+    gzclose(file);
+    *length = used;
+    return data;
 }
 
 bool machine_save(machine_t *m, const char *path, int64_t host_time) {
     char temporary[1100];
     int written = snprintf(temporary, sizeof temporary, "%s.tmp", path);
     if (written < 0 || (size_t)written >= sizeof temporary) return false;
-    FILE *file = fopen(temporary, "wb");
+    gzFile file = gzopen(temporary, "wb1");
     if (!file) return false;
-    bool ok = fwrite(STATE_MAGIC, sizeof STATE_MAGIC, 1, file) == 1 &&
-              fwrite(&m->rom_hash, sizeof m->rom_hash, 1, file) == 1 &&
-              fwrite(&host_time, sizeof host_time, 1, file) == 1;
+    bool ok = write_bytes(file, STATE_MAGIC, sizeof STATE_MAGIC) && write_bytes(file, &m->rom_hash, sizeof m->rom_hash) &&
+              write_bytes(file, &host_time, sizeof host_time);
 #define SAVE_FIELD(key, field) ok = ok && write_record(file, #key, &(field), (uint32_t)sizeof(field));
     STATE_FIELDS(SAVE_FIELD)
 #undef SAVE_FIELD
     ok = ok && write_record(file, "dram", m->dram, m->dram_size);
     if (m->card_dram_size) ok = ok && write_record(file, "dram_card", m->card_dram, m->card_dram_size);
     uint8_t end = 0;
-    ok = ok && fwrite(&end, 1, 1, file) == 1;
-    ok = fclose(file) == 0 && ok;
+    ok = ok && write_bytes(file, &end, 1);
+    ok = gzclose(file) == Z_OK && ok;
     if (ok) ok = rename(temporary, path) == 0;
     else remove(temporary);
     return ok;
@@ -1530,11 +1565,11 @@ int machine_rom_system(machine_t *m) {
 }
 
 bool machine_state_matches(machine_t *m, const char *path) {
-    FILE *file = fopen(path, "rb");
+    gzFile file = gzopen(path, "rb");
     if (!file) return false;
     uint8_t header[sizeof STATE_MAGIC + sizeof(uint64_t)];
-    bool ok = fread(header, sizeof header, 1, file) == 1;
-    fclose(file);
+    bool ok = gzread(file, header, sizeof header) == (int)sizeof header;
+    gzclose(file);
     if (!ok || memcmp(header, STATE_MAGIC, sizeof STATE_MAGIC) != 0) return false;
     uint64_t rom_hash;
     memcpy(&rom_hash, header + sizeof STATE_MAGIC, sizeof rom_hash);
@@ -1558,15 +1593,11 @@ static void sanitize_state(machine_t *m) {
 }
 
 bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
-    FILE *file = fopen(path, "rb");
-    if (!file) return false;
+    size_t length = 0;
+    uint8_t *contents = read_state(path, &length);
+    if (!contents) return false;
     cancel_pending_card(m);
-    fseek(file, 0, SEEK_END);
-    long length = ftell(file);
-    fseek(file, 0, SEEK_SET);
-    uint8_t *contents = length > 0 ? malloc((size_t)length) : NULL;
-    bool ok = contents && fread(contents, (size_t)length, 1, file) == 1;
-    fclose(file);
+    bool ok = length > 0;
     size_t header = sizeof STATE_MAGIC + sizeof(uint64_t) + sizeof(int64_t);
     ok = ok && (size_t)length >= header && memcmp(contents, STATE_MAGIC, sizeof STATE_MAGIC) == 0;
     uint64_t rom_hash = 0;
