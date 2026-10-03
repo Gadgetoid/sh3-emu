@@ -14,6 +14,7 @@
 #include "app/profiles.h"
 #include "app/typer.h"
 #include "app/view.h"
+#include "core/gdb.h"
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
@@ -175,6 +176,12 @@ static void input_clear(input_queue_t *input) {
     input->last_at = input->seen = 0;
 }
 
+static gdb_t *debugger;
+
+static void log_gdb(const char *message) {
+    fputs(message, stderr);
+}
+
 typedef struct {
     SDL_Mutex  *lock;
     SDL_Thread *thread;
@@ -195,7 +202,8 @@ static int run_machine(void *context) {
             return 0;
         }
         uint64_t now = SDL_GetTicksNS();
-        if (runner->restart || runner->paused) {
+        if (debugger) gdb_service(debugger);
+        if (runner->restart || runner->paused || (debugger && gdb_halted(debugger))) {
             owed = 0;
             runner->restart = false;
         } else {
@@ -206,6 +214,9 @@ static int run_machine(void *context) {
                 input_step(runner->input, runner->machine);
                 machine_run(runner->machine, RUN_SLICE_CYCLES);
                 owed -= RUN_SLICE_CYCLES;
+                if (!debugger) continue;
+                gdb_after_run(debugger);
+                if (gdb_halted(debugger)) break;
             }
         }
         last = now;
@@ -511,6 +522,7 @@ static void debug_log_path(char *path, size_t size) {
 
 static void print_debug_line(void *context, const char *line) {
     (void)context;
+    if (debugger) gdb_debug_line(debugger, line);
     if (debug_to_stderr) fprintf(stderr, "debug: %s\n", line);
     if (!debug_log) return;
     time_t now = time(NULL);
@@ -1128,12 +1140,14 @@ typedef struct {
     serial_mode_t serial_mode;
     const char   *card, *disk, *state_file, *machine;
     bool          fresh;
+    int           gdb_port;
+    const char   *gdb_process;
 } launch_t;
 
 enum {
     LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_DISK, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
-    LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT,
+    LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
 
 static const option_t LAUNCH_OPTIONS[] = {
@@ -1152,6 +1166,8 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
     [LAUNCH_VERBOSE] = { "verbose", NULL, "log hardware, network and proxy activity to stderr", 0 },
     [LAUNCH_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr as well as debug.log", 0 },
+    [LAUNCH_GDB] = { "gdb", "PORT", "listen for GDB on 127.0.0.1:PORT; it can attach and detach while the Velo runs", 0 },
+    [LAUNCH_GDB_PROCESS] = { "gdb-process", "NAME", "debug one process, e.g. maths.exe: breakpoints below 0x02000000 only stop there, and GDB stops when it starts", 0 },
 };
 
 static bool launch_option(void *context, int option, const char *value, char *error, size_t error_size) {
@@ -1187,6 +1203,11 @@ static bool launch_option(void *context, int option, const char *value, char *er
     case LAUNCH_USER_AGENT: snprintf(settings->user_agent, sizeof settings->user_agent, "%s", value); return true;
     case LAUNCH_VERBOSE: verbose = true; return true;
     case LAUNCH_DEBUG_OUTPUT: debug_to_stderr = true; return true;
+    case LAUNCH_GDB:
+        if (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535) return false;
+        launch->gdb_port = (int)integer;
+        return true;
+    case LAUNCH_GDB_PROCESS: launch->gdb_process = value; return true;
     }
     return false;
 }
@@ -1202,7 +1223,7 @@ int main(int argc, char **argv) {
     const char *rom_path = NULL;
     migrate_old_folders();
     settings_t settings = settings_load();
-    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, NULL, false };
+    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, NULL, false, 0, NULL };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
@@ -1305,6 +1326,18 @@ int main(int argc, char **argv) {
         if (!notice) { notice = result; notice_left = NOTICE_SECONDS * 2; }
     }
 
+    if (launch.gdb_process && !launch.gdb_port) {
+        fprintf(stderr, "velo: --gdb-process needs --gdb\n");
+        return 2;
+    }
+    if (launch.gdb_port) {
+        debugger = gdb_create(machine, launch.gdb_port, log_gdb);
+        if (!debugger) {
+            fprintf(stderr, "velo: cannot listen for GDB on port %d\n", launch.gdb_port);
+            return 1;
+        }
+        if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
+    }
     static runner_t runner;
     runner = (runner_t){ SDL_CreateMutex(), NULL, machine, &input, false, false, true, { 0 } };
     runner.thread = SDL_CreateThread(run_machine, "velo-machine", &runner);
@@ -1686,6 +1719,7 @@ int main(int argc, char **argv) {
                     since_backup = 0;
                     runner.machine = machine;
                     runner.restart = true;
+                    if (debugger) gdb_set_machine(debugger, machine);
                     static char switched_notice[160];
                     snprintf(switched_notice, sizeof switched_notice, "switched to %s", current.name);
                     notice = switch_notice ? switch_notice : switched_notice;
@@ -1888,6 +1922,8 @@ int main(int argc, char **argv) {
     SDL_SetAtomicInt(&runner.waiting, 0);
     SDL_UnlockMutex(runner.lock);
     SDL_WaitThread(runner.thread, NULL);
+    gdb_destroy(debugger);
+    debugger = NULL;
     SDL_DestroyMutex(runner.lock);
     free(picked);
     machine_save(machine, state, (int64_t)time(NULL));

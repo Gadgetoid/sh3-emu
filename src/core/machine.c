@@ -1369,7 +1369,34 @@ void machine_run(machine_t *m, uint64_t cycles) {
             mips_run(&m->cpu, until);
         }
         process_events(m);
+        if (m->cpu.debug && m->cpu.debug->stop) break;
     }
+}
+
+mips_cpu_t *machine_cpu(machine_t *m) { return &m->cpu; }
+
+static bool debugger_memory(const machine_t *m, uint32_t pa, bool write) {
+    if (pa < DRAM_DECODE_END) return true;
+    if (pa < BANK1_DECODE_END) return m->card_dram_size != 0;
+    if (write) return false;
+    return (pa >= ROM_WINDOW_PA && pa < ROM_WINDOW_END) || (pa >= ROM_CARD_PA && pa < ROM_CARD_END);
+}
+
+bool machine_read_physical(machine_t *m, uint32_t pa, uint8_t *data, uint32_t length) {
+    for (uint32_t i = 0; i < length; i++) {
+        uint32_t value;
+        if (!debugger_memory(m, pa + i, false) || !bus_read(m, pa + i, 1, &value)) return false;
+        data[i] = (uint8_t)value;
+    }
+    return true;
+}
+
+bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint32_t length) {
+    for (uint32_t i = 0; i < length; i++) {
+        if (!debugger_memory(m, pa + i, true) || !bus_write(m, pa + i, 1, data[i])) return false;
+    }
+    mips_flush_translations(&m->cpu);
+    return true;
 }
 
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
@@ -1829,6 +1856,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     memcpy(watch, m->cpu.watch, sizeof watch);
     int watch_count = m->cpu.watch_count;
     void (*on_watch)(void *, uint32_t) = m->cpu.on_watch;
+    mips_debug_t *cpu_debug = m->cpu.debug;
     uint64_t cycles = m->cpu.cycles, rtc_base = m->rtc_base, rtc_anchor = m->rtc_anchor;
     bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy, host_clock = m->host_clock;
     uint32_t set_time_va = m->set_time_va;
@@ -1927,6 +1955,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     memcpy(m->cpu.watch, watch, sizeof watch);
     m->cpu.watch_count = watch_count;
     m->cpu.on_watch = on_watch;
+    m->cpu.debug = cpu_debug;
     if (keep_ram) {
         m->cpu.cycles = cycles;
         m->rtc_base = rtc_base;

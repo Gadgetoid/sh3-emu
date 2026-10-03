@@ -45,6 +45,10 @@ check suspend_resume 2eb469a6f1f8a86900314a036e30b0e725df989e4adf0962a797091ebff
 sh tools/mkcard.sh "$OUT/card.img" 8 tests/card/HELLO
 CARD="--card=$OUT/card.img --tap=4:30:25:0.08 --tap=4.12:30:25:0.08 --tap=7:262:65:0.08 --tap=7.12:262:65:0.08"
 check card_listing b92dd3e0c4dbf3472d5ebc40937767f061a626fca3209eed6682393c77530786 --seconds=10 --load="$OUT/desktop.state" $CARD
+PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+./headless "$ROM" --seconds=20 --load="$OUT/desktop.state" --gdb="$PORT" > "$OUT/gdb.log" 2>&1 &
+if python3 tests/gdb_client.py "$PORT" > "$OUT/gdb_client.log" 2>&1; then echo "ok   gdb_stub"; else echo "FAIL gdb_stub"; cat "$OUT/gdb_client.log" "$OUT/gdb.log"; exit 1; fi
+wait
 if pkg-config --exists slirp; then
     ./headless "$ROM" --seconds=10 --load="$OUT/desktop.state" --net=1 > "$OUT/ppp.log" 2>&1
     if grep -q "IPCP up" "$OUT/ppp.log"; then echo "ok   ppp_online"; else echo "FAIL ppp_online"; exit 1; fi
