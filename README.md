@@ -105,7 +105,7 @@ velo-state state.bin reg dump HKLM/Drivers
 velo-state before.bin diff after.bin
 ```
 
-Paths, keys and output follow `velo-rapi`. Files in ROM aren't listed, and databases aren't read. On CE 1.0 the registry comes from `\Windows\Pegreg.reg`, as filesys last wrote it.
+Paths, keys and output follow `velo-rapi`. Files in ROM aren't listed, and databases aren't read. On CE 1.0 the registry comes from `\Windows\Pegreg.reg`, as filesys last wrote it. The store's format is in [docs/object-store.md](docs/object-store.md).
 
 The data folder also holds `emu.ini` (settings), `rapi.sock` and the shared folder's sync manifest. `XDG_DATA_HOME` and `XDG_CONFIG_HOME` override its location, as the tests do; on Linux `emu.ini` is in `~/.config/velo-emu`. On macOS the first launch moves an older `~/.local/share/velo-emu` and `~/.config/velo-emu/emu.ini` into `~/Library/Application Support/Velo`.
 
