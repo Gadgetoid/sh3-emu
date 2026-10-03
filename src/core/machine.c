@@ -7,6 +7,8 @@
 #include <time.h>
 #include <zlib.h>
 
+#include "core/ce.h"
+#include "core/mailbox.h"
 #include "core/mips.h"
 #include "core/pccard.h"
 #include "core/uart.h"
@@ -213,6 +215,9 @@ struct machine {
     machine_debug_fn debug_sink;
     void    *debug_context;
     uint32_t debug_refill_va;
+    mailbox_t mailbox;
+    uint32_t mailbox_fault_va;
+    int      mailbox_fault_tries;
     int      debug_refill_tries;
     char     debug_line[256];
     size_t   debug_length;
@@ -1168,6 +1173,36 @@ static bool screen_for_hash(const machine_t *m, uint64_t hash, screen_size_t *si
 
 static void on_watch(void *context, uint32_t pc);
 
+#define MAILBOX_FAULT_TRIES 4
+
+static bool mailbox_copy(void *context, uint32_t va, uint8_t *data, uint32_t length, bool write) {
+    ce_t ce;
+    ce_init(&ce, context);
+    return write ? ce_write(&ce, va, CE_CURRENT, data, length) : ce_read(&ce, va, CE_CURRENT, data, length);
+}
+
+static bool on_break(void *context, uint32_t code) {
+    machine_t *m = context;
+    if (code != MAILBOX_BREAK_CODE || !mips_user_mode(&m->cpu)) return false;
+    uint32_t fault_va;
+    if (mailbox_trap(&m->mailbox, &m->cpu, mailbox_copy, m, &fault_va)) {
+        m->mailbox_fault_tries = 0;
+        return true;
+    }
+    if (fault_va != m->mailbox_fault_va) m->mailbox_fault_tries = 0;
+    m->mailbox_fault_va = fault_va;
+    if (++m->mailbox_fault_tries > MAILBOX_FAULT_TRIES) {
+        m->mailbox_fault_tries = 0;
+        m->cpu.gpr[2] = (uint32_t)-1;
+        return true;
+    }
+    if (m->cpu.gpr[4] == MAILBOX_RECV) mips_raise_tlb_store_miss(&m->cpu, fault_va);
+    else mips_raise_tlb_miss(&m->cpu, fault_va);
+    return true;
+}
+
+mailbox_t *machine_mailbox(machine_t *m) { return &m->mailbox; }
+
 machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size_t error_size) {
     rom_region_t regions[2] = { { 0 } };
     int region_count;
@@ -1223,6 +1258,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->screen_supported = find_supported_screens(m);
     m->cpu.bus.context = m;
     m->cpu.bus.read = bus_read;
+    m->cpu.on_break = on_break;
     m->cpu.bus.write = bus_write;
     m->cpu.bus.fetch_page = bus_fetch_page;
     bind_card_socket(m, NULL);
@@ -1242,6 +1278,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
 
 void machine_destroy(machine_t *m) {
     if (!m) return;
+    mailbox_clear(&m->mailbox);
     free(m->card_dram);
     if (m->card_socket.image) fclose(m->card_socket.image);
     if (m->pending_card) fclose(m->pending_card);
@@ -1857,6 +1894,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     int watch_count = m->cpu.watch_count;
     void (*on_watch)(void *, uint32_t) = m->cpu.on_watch;
     mips_debug_t *cpu_debug = m->cpu.debug;
+    bool (*on_break)(void *, uint32_t) = m->cpu.on_break;
+    mailbox_t mailbox = m->mailbox;
     uint64_t cycles = m->cpu.cycles, rtc_base = m->rtc_base, rtc_anchor = m->rtc_anchor;
     bool serial_connected = m->serial_connected, touch_legacy = m->touch_legacy, host_clock = m->host_clock;
     uint32_t set_time_va = m->set_time_va;
@@ -1956,6 +1995,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.watch_count = watch_count;
     m->cpu.on_watch = on_watch;
     m->cpu.debug = cpu_debug;
+    m->cpu.on_break = on_break;
+    m->mailbox = mailbox;
     if (keep_ram) {
         m->cpu.cycles = cycles;
         m->rtc_base = rtc_base;

@@ -110,6 +110,7 @@ struct mips_cpu {
     uint32_t watch_filter[128];
     void   (*on_watch)(void *context, uint32_t pc);
     mips_debug_t *debug;
+    bool   (*on_break)(void *context, uint32_t code);
 };
 
 void mips_reset(mips_cpu_t *cpu, uint32_t entry);
@@ -117,6 +118,7 @@ void mips_set_external_ip(mips_cpu_t *cpu, uint32_t ip_bits);
 void mips_run(mips_cpu_t *cpu, uint64_t until_cycle);
 bool mips_translate(mips_cpu_t *cpu, uint32_t va, bool write, uint32_t *pa);
 void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va);
+void mips_raise_tlb_store_miss(mips_cpu_t *cpu, uint32_t va);
 void mips_flush_translations(mips_cpu_t *cpu);
 void mips_debug_filter_add(mips_debug_t *debug, uint32_t va);
 bool mips_user_mode(const mips_cpu_t *cpu);

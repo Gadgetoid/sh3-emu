@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "core/agent.h"
 #include "core/gdb.h"
 #include "core/key_text.h"
 #include "core/lcd.h"
@@ -23,13 +24,26 @@ static void request_stop(int signal_number) {
 }
 
 static gdb_t *debugger;
+static agent_t *agent;
+
+#define AGENT_POLL_CYCLES (MACHINE_CLOCK_HZ / 100)
+
+static void run_cycles(machine_t *machine, uint64_t cycles) {
+    if (!debugger) machine_run(machine, cycles);
+    else if (!gdb_run(debugger, cycles)) stop_requested = 1;
+}
 
 static void advance(machine_t *machine, uint64_t cycles) {
-    if (!debugger) {
-        machine_run(machine, cycles);
+    if (!agent) {
+        run_cycles(machine, cycles);
         return;
     }
-    if (!gdb_run(debugger, cycles)) stop_requested = 1;
+    while (cycles && !stop_requested) {
+        uint64_t step = cycles < AGENT_POLL_CYCLES ? cycles : AGENT_POLL_CYCLES;
+        run_cycles(machine, step);
+        agent_poll(agent, machine_mailbox(machine));
+        cycles -= step;
+    }
 }
 
 static double wall_seconds(void) {
@@ -128,12 +142,13 @@ typedef struct {
     bool     seconds_given;
     int      gdb_port;
     const char *gdb_process;
+    const char *agent_socket;
 } run_t;
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DISK, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_INSERT_DISK, OPT_EJECT_DISK,
-    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
+    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_AGENT, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_GDB,
     OPT_GDB_PROCESS,
 };
@@ -161,6 +176,7 @@ static const option_t OPTIONS[] = {
     [OPT_EJECT_DISK] = { "eject-disk", "SECONDS", "detach the paravirtual disk's image", 4 },
     [OPT_HEADING_NET] = { NULL, NULL, "Serial and network", 0 },
     [OPT_NET] = { "net", "SECONDS", "connect COM1 to the PPP gateway and web proxy", 0 },
+    [OPT_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's break 0x51CE mailbox and one client on this Unix socket", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the Velo's RAPI port on a Unix socket, for velo-rapi --socket", 0 },
     [OPT_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
     [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, as the app does after a speed change", 0 },
@@ -258,6 +274,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         return true;
     case OPT_NET: return option_number(value, &run->net_at) && run->net_at >= 0;
     case OPT_RAPI: run->net_options.rapi_socket = value; return true;
+    case OPT_AGENT: run->agent_socket = value; return true;
     case OPT_USER_AGENT: run->net_options.user_agent = value; return true;
     case OPT_REPLUG: return option_number(value, &run->replug_at) && run->replug_at >= 0;
     case OPT_CABLE: return option_number(value, &run->cable_at) && run->cable_at >= 0;
@@ -351,6 +368,10 @@ int main(int argc, char **argv) {
     if (run.gdb_process && !run.gdb_port) {
         fprintf(stderr, "headless: --gdb-process needs --gdb\n");
         return 2;
+    }
+    if (run.agent_socket && !(agent = agent_create(run.agent_socket, log_stderr))) {
+        fprintf(stderr, "cannot listen on agent socket %s\n", run.agent_socket);
+        return 1;
     }
     if (run.gdb_port) {
         debugger = gdb_create(machine, run.gdb_port, log_stderr);
@@ -504,6 +525,7 @@ int main(int argc, char **argv) {
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     net_gateway_destroy(gateway);
     gdb_destroy(debugger);
+    agent_destroy(agent);
     machine_destroy(machine);
     free(rom);
     return 0;

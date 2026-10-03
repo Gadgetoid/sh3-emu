@@ -38,9 +38,11 @@ void mips_reset(mips_cpu_t *cpu, uint32_t entry) {
     mips_bus_t bus = cpu->bus;
     uint32_t speed = cpu->speed;
     mips_debug_t *debug = cpu->debug;
+    bool (*on_break)(void *, uint32_t) = cpu->on_break;
     memset(cpu, 0, sizeof *cpu);
     cpu->bus = bus;
     cpu->debug = debug;
+    cpu->on_break = on_break;
     cpu->speed = speed ? speed : 1;
     cpu->pc = entry;
     cpu->next_pc = entry + 4;
@@ -244,6 +246,10 @@ void mips_raise_tlb_miss(mips_cpu_t *cpu, uint32_t va) {
     tlb_fault(cpu, MIPS_EXC_TLBL, va);
 }
 
+void mips_raise_tlb_store_miss(mips_cpu_t *cpu, uint32_t va) {
+    tlb_fault(cpu, MIPS_EXC_TLBS, va);
+}
+
 static bool fetch(mips_cpu_t *cpu, uint32_t va, uint32_t *instruction) {
     if (va & 3) { address_fault(cpu, MIPS_EXC_ADEL, va); return false; }
     uint32_t user = (cpu->cp0[CP0_STATUS] & STATUS_KUC) != 0;
@@ -354,7 +360,10 @@ static void execute(mips_cpu_t *cpu, uint32_t op) {
         case 0x08: branch(cpu, true, r[rs]); break;
         case 0x09: { uint32_t target = r[rs]; r[rd] = current_pc + 8; branch(cpu, true, target); break; }
         case 0x0C: raise_exception(cpu, MIPS_EXC_SYS, current_pc, current_in_delay_slot); break;
-        case 0x0D: raise_exception(cpu, MIPS_EXC_BP, current_pc, current_in_delay_slot); break;
+        case 0x0D:
+            if (cpu->on_break && cpu->on_break(cpu->bus.context, (op >> 6) & 0xFFFFFu)) break;
+            raise_exception(cpu, MIPS_EXC_BP, current_pc, current_in_delay_slot);
+            break;
         case 0x10: r[rd] = cpu->hi; break;
         case 0x11: cpu->hi = r[rs]; break;
         case 0x12: r[rd] = cpu->lo; break;

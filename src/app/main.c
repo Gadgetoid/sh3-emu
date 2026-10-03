@@ -14,6 +14,7 @@
 #include "app/profiles.h"
 #include "app/typer.h"
 #include "app/view.h"
+#include "core/agent.h"
 #include "core/gdb.h"
 #include "core/key_text.h"
 #include "core/lcd.h"
@@ -177,6 +178,7 @@ static void input_clear(input_queue_t *input) {
 }
 
 static gdb_t *debugger;
+static agent_t *agent;
 
 static void log_gdb(const char *message) {
     fputs(message, stderr);
@@ -214,6 +216,7 @@ static int run_machine(void *context) {
                 input_step(runner->input, runner->machine);
                 machine_run(runner->machine, RUN_SLICE_CYCLES);
                 owed -= RUN_SLICE_CYCLES;
+                if (agent) agent_poll(agent, machine_mailbox(runner->machine));
                 if (!debugger) continue;
                 gdb_after_run(debugger);
                 if (gdb_halted(debugger)) break;
@@ -1142,11 +1145,12 @@ typedef struct {
     bool          fresh;
     int           gdb_port;
     const char   *gdb_process;
+    const char   *agent_socket;
 } launch_t;
 
 enum {
     LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_DISK, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
-    LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT,
+    LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
 
@@ -1163,6 +1167,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
     [LAUNCH_SERIAL] = { "serial", "net|pty|off|PORT", "COM1 on the PPP network, a pseudo-terminal, nothing, or a host serial port such as /dev/cu.usbserial-1", 0 },
     [LAUNCH_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
+    [LAUNCH_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's break 0x51CE mailbox and one client on this Unix socket", 0 },
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
     [LAUNCH_VERBOSE] = { "verbose", NULL, "log hardware, network and proxy activity to stderr", 0 },
     [LAUNCH_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr as well as debug.log", 0 },
@@ -1208,6 +1213,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
         launch->gdb_port = (int)integer;
         return true;
     case LAUNCH_GDB_PROCESS: launch->gdb_process = value; return true;
+    case LAUNCH_AGENT: launch->agent_socket = value; return true;
     }
     return false;
 }
@@ -1223,7 +1229,7 @@ int main(int argc, char **argv) {
     const char *rom_path = NULL;
     migrate_old_folders();
     settings_t settings = settings_load();
-    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, NULL, false, 0, NULL };
+    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, NULL, false, 0, NULL, NULL };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
@@ -1337,6 +1343,10 @@ int main(int argc, char **argv) {
             return 1;
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
+    }
+    if (launch.agent_socket && !(agent = agent_create(launch.agent_socket, log_gdb))) {
+        fprintf(stderr, "velo: cannot listen on agent socket %s\n", launch.agent_socket);
+        return 1;
     }
     static runner_t runner;
     runner = (runner_t){ SDL_CreateMutex(), NULL, machine, &input, false, false, true, { 0 } };
@@ -1924,6 +1934,8 @@ int main(int argc, char **argv) {
     SDL_WaitThread(runner.thread, NULL);
     gdb_destroy(debugger);
     debugger = NULL;
+    agent_destroy(agent);
+    agent = NULL;
     SDL_DestroyMutex(runner.lock);
     free(picked);
     machine_save(machine, state, (int64_t)time(NULL));

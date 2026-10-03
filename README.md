@@ -271,6 +271,20 @@ DLLs the process loads are reported to GDB, which loads symbols for them from th
 
 `monitor help` lists the rest: `processes`, `process`, `modules`, `libraries elf|dll`, `catch on|off` and `output on|off`. This works on CE 1.0 and 2.0. Threads aren't reported to GDB yet; it sees one thread, the one that's running.
 
+## Host mailbox
+
+An emulator-only message pipe between a program running on the Velo and a tool on the host, for agents such as velo-toolchain's debug manager that transfer and launch programs faster than RAPI. The emulator only passes messages; what they mean is up to the agent and its host tool.
+
+In the guest, `break 0x51CE` (the word `0x0014738D`, not in a delay slot) from user mode is handled by the emulator before CE sees it, and execution continues after it. `a0` is the operation, `a1` a buffer in the calling process and `a2` its length or capacity; the result is in `v0`.
+
+| `a0` | Operation | Result |
+| --- | --- | --- |
+| 0 | Probe | `v0` = interface version (1), `v1` = largest message (65536) |
+| 1 | Receive into `a1`, up to `a2` bytes | the message's length, 0 if none is waiting, or minus its length if it's bigger than `a2` (it stays queued) |
+| 2 | Send `a2` bytes from `a1` | `a2`, or -1 if no host tool is connected or the message is too big |
+
+On the host, `headless --agent=SOCKET` and `velo --agent=SOCKET` listen on a Unix socket for one client at a time. Each message is a little-endian 32-bit length followed by the bytes, in both directions. Messages wait in a queue of 64 each way and are dropped when the client disconnects. Probe always answers, with or without `--agent`, and it keeps working in a state saved with the agent running. Buffers are read and written through CE's page tables; one that isn't paged in yet is faulted in by CE first, so it can fail like any memory access would, for example while the card an agent runs from is still being mounted after a load.
+
 ## Windows CE 2.0 details
 
 The Velo 1's CE 2.0 upgrade shipped as a ROM Miniature Card. An `nk.bin` whose single ROM header spans the whole file is mapped at the header's `physfirst` (0x90001000, the card window at physical 0x10000000) and started there, as the Velo's boot block would hand off to the card; the first 4 KB of the card, missing from the dump, reads as erased flash. A B000FF image also loads, with records in the card window and the internal ROM window at 0x1F400000. CE 2.0 runs the LCD in 16 greys.

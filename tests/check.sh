@@ -17,6 +17,7 @@ expect_fail velo_bad_serial "wants net|pty|off|PORT" ./velo --serial=usb
 expect_fail headless_bad_screen "wants WxH" ./headless rom.bin --screen=1024x768
 expect_fail velo_bad_screen "wants WxH" ./velo --screen=640
 expect_fail velo_rapi_unknown "unknown option --frob" ./velo-rapi --frob
+expect_fail headless_bad_agent "cannot listen on agent socket" ./headless rom/nk.bin --seconds=1 --agent=/nonexistent/folder/agent.sock
 expect_fail velo_state_unknown "unknown option --frob" ./velo-state --frob
 expect_fail velo_state_not_state "is not a Velo state" ./velo-state Makefile ls
 if pkg-config --exists slirp libcurl; then
