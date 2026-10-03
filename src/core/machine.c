@@ -213,6 +213,7 @@ struct machine {
     machine_debug_fn debug_sink;
     void    *debug_context;
     uint32_t debug_refill_va;
+    int      debug_refill_tries;
     char     debug_line[256];
     size_t   debug_length;
     uint64_t alarm;
@@ -2114,6 +2115,7 @@ static void debug_character(machine_t *m, uint16_t character) {
 }
 
 #define DEBUG_STRING_MAX 1024
+#define DEBUG_REFILL_TRIES 4
 
 static void capture_debug_string(machine_t *m, uint32_t va) {
     if (!m->debug_sink || !va) return;
@@ -2122,8 +2124,10 @@ static void capture_debug_string(machine_t *m, uint32_t va) {
     while (length < DEBUG_STRING_MAX) {
         uint32_t address = va + 2 * length;
         if (!guest_halfword(m, address, false, &text[length])) {
-            if (address < 0x80000000u && address != m->debug_refill_va) {
+            if (address != m->debug_refill_va) m->debug_refill_tries = 0;
+            if (address < 0x80000000u && m->debug_refill_tries < DEBUG_REFILL_TRIES) {
                 m->debug_refill_va = address;
+                m->debug_refill_tries++;
                 mips_raise_tlb_miss(&m->cpu, address);
                 return;
             }
@@ -2133,6 +2137,7 @@ static void capture_debug_string(machine_t *m, uint32_t va) {
         length++;
     }
     m->debug_refill_va = 0;
+    m->debug_refill_tries = 0;
     for (uint32_t i = 0; i < length; i++) debug_character(m, text[i]);
 }
 
