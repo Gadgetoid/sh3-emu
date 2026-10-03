@@ -93,6 +93,8 @@ Each ROM has its own saved machine, `state-ROM-HASH.bin` in the data folder. It'
 
 Snapshots are named copies of the machine, in `snapshots` in the data folder by default. Loading one is a restore point: autosave carries on to the ROM's own state.
 
+Backups go in `snapshots/Backups`: a copy of the machine every 10 minutes it runs, and one just before Reset…, Load State and Load Snapshot… replace it, and before `--fresh` starts over the saved state. The newest 10 per state are kept. Load one with State > Load Snapshot….
+
 If a serial cable was connected when the state was saved, the restored machine starts with it unplugged and plugs it back in two seconds later, so CE dials again instead of reusing a PPP session that no longer exists. If the state's card image has gone, the card starts out ejected and a newly inserted one goes in a second later, so CE registers the removal first.
 
 The data folder also holds `emu.ini` (settings), `rapi.sock` and the shared folder's sync manifest. `XDG_DATA_HOME` and `XDG_CONFIG_HOME` override its location, as the tests do; on Linux `emu.ini` is in `~/.config/velo-emu`. On macOS the first launch moves an older `~/.local/share/velo-emu` and `~/.config/velo-emu/emu.ini` into `~/Library/Application Support/Velo`.
