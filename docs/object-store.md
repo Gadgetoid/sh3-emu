@@ -97,6 +97,11 @@ Each chunk holds 4096 bytes of the file, the last one the remainder.
 | 2 | u16 | first key of HKCR |
 | 4 | u16 | first key of HKCU |
 | 6 | u16 | first key of HKLM |
+| 8 | u16 | first key of HKU |
+| 10 | u16 | first value of HKCR |
+| 12 | u16 | first value of HKCU |
+| 14 | u16 | first value of HKLM |
+| 16 | u16 | first value of HKU |
 
 ### Registry key (0xc, CE 2.0)
 

@@ -613,6 +613,7 @@ static bool registry_root(const store_t *store, const char *name, size_t length,
             if (store->registry && ce1_root(store, roots[i].index, first, value)) return true;
         } else if (read_object(store, store->registry_roots, &record) && record.type == OBJECT_ROOTS && 2u + 2 * (roots[i].index + 1) <= record.size) {
             *first = get16(record.data + 2 + 2 * roots[i].index);
+            if (10u + 2 * (roots[i].index + 1) <= record.size) *value = get16(record.data + 10 + 2 * roots[i].index);
             return true;
         }
         fprintf(stderr, "velo-state: no %.*s in this state\n", (int)length, name);
