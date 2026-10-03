@@ -101,9 +101,15 @@ if pkg-config --exists slirp; then
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
     ./velo-rapi --socket="$SOCKET" baud 115200 && ./velo-rapi --socket="$SOCKET" proxy on
     PROXY=$(./velo-rapi --socket="$SOCKET" reg get HKCU/Software/Apps/PocketIE ProxyServer)
+    { for i in $(seq 600); do echo "line $i of a file read back from a saved state"; done; head -c 6000 /dev/urandom; } > "$OUT/mixed.bin"
+    ./velo-rapi --socket="$SOCKET" put "$OUT/mixed.bin"
     kill -TERM $EMULATOR
     wait $EMULATOR
     if [ "$PROXY" = 'string "10.0.2.4"' ] && ./headless "$ROM" --load="$OUT/setup.state" --cable=2 --seconds=6 2>&1 | grep -q "at 115200 baud"; then echo "ok   rapi_setup"; else echo "FAIL rapi_setup"; exit 1; fi
+    rm -f "$OUT/mixed.back"
+    if [ "$(./velo-state "$OUT/setup.state" reg get HKCU/Software/Apps/PocketIE ProxyServer)" = 'string "10.0.2.4"' ] &&
+       ./velo-state "$OUT/setup.state" get mixed.bin "$OUT/mixed.back" && cmp -s "$OUT/mixed.bin" "$OUT/mixed.back" &&
+       ./velo-state "$OUT/desktop.state" diff "$OUT/setup.state" | grep -q '^+ HKCU\\Software\\Apps\\PocketIE\\UseProxy = dword 1'; then echo "ok   state_reader"; else echo "FAIL state_reader"; exit 1; fi
     ./headless "$ROM" --seconds=100000 --realtime=10 --load="$OUT/desktop.state" --net=1 --rapi="$SOCKET" >/dev/null 2>&1 &
     EMULATOR=$!
     for attempt in 1 2 3 4 5 6 7 8 9 10; do ./velo-rapi --socket="$SOCKET" info >/dev/null 2>&1 && break; sleep 1; done
@@ -192,6 +198,9 @@ if [ -f "$CE2_ROM" ]; then
     if ./headless "$ROM" --host-time --seconds=1 2>&1 | grep -q "clock: set from the host"; then echo "ok   ce2_host_time"; else echo "FAIL ce2_host_time"; exit 1; fi
     if ./headless "$ROM" --debug-output --seconds=3 2>&1 | grep -q "^debug: Configuring 480x240, 4bpp display"; then echo "ok   ce2_debug_output"; else echo "FAIL ce2_debug_output"; exit 1; fi
     check ce2_desktop aa64f3fba1031ff617de1871716776d2323a5a189c896269be719d5317119e5e --seconds=20
+    ./headless "$ROM" --seconds=20 --save="$OUT/ce2_desktop.state" 2>/dev/null
+    if [ "$(./velo-state "$OUT/ce2_desktop.state" reg get HKLM/init Launch50)" = 'string "explorer.exe"' ] &&
+       ./velo-state "$OUT/ce2_desktop.state" ls | grep -q "36  Shortcut to Templates.lnk"; then echo "ok   ce2_state_reader"; else echo "FAIL ce2_state_reader"; exit 1; fi
     check ce2_memory_20mb 66a2cc77cfed28615b0486c02a749163fc13755aa5cc01348fbc25e689cbaa05 --memory=20 --seconds=25
     check ce2_start_uncalibrated aa5f6f4b5de495a83c8c53ce380a80692321db5aec941043d2ec02839351d20b --tap=19:15:227:0.1 --seconds=22
     check ce2_double_tap_slow 56b264bbdadf6f1db2f529f1327ca958870aad786d21518c320638ab8b018b07 --tap=21:30:20:0.08 --tap=21.35:30:20:0.08 --seconds=24

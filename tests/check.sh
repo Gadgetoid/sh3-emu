@@ -7,7 +7,7 @@ expect_fail() {
     if "$@" > "$OUT/out.txt" 2>&1; then echo "FAIL $name (succeeded)"; exit 1; fi
     if grep -q -- "$pattern" "$OUT/out.txt"; then echo "ok   $name"; else echo "FAIL $name"; cat "$OUT/out.txt"; exit 1; fi
 }
-for tool in velo headless velo-rapi; do
+for tool in velo headless velo-rapi velo-state; do
     if ./$tool --help | grep -q "^usage: $tool" && ./$tool --version | grep -q "^$tool "; then echo "ok   ${tool}_help"; else echo "FAIL ${tool}_help"; exit 1; fi
 done
 expect_fail headless_no_rom "no ROM given" ./headless
@@ -17,6 +17,8 @@ expect_fail velo_bad_serial "wants net|pty|off|PORT" ./velo --serial=usb
 expect_fail headless_bad_screen "wants WxH" ./headless rom.bin --screen=1024x768
 expect_fail velo_bad_screen "wants WxH" ./velo --screen=640
 expect_fail velo_rapi_unknown "unknown option --frob" ./velo-rapi --frob
+expect_fail velo_state_unknown "unknown option --frob" ./velo-state --frob
+expect_fail velo_state_not_state "is not a Velo state" ./velo-state Makefile ls
 if pkg-config --exists slirp libcurl; then
     PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
     python3 -m http.server "$PORT" --bind 127.0.0.1 --directory tests/web >/dev/null 2>&1 &

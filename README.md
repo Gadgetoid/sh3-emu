@@ -96,6 +96,17 @@ Backups go in `snapshots/Backups`: a copy of the machine every 10 minutes it run
 
 If a serial cable was connected when the state was saved, the restored machine starts with it unplugged and plugs it back in two seconds later, so CE dials again instead of reusing a PPP session that no longer exists. If the state's card image has gone, the card starts out ejected and a newly inserted one goes in a second later, so CE registers the removal first.
 
+`velo-state` reads a saved state's RAM files and registry without running it, for states that won't boot, or to compare two:
+
+```
+velo-state state.bin ls "/Program Files"
+velo-state state.bin get Samples/Letter.pwd
+velo-state state.bin reg dump HKLM/Drivers
+velo-state before.bin diff after.bin
+```
+
+Paths, keys and output follow `velo-rapi`. Files in ROM aren't listed, and databases aren't read. On CE 1.0 the registry comes from `\Windows\Pegreg.reg`, as filesys last wrote it.
+
 The data folder also holds `emu.ini` (settings), `rapi.sock` and the shared folder's sync manifest. `XDG_DATA_HOME` and `XDG_CONFIG_HOME` override its location, as the tests do; on Linux `emu.ini` is in `~/.config/velo-emu`. On macOS the first launch moves an older `~/.local/share/velo-emu` and `~/.config/velo-emu/emu.ini` into `~/Library/Application Support/Velo`.
 
 ## PC Card storage
@@ -256,7 +267,7 @@ macOS:
 
 ```
 brew install sdl3 libslirp
-make            # velo and velo-rapi
+make            # velo, velo-rapi and velo-state
 make headless
 make app        # Velo.app, with its icon, its Homebrew libraries bundled and an ad-hoc signature
 ```
@@ -274,7 +285,7 @@ libslirp 4.8 and 4.9 both work. GitHub Actions builds `Velo.app` and the Debian 
 Tests:
 
 - `make check` needs no ROMs: the command lines, and the web proxy's rewriting and image conversion.
-- `make test` runs the full suite against `rom/nk.bin` (CE 1.0) and `rom/nk-ce2.bin` (the CE 2.0 upgrade's ROM on its own, optional), or `make test ROM=PATH CE2_ROM=PATH`. It boots both systems through the wizard to the desktop and compares framebuffer hashes at each step, and tests saved states, suspend and resume, cards, memory sizes, the clock, PPP, the web proxy in Pocket IE, RAPI file transfer, sync, registry setup and `.load` scripts.
+- `make test` runs the full suite against `rom/nk.bin` (CE 1.0) and `rom/nk-ce2.bin` (the CE 2.0 upgrade's ROM on its own, optional), or `make test ROM=PATH CE2_ROM=PATH`. It boots both systems through the wizard to the desktop and compares framebuffer hashes at each step, and tests saved states, suspend and resume, cards, memory sizes, the clock, PPP, the web proxy in Pocket IE, RAPI file transfer, sync, registry setup, `.load` scripts and reading saved states with `velo-state`.
 
 ## What's emulated
 

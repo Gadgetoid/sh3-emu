@@ -2,6 +2,7 @@ PROG      = velo
 HEADLESS  = headless
 PROXYCHECK = proxycheck
 VELORAPI  = velo-rapi
+VELOSTATE = velo-state
 BUILD     = build
 ROM      ?= rom/nk.bin
 CE2_ROM  ?= rom/nk-ce2.bin
@@ -51,7 +52,7 @@ SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/l
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
-all: $(PROG) $(VELORAPI)
+all: $(PROG) $(VELORAPI) $(VELOSTATE)
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -64,6 +65,9 @@ $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxy_check.o
 
 $(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/velo_rapi.o
 	$(CC) -o $@ $^
+
+$(VELOSTATE): $(BUILD)/src/util/options.o $(BUILD)/tools/velo_state.o
+	$(CC) -o $@ $^ -lz
 
 ICON_TOOL  = $(BUILD)/icon
 ICON_SIZES = 16 32 64 128 256 512 1024
@@ -108,14 +112,14 @@ vdisk:
 	done
 
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) Velo.app
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE) Velo.app
 
 .PHONY: all run clean test check app icons vdisk FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/icon.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/velo_state.d $(BUILD)/tools/icon.d
 
-check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
+check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
 	sh tests/check.sh
 
-test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI)
+test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
 	sh tests/boot.sh $(ROM) $(CE2_ROM)

@@ -5,6 +5,7 @@ rom/
 *.pgm
 proxycheck
 velo-rapi
+velo-state
 Velo.app/
 dist/
 .DS_Store
