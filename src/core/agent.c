@@ -59,7 +59,7 @@ static void disconnect(agent_t *agent, mailbox_t *mailbox) {
     agent->input_length = 0;
     if (!mailbox) return;
     mailbox->connected = false;
-    mailbox_clear(mailbox);
+    mailbox_clear_host(mailbox);
 }
 
 void agent_destroy(agent_t *agent) {
@@ -96,7 +96,7 @@ static void accept_host(agent_t *agent, mailbox_t *mailbox) {
     }
     agent->client = client;
     agent->input_length = 0;
-    mailbox_clear(mailbox);
+    mailbox_clear_host(mailbox);
     mailbox->connected = true;
     agent_log(agent, "agent: host connected\n");
 }

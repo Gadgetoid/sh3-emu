@@ -271,6 +271,18 @@ DLLs the process loads are reported to GDB, which loads symbols for them from th
 
 `monitor help` lists the rest: `processes`, `process`, `modules`, `libraries elf|dll`, `catch on|off` and `output on|off`. This works on CE 1.0 and 2.0. Threads aren't reported to GDB yet; it sees one thread, the one that's running.
 
+With velo-toolchain's `debugmgr.exe` running on the Velo (see Host mailbox), GDB can also copy files and start programs. The stub sends debugmgr requests through the mailbox itself, so it needs no `--agent`, and the two can be used together:
+
+```
+gdb maths.elf -ex 'target extended-remote :2159'
+(gdb) remote put maths.exe /Windows/maths.exe
+(gdb) set remote exec-file /Windows/maths.exe
+(gdb) break WinMain
+(gdb) run
+```
+
+`remote put`, `remote get` and `remote delete` go through debugmgr, and so does reading the program's file when GDB asks for it. `run` starts the program, debugs that process and stops when it starts; `kill` ends it. GDB treats `\` in `remote put` and `remote get` paths as an escape, so use `/` (the stub turns it into `\`) or double it. While a request is being handled the Velo runs, so other programs carry on. If debugmgr doesn't answer, GDB is told file transfer isn't supported and falls back to local files.
+
 ## Host mailbox
 
 An emulator-only message pipe between a program running on the Velo and a tool on the host, for agents such as velo-toolchain's debug manager that transfer and launch programs faster than RAPI. The emulator only passes messages; what they mean is up to the agent and its host tool.

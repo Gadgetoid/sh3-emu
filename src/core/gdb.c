@@ -27,6 +27,27 @@
 #define FAULT_HISTORY      8
 #define RUN_QUANTUM        (MACHINE_CLOCK_HZ / 100)
 #define LIBRARY_CHECK_QUANTA 10
+#define FILE_MAX           16
+#define FILE_PATH_MAX      260
+#define AGENT_TIMEOUT      (MACHINE_CLOCK_HZ * 5ull)
+#define AGENT_PROBE_TIMEOUT (MACHINE_CLOCK_HZ * 2ull)
+#define RUN_TIMEOUT        (MACHINE_CLOCK_HZ * 30ull)
+#define AGENT_PING         1
+#define AGENT_WRITE        2
+#define AGENT_READ         3
+#define AGENT_RUN          4
+#define AGENT_KILL         5
+#define AGENT_DELETE       7
+#define AGENT_CREATE       1u
+#define FILEIO_O_CREAT     0x200u
+#define FILEIO_O_TRUNC     0x400u
+#define FILEIO_ENOENT      2
+#define FILEIO_EBADF       9
+#define FILEIO_EACCES      13
+#define FILEIO_EEXIST      17
+#define FILEIO_EMFILE      24
+#define FILEIO_ENOSPC      28
+#define FILEIO_EUNKNOWN    9999
 #define REGISTER_COUNT     72
 #define REGISTER_SR        32
 #define REGISTER_LO        33
@@ -128,6 +149,18 @@ struct gdb {
 
     uint8_t  input[PACKET_MAX * 2];
     size_t   input_length;
+    size_t   packet_length;
+
+    bool     extended;
+    bool     inferior;
+    int      agent_state;
+    uint16_t agent_sequence;
+    char     files[FILE_MAX][FILE_PATH_MAX];
+    bool     file_open[FILE_MAX];
+    uint16_t run_sequence;
+    uint32_t run_status;
+    uint32_t run_pid;
+    bool     run_replied;
 
     uint32_t     breakpoints[BREAKPOINT_MAX];
     int          breakpoint_count;
@@ -237,20 +270,24 @@ static bool send_all(gdb_t *gdb, const char *data, size_t length) {
     return true;
 }
 
-static bool send_packet(gdb_t *gdb, const char *payload) {
+static bool send_packet_length(gdb_t *gdb, const char *payload, size_t payload_length) {
     if (gdb->client < 0) return false;
     static char frame[PACKET_MAX * 2 + 8];
     size_t length = 0;
     uint8_t checksum = 0;
     frame[length++] = '$';
-    for (const char *c = payload; *c && length < sizeof frame - 4; c++) {
-        frame[length++] = *c;
-        checksum += (uint8_t)*c;
+    for (size_t i = 0; i < payload_length && length < sizeof frame - 4; i++) {
+        frame[length++] = payload[i];
+        checksum += (uint8_t)payload[i];
     }
     frame[length++] = '#';
     frame[length++] = HEX[checksum >> 4];
     frame[length++] = HEX[checksum & 15];
     return send_all(gdb, frame, length);
+}
+
+static bool send_packet(gdb_t *gdb, const char *payload) {
+    return send_packet_length(gdb, payload, strlen(payload));
 }
 
 static void send_console(gdb_t *gdb, const char *text) {
@@ -451,7 +488,7 @@ static void on_exception(void *context, uint32_t code, uint32_t pc, bool user) {
 
 void gdb_debug_line(gdb_t *gdb, const char *line) {
     if (gdb->client < 0) return;
-    if (gdb->forward_output && !gdb->halted) {
+    if (gdb->forward_output && !gdb->halted && gdb->inferior) {
         char text[600];
         snprintf(text, sizeof text, "%s\n", line);
         send_console(gdb, text);
@@ -820,6 +857,357 @@ static void handle_vcont(gdb_t *gdb, const char *packet) {
     resume(gdb, action[0] == 's' || action[0] == 'S');
 }
 
+
+static void put_u16(uint8_t *data, size_t *length, uint32_t value) {
+    data[(*length)++] = (uint8_t)value;
+    data[(*length)++] = (uint8_t)(value >> 8);
+}
+
+static void put_u32(uint8_t *data, size_t *length, uint32_t value) {
+    put_u16(data, length, value & 0xFFFF);
+    put_u16(data, length, value >> 16);
+}
+
+static void put_string(uint8_t *data, size_t *length, const char *text) {
+    size_t count = strlen(text);
+    put_u16(data, length, (uint32_t)count);
+    for (size_t i = 0; i < count; i++) put_u16(data, length, (uint8_t)text[i]);
+}
+
+static uint32_t get_u32(const uint8_t *data) {
+    return (uint32_t)data[0] | (uint32_t)data[1] << 8 | (uint32_t)data[2] << 16 | (uint32_t)data[3] << 24;
+}
+
+static uint16_t start_request(gdb_t *gdb, uint8_t *message, size_t *length, uint16_t command) {
+    gdb->agent_sequence = (uint16_t)((gdb->agent_sequence + 1) & 0x7FFF);
+    uint16_t sequence = (uint16_t)(MAILBOX_EMULATOR_SEQUENCE | gdb->agent_sequence);
+    *length = 0;
+    put_u16(message, length, command);
+    put_u16(message, length, sequence);
+    return sequence;
+}
+
+static bool take_reply(gdb_t *gdb, uint16_t sequence, uint8_t *reply, uint32_t *reply_length) {
+    mailbox_t *mailbox = machine_mailbox(gdb->machine);
+    const mailbox_message_t *message;
+    while ((message = mailbox_peek(&mailbox->to_emulator))) {
+        uint16_t got = message->length >= 8 ? (uint16_t)(message->data[2] | message->data[3] << 8) : 0;
+        if (got && got == gdb->run_sequence && got != sequence) {
+            gdb->run_status = get_u32(message->data + 4);
+            gdb->run_pid = message->length >= 12 ? get_u32(message->data + 8) : 0;
+            gdb->run_replied = true;
+        }
+        bool wanted = got == sequence;
+        if (wanted) {
+            *reply_length = message->length;
+            memcpy(reply, message->data, message->length);
+        }
+        mailbox_pop(&mailbox->to_emulator);
+        if (wanted) return true;
+    }
+    return false;
+}
+
+static bool agent_request(gdb_t *gdb, const uint8_t *message, size_t length, uint16_t sequence, uint64_t timeout, uint8_t *reply,
+                          uint32_t *reply_length) {
+    mailbox_t *mailbox = machine_mailbox(gdb->machine);
+    if (!mailbox_push(&mailbox->to_guest_from_emulator, message, (uint32_t)length)) return false;
+    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    mips_debug_t *debug = cpu->debug;
+    cpu->debug = NULL;
+    uint64_t start = machine_cycles(gdb->machine);
+    bool replied = false;
+    while (!(replied = take_reply(gdb, sequence, reply, reply_length)) && machine_cycles(gdb->machine) - start < timeout)
+        machine_run(gdb->machine, RUN_QUANTUM);
+    cpu->debug = debug;
+    if (!replied) mailbox_clear_queue(&mailbox->to_guest_from_emulator);
+    return replied && *reply_length >= 8;
+}
+
+static bool agent_available(gdb_t *gdb) {
+    if (gdb->agent_state) return gdb->agent_state > 0;
+    static uint8_t message[16], reply[MAILBOX_MESSAGE_MAX];
+    size_t length;
+    uint32_t reply_length;
+    uint16_t sequence = start_request(gdb, message, &length, AGENT_PING);
+    bool ok = agent_request(gdb, message, length, sequence, AGENT_PROBE_TIMEOUT, reply, &reply_length) && get_u32(reply + 4) == 0;
+    gdb->agent_state = ok ? 1 : -1;
+    logf_gdb(gdb, ok ? "gdb: debugmgr answered; file transfer and run go through it\n" : "gdb: no agent answered; file transfer and run are off\n");
+    return ok;
+}
+
+static int fileio_errno(uint32_t status) {
+    switch (status) {
+    case 2:
+    case 3: return FILEIO_ENOENT;
+    case 5: return FILEIO_EACCES;
+    case 80:
+    case 183: return FILEIO_EEXIST;
+    case 112: return FILEIO_ENOSPC;
+    default: return FILEIO_EUNKNOWN;
+    }
+}
+
+static void reply_errno(gdb_t *gdb, int error) {
+    char reply[32];
+    snprintf(reply, sizeof reply, "F-1,%x", error);
+    send_packet(gdb, reply);
+}
+
+static void reply_result(gdb_t *gdb, uint32_t value) {
+    char reply[32];
+    snprintf(reply, sizeof reply, "F%x", value);
+    send_packet(gdb, reply);
+}
+
+static bool decode_hex_string(const char **cursor, char *text, size_t size) {
+    size_t length = 0;
+    while (hex_value((*cursor)[0]) >= 0 && hex_value((*cursor)[1]) >= 0) {
+        if (length + 1 >= size) return false;
+        text[length++] = (char)(hex_value((*cursor)[0]) << 4 | hex_value((*cursor)[1]));
+        *cursor += 2;
+    }
+    text[length] = 0;
+    return true;
+}
+
+static bool decode_hex_path(const char **cursor, char *path, size_t size) {
+    if (!decode_hex_string(cursor, path, size)) return false;
+    for (char *c = path; *c; c++) {
+        if (*c == '/') *c = '\\';
+    }
+    return true;
+}
+
+static bool file_call(gdb_t *gdb, uint16_t command, uint32_t offset, uint32_t value, const char *path, const uint8_t *data, size_t data_length,
+                      uint8_t *reply, uint32_t *reply_length, uint32_t *status) {
+    static uint8_t message[MAILBOX_MESSAGE_MAX];
+    size_t length;
+    uint16_t sequence = start_request(gdb, message, &length, command);
+    if (command == AGENT_WRITE || command == AGENT_READ) {
+        put_u32(message, &length, offset);
+        put_u32(message, &length, value);
+    }
+    put_string(message, &length, path);
+    if (data_length > sizeof message - length) return false;
+    memcpy(message + length, data, data_length);
+    length += data_length;
+    if (!agent_request(gdb, message, length, sequence, AGENT_TIMEOUT, reply, reply_length)) {
+        logf_gdb(gdb, "gdb: debugmgr didn't answer about %s\n", path);
+        return false;
+    }
+    *status = get_u32(reply + 4);
+    if (*status && command != AGENT_READ) logf_gdb(gdb, "gdb: debugmgr couldn't %s %s (status %u)\n", command == AGENT_DELETE ? "delete" : "write", path, *status);
+    return true;
+}
+
+static int file_descriptor(gdb_t *gdb, const char **cursor) {
+    uint32_t fd = parse_hex(cursor);
+    return fd < FILE_MAX && gdb->file_open[fd] ? (int)fd : -1;
+}
+
+static size_t unescape_binary(const char *data, size_t length, uint8_t *out) {
+    size_t used = 0;
+    for (size_t i = 0; i < length; i++) out[used++] = data[i] == '}' && i + 1 < length ? (uint8_t)(data[++i] ^ 0x20) : (uint8_t)data[i];
+    return used;
+}
+
+static void send_binary_reply(gdb_t *gdb, const char *prefix, const uint8_t *data, size_t length) {
+    static char reply[PACKET_MAX * 2 + 32];
+    size_t used = (size_t)snprintf(reply, sizeof reply, "%s", prefix);
+    for (size_t i = 0; i < length && used < sizeof reply - 3; i++) {
+        uint8_t c = data[i];
+        if (c == '#' || c == '$' || c == '}' || c == '*' || c == 0) {
+            reply[used++] = '}';
+            reply[used++] = (char)(c ^ 0x20);
+        } else {
+            reply[used++] = (char)c;
+        }
+    }
+    send_packet_length(gdb, reply, used);
+}
+
+static void handle_vfile(gdb_t *gdb, const char *packet) {
+    if (!strncmp(packet, "vFile:setfs:", 12)) {
+        send_packet(gdb, "F0");
+        return;
+    }
+    if (!agent_available(gdb)) {
+        send_packet(gdb, "");
+        return;
+    }
+    static uint8_t reply[MAILBOX_MESSAGE_MAX];
+    uint32_t reply_length, status;
+    char path[FILE_PATH_MAX];
+    if (!strncmp(packet, "vFile:open:", 11)) {
+        const char *cursor = packet + 11;
+        if (!decode_hex_path(&cursor, path, sizeof path) || *cursor++ != ',') { reply_errno(gdb, FILEIO_ENOENT); return; }
+        uint32_t flags = parse_hex(&cursor);
+        int fd = 0;
+        while (fd < FILE_MAX && gdb->file_open[fd]) fd++;
+        if (fd == FILE_MAX) { reply_errno(gdb, FILEIO_EMFILE); return; }
+        bool create = flags & (FILEIO_O_CREAT | FILEIO_O_TRUNC);
+        bool done = create ? file_call(gdb, AGENT_WRITE, 0, AGENT_CREATE, path, NULL, 0, reply, &reply_length, &status)
+                           : file_call(gdb, AGENT_READ, 0, 0, path, NULL, 0, reply, &reply_length, &status);
+        if (!done) { reply_errno(gdb, FILEIO_EUNKNOWN); return; }
+        if (status) { reply_errno(gdb, fileio_errno(status)); return; }
+        snprintf(gdb->files[fd], sizeof gdb->files[fd], "%s", path);
+        gdb->file_open[fd] = true;
+        reply_result(gdb, (uint32_t)fd);
+    } else if (!strncmp(packet, "vFile:close:", 12)) {
+        const char *cursor = packet + 12;
+        int fd = file_descriptor(gdb, &cursor);
+        if (fd < 0) { reply_errno(gdb, FILEIO_EBADF); return; }
+        gdb->file_open[fd] = false;
+        reply_result(gdb, 0);
+    } else if (!strncmp(packet, "vFile:pread:", 12)) {
+        const char *cursor = packet + 12;
+        int fd = file_descriptor(gdb, &cursor);
+        if (fd < 0 || *cursor++ != ',') { reply_errno(gdb, FILEIO_EBADF); return; }
+        uint32_t count = parse_hex(&cursor);
+        if (*cursor++ != ',') { reply_errno(gdb, FILEIO_EBADF); return; }
+        uint32_t offset = parse_hex(&cursor);
+        if (count > PACKET_MAX / 2 - 32) count = PACKET_MAX / 2 - 32;
+        if (!file_call(gdb, AGENT_READ, offset, count, gdb->files[fd], NULL, 0, reply, &reply_length, &status)) { reply_errno(gdb, FILEIO_EUNKNOWN); return; }
+        if (status || reply_length < 12) { reply_errno(gdb, fileio_errno(status)); return; }
+        char prefix[32];
+        snprintf(prefix, sizeof prefix, "F%x;", reply_length - 12);
+        send_binary_reply(gdb, prefix, reply + 12, reply_length - 12);
+    } else if (!strncmp(packet, "vFile:pwrite:", 13)) {
+        const char *cursor = packet + 13;
+        int fd = file_descriptor(gdb, &cursor);
+        if (fd < 0 || *cursor++ != ',') { reply_errno(gdb, FILEIO_EBADF); return; }
+        uint32_t offset = parse_hex(&cursor);
+        if (*cursor++ != ',') { reply_errno(gdb, FILEIO_EBADF); return; }
+        static uint8_t data[PACKET_MAX];
+        size_t length = unescape_binary(cursor, gdb->packet_length - (size_t)(cursor - packet), data);
+        if (!file_call(gdb, AGENT_WRITE, offset, 0, gdb->files[fd], data, length, reply, &reply_length, &status)) { reply_errno(gdb, FILEIO_EUNKNOWN); return; }
+        if (status) { reply_errno(gdb, fileio_errno(status)); return; }
+        reply_result(gdb, (uint32_t)length);
+    } else if (!strncmp(packet, "vFile:unlink:", 13)) {
+        const char *cursor = packet + 13;
+        if (!decode_hex_path(&cursor, path, sizeof path)) { reply_errno(gdb, FILEIO_ENOENT); return; }
+        if (!file_call(gdb, AGENT_DELETE, 0, 0, path, NULL, 0, reply, &reply_length, &status)) { reply_errno(gdb, FILEIO_EUNKNOWN); return; }
+        if (status) reply_errno(gdb, fileio_errno(status));
+        else reply_result(gdb, 0);
+    } else {
+        send_packet(gdb, "");
+    }
+}
+
+static const char *leaf_name(const char *path) {
+    const char *leaf = path;
+    for (const char *c = path; *c; c++) {
+        if (*c == '\\' || *c == '/') leaf = c + 1;
+    }
+    return leaf;
+}
+
+static void handle_vrun(gdb_t *gdb, const char *packet) {
+    char program[FILE_PATH_MAX], arguments[FILE_PATH_MAX] = "", argument[FILE_PATH_MAX];
+    const char *cursor = packet + 5;
+    if (!decode_hex_path(&cursor, program, sizeof program) || !program[0] || !agent_available(gdb)) {
+        send_packet(gdb, "E01");
+        return;
+    }
+    while (*cursor == ';') {
+        cursor++;
+        if (!decode_hex_string(&cursor, argument, sizeof argument)) break;
+        size_t used = strlen(arguments);
+        snprintf(arguments + used, sizeof arguments - used, "%s%s", used ? " " : "", argument);
+    }
+    gdb_set_process(gdb, NULL);
+    snprintf(gdb->process_name, sizeof gdb->process_name, "%s", leaf_name(program));
+    gdb->waiting_for_process = true;
+    gdb->last_user_process = current_process(gdb);
+    gdb->breakpoint_count = 0;
+    gdb->watchpoint_count = 0;
+    gdb->post_mortem = false;
+    update_debug(gdb);
+    static uint8_t message[MAILBOX_MESSAGE_MAX];
+    size_t length;
+    gdb->run_sequence = start_request(gdb, message, &length, AGENT_RUN);
+    gdb->run_replied = false;
+    put_string(message, &length, program);
+    put_string(message, &length, arguments);
+    mailbox_t *mailbox = machine_mailbox(gdb->machine);
+    mailbox_push(&mailbox->to_guest_from_emulator, message, (uint32_t)length);
+    gdb->debug.stop = false;
+    gdb->inferior = true;
+    uint64_t start = machine_cycles(gdb->machine);
+    uint8_t unused[8];
+    uint32_t unused_length;
+    while (!gdb->debug.stop && machine_cycles(gdb->machine) - start < RUN_TIMEOUT) {
+        machine_run(gdb->machine, RUN_QUANTUM);
+        take_reply(gdb, 0, unused, &unused_length);
+        if (gdb->run_replied && gdb->run_status) break;
+    }
+    if (!gdb->debug.stop) {
+        gdb->waiting_for_process = false;
+        update_debug(gdb);
+        if (gdb->run_replied && gdb->run_status) logf_gdb(gdb, "gdb: debugmgr couldn't start %s (status %u)\n", program, gdb->run_status);
+        else logf_gdb(gdb, "gdb: %s didn't start\n", program);
+        send_packet(gdb, "E01");
+        return;
+    }
+    gdb->debug.stop = false;
+    halt(gdb);
+}
+
+static void wait_for_exit(gdb_t *gdb) {
+    int process = gdb->process;
+    char name[CE_NAME_MAX];
+    if (process < 0 || !ce_process_name(&gdb->ce, process, name, sizeof name)) return;
+    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    mips_debug_t *debug = cpu->debug;
+    cpu->debug = NULL;
+    uint64_t start = machine_cycles(gdb->machine);
+    char now[CE_NAME_MAX];
+    while (ce_process_name(&gdb->ce, process, now, sizeof now) && !strcmp(now, name) && machine_cycles(gdb->machine) - start < AGENT_TIMEOUT)
+        machine_run(gdb->machine, RUN_QUANTUM);
+    cpu->debug = debug;
+}
+
+static bool kill_run_process(gdb_t *gdb) {
+    uint8_t unused[8];
+    uint32_t unused_length;
+    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    mips_debug_t *debug = cpu->debug;
+    cpu->debug = NULL;
+    uint64_t start = machine_cycles(gdb->machine);
+    while (take_reply(gdb, 0, unused, &unused_length), !gdb->run_replied && machine_cycles(gdb->machine) - start < AGENT_TIMEOUT)
+        machine_run(gdb->machine, RUN_QUANTUM);
+    cpu->debug = debug;
+    if (!gdb->run_replied || gdb->run_status || !agent_available(gdb)) return false;
+    static uint8_t message[16], reply[MAILBOX_MESSAGE_MAX];
+    size_t length;
+    uint32_t reply_length;
+    uint16_t sequence = start_request(gdb, message, &length, AGENT_KILL);
+    put_u32(message, &length, gdb->run_pid);
+    gdb->run_replied = false;
+    if (!agent_request(gdb, message, length, sequence, AGENT_TIMEOUT, reply, &reply_length)) return false;
+    uint32_t status = get_u32(reply + 4);
+    if (status) {
+        logf_gdb(gdb, "gdb: debugmgr couldn't end process %x (status %x)\n", gdb->run_pid, status);
+        return false;
+    }
+    wait_for_exit(gdb);
+    return true;
+}
+
+static void handle_vkill(gdb_t *gdb) {
+    bool started = gdb->run_sequence != 0;
+    if (started && !kill_run_process(gdb)) logf_gdb(gdb, "gdb: debugmgr couldn't end the program\n");
+    gdb->run_sequence = 0;
+    gdb->inferior = false;
+    gdb->halted = false;
+    gdb->waiting_for_process = false;
+    gdb->breakpoint_count = 0;
+    gdb->watchpoint_count = 0;
+    update_debug(gdb);
+    send_packet(gdb, "OK");
+}
+
 static void handle_packet(gdb_t *gdb, const char *packet) {
     switch (packet[0]) {
     case '?':
@@ -872,8 +1260,19 @@ static void handle_packet(gdb_t *gdb, const char *packet) {
         send_packet(gdb, "OK");
         return;
     case 'k':
+        if (gdb->extended) {
+            kill_run_process(gdb);
+            gdb->inferior = false;
+            gdb->halted = false;
+            update_debug(gdb);
+            return;
+        }
         gdb->killed = true;
         close_client(gdb);
+        return;
+    case '!':
+        gdb->extended = true;
+        send_packet(gdb, "OK");
         return;
     case 'D':
         send_packet(gdb, "OK");
@@ -881,6 +1280,9 @@ static void handle_packet(gdb_t *gdb, const char *packet) {
         return;
     case 'v':
         if (!strncmp(packet, "vCont", 5)) handle_vcont(gdb, packet);
+        else if (!strncmp(packet, "vFile:", 6)) handle_vfile(gdb, packet);
+        else if (!strncmp(packet, "vRun;", 5)) handle_vrun(gdb, packet);
+        else if (!strncmp(packet, "vKill;", 6)) handle_vkill(gdb);
         else send_packet(gdb, "");
         return;
     case 'q':
@@ -950,6 +1352,7 @@ static bool next_packet(gdb_t *gdb, char *packet, bool *interrupt) {
         if (length >= PACKET_MAX) length = PACKET_MAX - 1;
         memcpy(packet, gdb->input + 1, length);
         packet[length] = 0;
+        gdb->packet_length = length;
         consume(gdb, (size_t)(end - gdb->input) + 3);
         if (!gdb->no_ack) send_all(gdb, "+", 1);
         return true;
@@ -985,6 +1388,10 @@ static bool accept_client(gdb_t *gdb, bool wait) {
     gdb->client = client;
     gdb->no_ack = false;
     gdb->library_hash = 0;
+    gdb->extended = false;
+    gdb->inferior = true;
+    gdb->agent_state = 0;
+    memset(gdb->file_open, 0, sizeof gdb->file_open);
     gdb->killed = false;
     gdb->input_length = 0;
     gdb->stop_kind = STOP_SIGNAL;
@@ -1102,10 +1509,10 @@ static void check_libraries(gdb_t *gdb) {
 void gdb_after_run(gdb_t *gdb) {
     if (gdb->debug.stop) {
         gdb->debug.stop = false;
-        if (gdb->client >= 0) halt(gdb);
+        if (gdb->client >= 0 && gdb->inferior) halt(gdb);
         return;
     }
-    if (gdb->client >= 0 && !gdb->halted) check_libraries(gdb);
+    if (gdb->client >= 0 && !gdb->halted && gdb->inferior) check_libraries(gdb);
 }
 
 void gdb_set_machine(gdb_t *gdb, machine_t *machine) {

@@ -10,9 +10,23 @@
 #define REGISTER_A2 6
 #define PAGE_SIZE   0x1000u
 
+void mailbox_clear_queue(mailbox_queue_t *queue) {
+    while (queue->count) mailbox_pop(queue);
+}
+
+void mailbox_clear_host(mailbox_t *mailbox) {
+    mailbox_clear_queue(&mailbox->to_guest);
+    mailbox_clear_queue(&mailbox->to_host);
+}
+
 void mailbox_clear(mailbox_t *mailbox) {
-    while (mailbox->to_guest.count) mailbox_pop(&mailbox->to_guest);
-    while (mailbox->to_host.count) mailbox_pop(&mailbox->to_host);
+    mailbox_clear_host(mailbox);
+    mailbox_clear_queue(&mailbox->to_guest_from_emulator);
+    mailbox_clear_queue(&mailbox->to_emulator);
+}
+
+static bool for_emulator(const uint8_t *data, uint32_t length) {
+    return length >= 4 && ((uint32_t)data[2] | (uint32_t)data[3] << 8) >= MAILBOX_EMULATOR_SEQUENCE;
 }
 
 bool mailbox_push(mailbox_queue_t *queue, const uint8_t *data, uint32_t length) {
@@ -53,7 +67,8 @@ static bool copy_pages(mailbox_copy_fn copy, void *context, uint32_t va, uint8_t
 }
 
 static uint32_t receive(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn copy, void *context, uint32_t *fault_va, bool *faulted) {
-    const mailbox_message_t *message = mailbox_peek(&mailbox->to_guest);
+    mailbox_queue_t *queue = mailbox->to_guest_from_emulator.count ? &mailbox->to_guest_from_emulator : &mailbox->to_guest;
+    const mailbox_message_t *message = mailbox_peek(queue);
     if (!message) return 0;
     if (message->length > cpu->gpr[REGISTER_A2]) return (uint32_t)-(int32_t)message->length;
     if (!copy_pages(copy, context, cpu->gpr[REGISTER_A1], message->data, message->length, true, fault_va)) {
@@ -61,18 +76,20 @@ static uint32_t receive(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn cop
         return 0;
     }
     uint32_t length = message->length;
-    mailbox_pop(&mailbox->to_guest);
+    mailbox_pop(queue);
     return length;
 }
 
 static uint32_t send(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn copy, void *context, uint32_t *fault_va, bool *faulted) {
     uint32_t length = cpu->gpr[REGISTER_A2];
-    if (!mailbox->connected || length > MAILBOX_MESSAGE_MAX) return (uint32_t)-1;
+    if (length > MAILBOX_MESSAGE_MAX) return (uint32_t)-1;
     static uint8_t data[MAILBOX_MESSAGE_MAX];
     if (!copy_pages(copy, context, cpu->gpr[REGISTER_A1], data, length, false, fault_va)) {
         *faulted = true;
         return 0;
     }
+    if (for_emulator(data, length)) return mailbox_push(&mailbox->to_emulator, data, length) ? length : (uint32_t)-1;
+    if (!mailbox->connected) return (uint32_t)-1;
     return mailbox_push(&mailbox->to_host, data, length) ? length : (uint32_t)-1;
 }
 
