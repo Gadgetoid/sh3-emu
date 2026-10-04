@@ -10,11 +10,15 @@
 #define CE_CURRENT     (-1)
 
 #define CE_MODULE_MAX  64
+#define CE_SLOT_SIZE   0x02000000u
 
 typedef struct {
     machine_t *machine;
-    int        version;
+    uint32_t   kdata;
     uint32_t   process_array;
+    uint32_t   process_stride;
+    uint32_t   page_size;
+    uint32_t   pfn_mask;
     uint32_t   module_list;
 } ce_t;
 

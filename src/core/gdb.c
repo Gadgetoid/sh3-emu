@@ -49,13 +49,18 @@
 #define FILEIO_EMFILE      24
 #define FILEIO_ENOSPC      28
 #define FILEIO_EUNKNOWN    9999
-#define REGISTER_COUNT     72
-#define REGISTER_SR        32
-#define REGISTER_LO        33
-#define REGISTER_HI        34
-#define REGISTER_BADVADDR  35
-#define REGISTER_CAUSE     36
-#define REGISTER_PC        37
+#define REGISTER_COUNT     59
+#define REGISTER_PC        16
+#define REGISTER_PR        17
+#define REGISTER_GBR       18
+#define REGISTER_VBR       19
+#define REGISTER_MACH      20
+#define REGISTER_MACL      21
+#define REGISTER_SR        22
+#define REGISTER_SSR       41
+#define REGISTER_SPC       42
+#define REGISTER_BANK0     43
+#define REGISTER_BANK1     51
 #define KSEG0              0x80000000u
 #define ANY_PROCESS        (-1)
 
@@ -70,50 +75,14 @@ static const char TARGET_XML[] =
     "<?xml version=\"1.0\"?>\n"
     "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">\n"
     "<target version=\"1.0\">\n"
-    "<architecture>mips</architecture>\n"
-    "<feature name=\"org.gnu.gdb.mips.cpu\">\n"
-    "<reg name=\"r0\" bitsize=\"32\" regnum=\"0\"/><reg name=\"r1\" bitsize=\"32\"/><reg name=\"r2\" bitsize=\"32\"/>"
-    "<reg name=\"r3\" bitsize=\"32\"/><reg name=\"r4\" bitsize=\"32\"/><reg name=\"r5\" bitsize=\"32\"/><reg name=\"r6\" bitsize=\"32\"/>"
-    "<reg name=\"r7\" bitsize=\"32\"/><reg name=\"r8\" bitsize=\"32\"/><reg name=\"r9\" bitsize=\"32\"/><reg name=\"r10\" bitsize=\"32\"/>"
-    "<reg name=\"r11\" bitsize=\"32\"/><reg name=\"r12\" bitsize=\"32\"/><reg name=\"r13\" bitsize=\"32\"/><reg name=\"r14\" bitsize=\"32\"/>"
-    "<reg name=\"r15\" bitsize=\"32\"/><reg name=\"r16\" bitsize=\"32\"/><reg name=\"r17\" bitsize=\"32\"/><reg name=\"r18\" bitsize=\"32\"/>"
-    "<reg name=\"r19\" bitsize=\"32\"/><reg name=\"r20\" bitsize=\"32\"/><reg name=\"r21\" bitsize=\"32\"/><reg name=\"r22\" bitsize=\"32\"/>"
-    "<reg name=\"r23\" bitsize=\"32\"/><reg name=\"r24\" bitsize=\"32\"/><reg name=\"r25\" bitsize=\"32\"/><reg name=\"r26\" bitsize=\"32\"/>"
-    "<reg name=\"r27\" bitsize=\"32\"/><reg name=\"r28\" bitsize=\"32\"/><reg name=\"r29\" bitsize=\"32\"/><reg name=\"r30\" bitsize=\"32\"/>"
-    "<reg name=\"r31\" bitsize=\"32\"/>\n"
-    "<reg name=\"lo\" bitsize=\"32\" regnum=\"33\"/><reg name=\"hi\" bitsize=\"32\" regnum=\"34\"/>"
-    "<reg name=\"pc\" bitsize=\"32\" regnum=\"37\"/>\n"
-    "</feature>\n"
-    "<feature name=\"org.gnu.gdb.mips.cp0\">\n"
-    "<reg name=\"status\" bitsize=\"32\" regnum=\"32\"/><reg name=\"badvaddr\" bitsize=\"32\" regnum=\"35\"/>"
-    "<reg name=\"cause\" bitsize=\"32\" regnum=\"36\"/>\n"
-    "</feature>\n"
-    "<feature name=\"org.gnu.gdb.mips.fpu\">\n"
-    "<reg name=\"f0\" bitsize=\"32\" type=\"ieee_single\" regnum=\"38\"/><reg name=\"f1\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f2\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f3\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f4\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f5\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f6\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f7\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f8\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f9\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f10\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f11\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f12\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f13\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f14\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f15\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f16\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f17\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f18\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f19\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f20\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f21\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f22\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f23\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f24\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f25\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f26\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f27\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f28\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f29\" bitsize=\"32\" type=\"ieee_single\"/>"
-    "<reg name=\"f30\" bitsize=\"32\" type=\"ieee_single\"/><reg name=\"f31\" bitsize=\"32\" type=\"ieee_single\"/>\n"
-    "<reg name=\"fcsr\" bitsize=\"32\" group=\"float\" regnum=\"70\"/><reg name=\"fir\" bitsize=\"32\" group=\"float\" regnum=\"71\"/>\n"
-    "</feature>\n"
+    "<architecture>sh3</architecture>\n"
     "</target>\n";
 
 typedef enum { STOP_NONE, STOP_SIGNAL, STOP_WATCH, STOP_LIBRARY } stop_kind_t;
 
 typedef struct {
-    uint32_t gpr[32];
-    uint32_t lo, hi, status, badvaddr, cause, pc;
+    uint32_t r[16];
+    uint32_t pc, pr, gbr, mach, macl, sr, tea;
     uint32_t code;
     int      process;
 } fault_t;
@@ -128,7 +97,7 @@ struct gdb {
     machine_t   *machine;
     ce_t         ce;
     gdb_log_fn   log;
-    mips_debug_t debug;
+    sh3_debug_t debug;
     int          listener;
     int          client;
     bool         no_ack;
@@ -306,16 +275,15 @@ static void send_console(gdb_t *gdb, const char *text) {
 
 static int fault_signal(uint32_t code) {
     switch (code) {
-    case MIPS_EXC_MOD:
-    case MIPS_EXC_TLBL:
-    case MIPS_EXC_TLBS:
-    case MIPS_EXC_ADEL:
-    case MIPS_EXC_ADES: return SIGNAL_SEGV;
-    case MIPS_EXC_IBE:
-    case MIPS_EXC_DBE: return SIGNAL_BUS;
-    case MIPS_EXC_RI:
-    case MIPS_EXC_CPU: return SIGNAL_ILL;
-    case MIPS_EXC_OV: return SIGNAL_FPE;
+    case SH3_EXP_TLB_MISS_READ:
+    case SH3_EXP_TLB_MISS_WRITE:
+    case SH3_EXP_INITIAL_WRITE:
+    case SH3_EXP_PROTECT_READ:
+    case SH3_EXP_PROTECT_WRITE: return SIGNAL_SEGV;
+    case SH3_EXP_ADDRESS_READ:
+    case SH3_EXP_ADDRESS_WRITE: return SIGNAL_BUS;
+    case SH3_EXP_ILLEGAL:
+    case SH3_EXP_SLOT_ILLEGAL: return SIGNAL_ILL;
     default: return SIGNAL_TRAP;
     }
 }
@@ -331,12 +299,12 @@ static int memory_process(gdb_t *gdb) {
 
 static bool split_address(uint32_t va, int process, int *owner, uint32_t *offset) {
     if (va >= KSEG0) return false;
-    if (va < MIPS_SLOT_SIZE) {
+    if (va < CE_SLOT_SIZE) {
         *owner = process;
         *offset = va;
     } else {
-        *owner = (int)(va / MIPS_SLOT_SIZE) - 1;
-        *offset = va & (MIPS_SLOT_SIZE - 1);
+        *owner = (int)(va / CE_SLOT_SIZE) - 1;
+        *offset = va & (CE_SLOT_SIZE - 1);
     }
     return true;
 }
@@ -354,8 +322,8 @@ static uint32_t current_library_hash(gdb_t *gdb);
 
 static void update_debug(gdb_t *gdb) {
     memset(gdb->debug.filter, 0, sizeof gdb->debug.filter);
-    for (int i = 0; i < gdb->breakpoint_count; i++) mips_debug_filter_add(&gdb->debug, gdb->breakpoints[i]);
-    for (int i = 0; i < gdb->entry_break_count; i++) mips_debug_filter_add(&gdb->debug, gdb->entry_breaks[i]);
+    for (int i = 0; i < gdb->breakpoint_count; i++) sh3_debug_filter_add(&gdb->debug, gdb->breakpoints[i]);
+    for (int i = 0; i < gdb->entry_break_count; i++) sh3_debug_filter_add(&gdb->debug, gdb->entry_breaks[i]);
     gdb->debug.every = gdb->stepping || gdb->resume_skip || gdb->waiting_for_process || gdb->module_added || gdb->entry_written;
     gdb->debug.data = gdb->watchpoint_count > 0 || (gdb->client >= 0 && gdb->module_list_known);
 }
@@ -368,9 +336,9 @@ static void request_stop(gdb_t *gdb, stop_kind_t kind, int signal) {
 
 static bool on_before(void *context, uint32_t pc) {
     gdb_t *gdb = context;
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
     int process = current_process(gdb);
-    bool user = mips_user_mode(cpu);
+    bool user = sh3_user_mode(cpu);
     if (gdb->resume_skip && pc == gdb->resume_pc && process == gdb->resume_process) {
         gdb->resume_skip = false;
         update_debug(gdb);
@@ -477,15 +445,18 @@ static bool on_access(void *context, uint32_t va, int size, bool write) {
 static void on_exception(void *context, uint32_t code, uint32_t pc, bool user) {
     gdb_t *gdb = context;
     if (!user) return;
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
+    if (code == SH3_EXP_TLB_MISS_READ || code == SH3_EXP_TLB_MISS_WRITE || code == SH3_EXP_INITIAL_WRITE) return;
+    if (code == SH3_EXP_ADDRESS_READ && cpu->tea >= 0xFFFF0000u && (cpu->tea & 1)) return;
     fault_t *fault = &gdb->faults[gdb->fault_next];
     gdb->fault_next = (gdb->fault_next + 1) % FAULT_HISTORY;
-    memcpy(fault->gpr, cpu->gpr, sizeof fault->gpr);
-    fault->lo = cpu->lo;
-    fault->hi = cpu->hi;
-    fault->status = cpu->cp0[CP0_STATUS];
-    fault->badvaddr = cpu->cp0[CP0_BADVADDR];
-    fault->cause = (cpu->cp0[CP0_CAUSE] & ~0x7Cu) | code << 2;
+    memcpy(fault->r, cpu->r, sizeof fault->r);
+    fault->pr = cpu->pr;
+    fault->gbr = cpu->gbr;
+    fault->mach = cpu->mach;
+    fault->macl = cpu->macl;
+    fault->sr = cpu->sr;
+    fault->tea = cpu->tea;
     fault->pc = pc;
     fault->code = code;
     fault->process = current_process(gdb);
@@ -499,10 +470,10 @@ void gdb_debug_line(gdb_t *gdb, const char *line) {
         send_console(gdb, text);
     }
     unsigned code;
-    if (!gdb->catch_faults || sscanf(line, "Exception %u", &code) != 1) return;
+    if (!gdb->catch_faults || sscanf(line, "Exception %x", &code) != 1) return;
     for (int back = 1; back <= FAULT_HISTORY; back++) {
         const fault_t *fault = &gdb->faults[(gdb->fault_next + FAULT_HISTORY - back) % FAULT_HISTORY];
-        if (fault->code != code || (!fault->pc && !fault->badvaddr)) continue;
+        if (fault->code != code || (!fault->pc && !fault->tea)) continue;
         if (gdb->process >= 0 && fault->process != gdb->process) return;
         gdb->post_mortem_fault = *fault;
         gdb->post_mortem = true;
@@ -513,43 +484,50 @@ void gdb_debug_line(gdb_t *gdb, const char *line) {
 }
 
 static uint32_t read_register(gdb_t *gdb, int number) {
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
     if (gdb->post_mortem) {
         const fault_t *fault = &gdb->post_mortem_fault;
-        if (number < 32) return fault->gpr[number];
+        if (number < 16) return fault->r[number];
         switch (number) {
-        case REGISTER_SR: return fault->status;
-        case REGISTER_LO: return fault->lo;
-        case REGISTER_HI: return fault->hi;
-        case REGISTER_BADVADDR: return fault->badvaddr;
-        case REGISTER_CAUSE: return fault->cause;
         case REGISTER_PC: return fault->pc;
+        case REGISTER_PR: return fault->pr;
+        case REGISTER_GBR: return fault->gbr;
+        case REGISTER_MACH: return fault->mach;
+        case REGISTER_MACL: return fault->macl;
+        case REGISTER_SR: return fault->sr;
         default: return 0;
         }
     }
-    if (number < 32) return cpu->gpr[number];
+    bool bank1 = (cpu->sr & SH3_SR_MD) && (cpu->sr & SH3_SR_RB);
+    if (number < 16) return cpu->r[number];
+    if (number >= REGISTER_BANK0 && number < REGISTER_BANK0 + 8) return bank1 ? cpu->bank[number - REGISTER_BANK0] : cpu->r[number - REGISTER_BANK0];
+    if (number >= REGISTER_BANK1 && number < REGISTER_BANK1 + 8) return bank1 ? cpu->r[number - REGISTER_BANK1] : cpu->bank[number - REGISTER_BANK1];
     switch (number) {
-    case REGISTER_SR: return cpu->cp0[CP0_STATUS];
-    case REGISTER_LO: return cpu->lo;
-    case REGISTER_HI: return cpu->hi;
-    case REGISTER_BADVADDR: return cpu->cp0[CP0_BADVADDR];
-    case REGISTER_CAUSE: return cpu->cp0[CP0_CAUSE];
     case REGISTER_PC: return cpu->pc;
+    case REGISTER_PR: return cpu->pr;
+    case REGISTER_GBR: return cpu->gbr;
+    case REGISTER_VBR: return cpu->vbr;
+    case REGISTER_MACH: return cpu->mach;
+    case REGISTER_MACL: return cpu->macl;
+    case REGISTER_SR: return cpu->sr;
+    case REGISTER_SSR: return cpu->ssr;
+    case REGISTER_SPC: return cpu->spc;
     default: return 0;
     }
 }
 
 static void write_register(gdb_t *gdb, int number, uint32_t value) {
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
     if (gdb->post_mortem) return;
-    if (number > 0 && number < 32) cpu->gpr[number] = value;
-    else if (number == REGISTER_LO) cpu->lo = value;
-    else if (number == REGISTER_HI) cpu->hi = value;
+    if (number < 16) cpu->r[number] = value;
+    else if (number == REGISTER_PR) cpu->pr = value;
+    else if (number == REGISTER_GBR) cpu->gbr = value;
+    else if (number == REGISTER_MACH) cpu->mach = value;
+    else if (number == REGISTER_MACL) cpu->macl = value;
+    else if (number == REGISTER_SR) cpu->sr = (cpu->sr & ~(SH3_SR_T | SH3_SR_S | SH3_SR_Q | SH3_SR_M)) | (value & (SH3_SR_T | SH3_SR_S | SH3_SR_Q | SH3_SR_M));
     else if (number == REGISTER_PC && value != cpu->pc) {
         cpu->pc = value;
-        cpu->next_pc = value + 4;
-        cpu->next_in_delay_slot = false;
-        mips_flush_translations(cpu);
+        sh3_flush_translations(cpu);
     }
 }
 
@@ -655,15 +633,15 @@ static void halt(gdb_t *gdb) {
         char name[CE_NAME_MAX] = "";
         ce_process_name(&gdb->ce, gdb->post_mortem_fault.process, name, sizeof name);
         char text[200];
-        snprintf(text, sizeof text, "velo: exception %u in %s at %08x, badvaddr %08x\n", gdb->post_mortem_fault.code, name[0] ? name : "a process",
-                 gdb->post_mortem_fault.pc, gdb->post_mortem_fault.badvaddr);
+        snprintf(text, sizeof text, "sh3-emu: exception %03x in %s at %08x, tea %08x\n", gdb->post_mortem_fault.code, name[0] ? name : "a process",
+                 gdb->post_mortem_fault.pc, gdb->post_mortem_fault.tea);
         send_console(gdb, text);
     }
     send_stop_reply(gdb);
 }
 
 static void resume(gdb_t *gdb, bool step) {
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
     gdb->watch_skip = gdb->stop_kind == STOP_WATCH;
     gdb->halted = false;
     gdb->post_mortem = false;
@@ -680,7 +658,7 @@ static void resume(gdb_t *gdb, bool step) {
         gdb->step_executed = false;
         gdb->step_pc = cpu->pc;
         gdb->step_process = gdb->resume_process;
-        gdb->step_user = mips_user_mode(cpu);
+        gdb->step_user = sh3_user_mode(cpu);
     }
     update_debug(gdb);
 }
@@ -819,7 +797,7 @@ static void monitor_processes(gdb_t *gdb) {
         char name[CE_NAME_MAX];
         if (!ce_process_name(&gdb->ce, process, name, sizeof name)) continue;
         monitor_reply(gdb, "%c%c %2d  %08x  %s\n", process == current ? '*' : ' ', process == gdb->process ? '>' : ' ', process,
-                      (uint32_t)(process + 1) * MIPS_SLOT_SIZE, name);
+                      (uint32_t)(process + 1) * CE_SLOT_SIZE, name);
     }
 }
 
@@ -862,7 +840,7 @@ static void handle_monitor(gdb_t *gdb, const char *packet) {
         else if (argument && !strcmp(argument, "on")) gdb->forward_output = true;
         monitor_reply(gdb, "CE debug output: %s\n", gdb->forward_output ? "on" : "off");
     } else {
-        monitor_reply(gdb, "velo-emu monitor commands:\n"
+        monitor_reply(gdb, "sh3-emu monitor commands:\n"
                            "  processes          list CE's processes (* current, > debugged)\n"
                            "  process [NAME|any] debug one process; stops when it starts if it isn't running\n"
                            "  modules            list loaded modules (* used by the debugged process)\n"
@@ -950,8 +928,8 @@ static bool agent_request(gdb_t *gdb, const uint8_t *message, size_t length, uin
                           uint32_t *reply_length) {
     mailbox_t *mailbox = machine_mailbox(gdb->machine);
     if (!mailbox_push(&mailbox->to_guest_from_emulator, message, (uint32_t)length)) return false;
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
-    mips_debug_t *debug = cpu->debug;
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_debug_t *debug = cpu->debug;
     cpu->debug = NULL;
     uint64_t start = machine_cycles(gdb->machine);
     bool replied = false;
@@ -1200,8 +1178,8 @@ static void wait_for_exit(gdb_t *gdb) {
     int process = gdb->process;
     char name[CE_NAME_MAX];
     if (process < 0 || !ce_process_name(&gdb->ce, process, name, sizeof name)) return;
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
-    mips_debug_t *debug = cpu->debug;
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_debug_t *debug = cpu->debug;
     cpu->debug = NULL;
     uint64_t start = machine_cycles(gdb->machine);
     char now[CE_NAME_MAX];
@@ -1213,8 +1191,8 @@ static void wait_for_exit(gdb_t *gdb) {
 static bool kill_run_process(gdb_t *gdb) {
     uint8_t unused[8];
     uint32_t unused_length;
-    mips_cpu_t *cpu = machine_cpu(gdb->machine);
-    mips_debug_t *debug = cpu->debug;
+    sh3_cpu_t *cpu = machine_cpu(gdb->machine);
+    sh3_debug_t *debug = cpu->debug;
     cpu->debug = NULL;
     uint64_t start = machine_cycles(gdb->machine);
     while (take_reply(gdb, 0, unused, &unused_length), !gdb->run_replied && machine_cycles(gdb->machine) - start < AGENT_TIMEOUT)
@@ -1617,7 +1595,7 @@ void gdb_set_machine(gdb_t *gdb, machine_t *machine) {
     if (gdb_halted(gdb)) {
         gdb->stop_kind = STOP_SIGNAL;
         gdb->stop_signal = SIGNAL_TRAP;
-        send_console(gdb, "velo: switched machine\n");
+        send_console(gdb, "sh3-emu: switched machine\n");
     }
 }
 

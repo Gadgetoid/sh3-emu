@@ -637,6 +637,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
         uint64_t until = next < target ? next : target;
         if (until <= m->cpu.cycles) until = m->cpu.cycles + 1;
         sh3_run(&m->cpu, until);
+        if (m->cpu.debug && m->cpu.debug->stop) break;
     }
     sh7709_advance(&m->chip);
 }
