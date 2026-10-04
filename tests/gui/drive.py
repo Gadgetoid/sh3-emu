@@ -107,6 +107,10 @@ def main():
     driver.key("Return")
     time.sleep(2)
     driver.screenshot(sys.argv[1])
+    if len(sys.argv) > 2:
+        driver.text(sys.argv[2])
+        driver.key("Return")
+        time.sleep(3)
 
 
 main()

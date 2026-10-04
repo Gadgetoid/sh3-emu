@@ -1,10 +1,12 @@
 #include "core/machine.h"
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <zlib.h>
 
 #include "core/cfcard.h"
@@ -885,10 +887,15 @@ static void ppfs_log(void *context, const char *message) {
     machine_logf(context, "%s", message);
 }
 
-void machine_set_host_folder(machine_t *m, const char *path) {
-    ppfs_set_root(&m->ppfs, path);
+bool machine_set_host_folder(machine_t *m, const char *path) {
+    char absolute[PATH_MAX];
+    struct stat info;
+    bool usable = !path || !path[0] || (realpath(path, absolute) && !stat(absolute, &info) && S_ISDIR(info.st_mode));
+    if (!usable) return false;
+    ppfs_set_root(&m->ppfs, path && path[0] ? absolute : NULL);
     m->ppfs.log = ppfs_log;
     m->ppfs.log_context = m;
+    return true;
 }
 
 void machine_reset(machine_t *m) {

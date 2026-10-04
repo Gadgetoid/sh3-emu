@@ -1051,7 +1051,6 @@ int main(int argc, char **argv) {
 
 
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
-    if (host_folder) machine_set_host_folder(machine, host_folder);
 
     menu_install(window);
 
@@ -1063,6 +1062,16 @@ int main(int argc, char **argv) {
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
     char folder_notice[1200], paste_notice[64];
+    if (launch.folder && !machine_set_host_folder(machine, launch.folder)) {
+        fprintf(stderr, "cannot open folder %s\n", launch.folder);
+        return 1;
+    }
+    if (!launch.folder && host_folder && !machine_set_host_folder(machine, host_folder)) {
+        snprintf(folder_notice, sizeof folder_notice, "host folder %s is missing", host_folder);
+        notice = folder_notice;
+        notice_left = NOTICE_SECONDS * 3;
+        host_folder = NULL;
+    }
     static typer_t typer;
     static scroller_t scroller;
     static input_queue_t input;
@@ -1426,8 +1435,9 @@ int main(int argc, char **argv) {
                 snprintf(settings.host_folder, sizeof settings.host_folder, "%s", picked->paths[0]);
                 settings_save(&settings);
                 host_folder = settings.host_folder;
-                machine_set_host_folder(machine, host_folder);
-                snprintf(folder_notice, sizeof folder_notice, "sharing %s as \\PPFS", file_leaf_name(host_folder));
+                bool served = machine_set_host_folder(machine, host_folder);
+                snprintf(folder_notice, sizeof folder_notice, served ? "serving %s to PPFS" : "cannot open folder %s", file_leaf_name(host_folder));
+                if (!served) host_folder = NULL;
                 notice = folder_notice;
                 notice_left = NOTICE_SECONDS * 2;
             }

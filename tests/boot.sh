@@ -46,7 +46,8 @@ PROGRAM=${PPFS_PROGRAM:-rom/mbtest.exe}
 if [ -f "$PROGRAM" ]; then
     rm -rf "$OUT/folder" && mkdir -p "$OUT/folder" && cp "$PROGRAM" "$OUT/folder/"
     name=$(basename "$PROGRAM" .exe)
-    if ./headless "$ROM" --load="$OUT/desktop.state" --folder="$OUT/folder" --debug-output --seconds=8 --key=2:11+0D --key=4:11+2D "--type=6:$name\n" 2>&1 | grep -q "^ppfs: opened .*$name.exe"; then echo "ok   ppfs"; else echo "FAIL ppfs"; exit 1; fi
+    if ./headless "$ROM" --load="$OUT/desktop.state" --folder="$OUT/folder" --debug-output --seconds=8 --key=2:11+0D --key=4:11+2D "--type=6:$name\n" > "$OUT/ppfs.log" 2>&1 &&
+        grep -q "^ppfs: opened .*$name.exe" "$OUT/ppfs.log" && grep -q "^debug: $name: " "$OUT/ppfs.log"; then echo "ok   ppfs"; else echo "FAIL ppfs"; cat "$OUT/ppfs.log"; exit 1; fi
 else
     echo "skip ppfs: no $PROGRAM (an SH3 program that isn't in ROM)"
 fi

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #include "core/agent.h"
@@ -286,6 +287,11 @@ int main(int argc, char **argv) {
         return 2;
     }
     run.rom_path = positional[0];
+    struct stat folder_info;
+    if (run.folder && (stat(run.folder, &folder_info) || !S_ISDIR(folder_info.st_mode))) {
+        fprintf(stderr, "cannot open folder %s\n", run.folder);
+        return 1;
+    }
     if (run.gdb_port && !run.seconds_given) run.seconds = 1e7;
     double latest = run.soft_reset_at;
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
@@ -310,7 +316,7 @@ int main(int argc, char **argv) {
     if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.trace_exceptions) machine_trace_exceptions(machine, true);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
-    if (run.folder) machine_set_host_folder(machine, run.folder);
+    if (run.folder && !machine_set_host_folder(machine, run.folder)) { fprintf(stderr, "cannot open folder %s\n", run.folder); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.gdb_process && !run.gdb_port) {

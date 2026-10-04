@@ -43,7 +43,7 @@ bool machine_suspended(machine_t *machine);
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
-void machine_set_host_folder(machine_t *machine, const char *path);
+bool machine_set_host_folder(machine_t *machine, const char *path);
 
 void machine_reset(machine_t *machine);
 void machine_soft_reset(machine_t *machine);

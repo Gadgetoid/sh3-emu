@@ -8,7 +8,7 @@ It boots a Windows CE 2.11 image built from Platform Builder 2.11 for Odo SH3 to
 
 No ROMs are included. The target image is a Platform Builder 2.11 `nk.bin` for the Odo platform, `_TGTCPU=SH3`, project MAXALL, built as a RAM image (loaded at 8C600000). Platform Builder 2.11 ships the Odo board support package with its source, and the SH3 kernel and OAK libraries, but no prebuilt SH3 image. Its build tools run under Wine. Under Wine, `nmake` hands `PUBLIC/COMMON/OAK/MISC/SRCGEN1.BAT` an argument with a trailing line break, which breaks `sources.gen`, so that file needs `%_PROJECTROOT%\cesysgen` in place of `%3`.
 
-The tests expect velo-toolchain's debugmgr in the image: build it as an Odo platform component (a `PLATFORM/ODO/TEST/DEBUGMGR` directory with a `SOURCES` file, `debugmgr.c` with its `host_call` replaced by the SH helper below, and the helper as `SHX/HOSTCALL.SRC`), and list it in `PLATFORM/ODO/FILES/PLATFORM.BIB` under MODULES as `debugmgr.exe $(_FLATRELEASEDIR)\debugmgr.exe NK S`. Put the image at `rom/odo-sh3.bin`. The PPFS test also wants an SH3 program that isn't in ROM at `rom/mbtest.exe` (or `PPFS_PROGRAM=PATH`).
+The tests expect velo-toolchain's debugmgr in the image: build it as an Odo platform component (a `PLATFORM/ODO/TEST/DEBUGMGR` directory with a `SOURCES` file, `debugmgr.c` with its `host_call` replaced by the SH helper below, and the helper as `SHX/HOSTCALL.SRC`), and list it in `PLATFORM/ODO/FILES/PLATFORM.BIB` under MODULES as `debugmgr.exe $(_FLATRELEASEDIR)\debugmgr.exe NK S`. Put the image at `rom/odo-sh3.bin`. The PPFS tests also want an SH3 program that isn't in ROM at `rom/mbtest.exe` (or `PPFS_PROGRAM=PATH`, a program that prints a debug line starting `NAME: `).
 
 ## Running
 
@@ -39,7 +39,7 @@ The card has a CompactFlash CIS, a configuration option register, and ATA IDENTI
 
 ## Host folder (PPFS)
 
-The Odo's parallel port carried Platform Builder's parallel-port file system: when CE can't find a program or DLL in ROM or the object store, the kernel asks the host for it. `--folder=DIR` makes the emulator that host, serving DIR, so programs built for SH3 run without rebuilding the image: copy `hello.exe` into DIR and run `hello` from Task Manager's Run dialog. Names are matched without their path and case-insensitively. Without `--folder`, the port answers that no file exists, so CE doesn't wait on a missing host.
+The Odo's parallel port carried Platform Builder's parallel-port file system: when CE can't find a program or DLL in ROM or the object store, the kernel asks the host for it. `--folder=DIR` makes the emulator that host, serving DIR, so programs built for SH3 run without rebuilding the image: copy `hello.exe` into DIR and run `hello` from Task Manager's Run dialog. Names are matched without their path and case-insensitively. Without `--folder`, the port answers that no file exists, so CE doesn't wait on a missing host. The folder isn't a drive CE can browse: start its programs by name from Run, `cmd` or a shortcut. Misses are logged as `ppfs: no NAME in DIR`; a folder that doesn't exist is an error.
 
 ## Debugging and file transfer
 
@@ -86,7 +86,7 @@ Not yet: sound output, serial ports to the host, PC Cards other than CompactFlas
 
 - `make check` needs no ROMs: the command lines.
 - `make test` runs the CPU tests, boots `rom/odo-sh3.bin` (or `make test ROM=PATH`) through calibration to the desktop and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, and runs a program from `--folder`.
-- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, calibrates, opens the console and lists a directory with injected mouse and key events, saves a screenshot, and checks it used its own data folder.
+- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, calibrates, opens the console and lists a directory with injected mouse and key events, saves a screenshot, runs `mbtest` from the host folder set in `sh3emu.ini`, and checks it used its own data folder.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 
