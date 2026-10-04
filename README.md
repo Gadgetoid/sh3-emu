@@ -64,7 +64,7 @@ The host mailbox and GDB stub are velo-emu's, ported to the SH-3.
 - `--gdb=PORT` serves GDB's remote protocol. The target description names the `sh3` architecture, and the `g` packet follows GDB's SH-3 register layout (r0-r15, pc, pr, gbr, vbr, mach, macl, sr, unused FPU slots, ssr, spc and both banks of r0-r7). Breakpoints, watchpoints and single steps are the emulator's own, not code patches. `monitor processes` and `monitor modules` read CE 2.11's process and module lists. In extended mode (`target extended-remote`), `remote put` and `remote get`, `set remote exec-file` with `starti` or `run`, and `kill` go through debugmgr.
 
 ```
-./headless rom/odo-sh3-debug.bin --load=debugmgr.state --gdb=1234
+./headless rom/odo-sh3.bin --load=debugmgr.state --gdb=1234
 gdb -ex "set architecture sh3" -ex "target extended-remote :1234" -ex 'set remote exec-file \Windows\cmd.exe' -ex starti
 ```
 
