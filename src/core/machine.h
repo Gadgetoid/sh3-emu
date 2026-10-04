@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "core/key_text.h"
+#include "core/mailbox.h"
 #include "core/sh3.h"
 #include "core/screen.h"
 
@@ -21,6 +22,7 @@ void       machine_destroy(machine_t *machine);
 void       machine_set_log(machine_t *machine, machine_log_fn log);
 void       machine_run(machine_t *machine, uint64_t cycles);
 sh3_cpu_t *machine_cpu(machine_t *machine);
+mailbox_t *machine_mailbox(machine_t *machine);
 bool       machine_read_physical(machine_t *machine, uint32_t pa, uint8_t *data, uint32_t length);
 bool       machine_write_physical(machine_t *machine, uint32_t pa, const uint8_t *data, uint32_t length);
 uint64_t   machine_cycles(machine_t *machine);

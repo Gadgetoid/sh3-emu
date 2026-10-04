@@ -3,12 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define REGISTER_V0 2
-#define REGISTER_V1 3
-#define REGISTER_A0 4
-#define REGISTER_A1 5
-#define REGISTER_A2 6
-#define PAGE_SIZE   0x1000u
+#define PAGE_SIZE   0x400u
 
 void mailbox_clear_queue(mailbox_queue_t *queue) {
     while (queue->count) mailbox_pop(queue);
@@ -66,12 +61,12 @@ static bool copy_pages(mailbox_copy_fn copy, void *context, uint32_t va, uint8_t
     return true;
 }
 
-static uint32_t receive(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn copy, void *context, uint32_t *fault_va, bool *faulted) {
+static uint32_t receive(mailbox_t *mailbox, mailbox_call_t *call, mailbox_copy_fn copy, void *context, uint32_t *fault_va, bool *faulted) {
     mailbox_queue_t *queue = mailbox->to_guest_from_emulator.count ? &mailbox->to_guest_from_emulator : &mailbox->to_guest;
     const mailbox_message_t *message = mailbox_peek(queue);
     if (!message) return 0;
-    if (message->length > cpu->gpr[REGISTER_A2]) return (uint32_t)-(int32_t)message->length;
-    if (!copy_pages(copy, context, cpu->gpr[REGISTER_A1], message->data, message->length, true, fault_va)) {
+    if (message->length > call->length) return (uint32_t)-(int32_t)message->length;
+    if (!copy_pages(copy, context, call->buffer, message->data, message->length, true, fault_va)) {
         *faulted = true;
         return 0;
     }
@@ -80,11 +75,11 @@ static uint32_t receive(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn cop
     return length;
 }
 
-static uint32_t send(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn copy, void *context, uint32_t *fault_va, bool *faulted) {
-    uint32_t length = cpu->gpr[REGISTER_A2];
+static uint32_t send(mailbox_t *mailbox, mailbox_call_t *call, mailbox_copy_fn copy, void *context, uint32_t *fault_va, bool *faulted) {
+    uint32_t length = call->length;
     if (length > MAILBOX_MESSAGE_MAX) return (uint32_t)-1;
     static uint8_t data[MAILBOX_MESSAGE_MAX];
-    if (!copy_pages(copy, context, cpu->gpr[REGISTER_A1], data, length, false, fault_va)) {
+    if (!copy_pages(copy, context, call->buffer, data, length, false, fault_va)) {
         *faulted = true;
         return 0;
     }
@@ -93,18 +88,18 @@ static uint32_t send(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn copy, 
     return mailbox_push(&mailbox->to_host, data, length) ? length : (uint32_t)-1;
 }
 
-bool mailbox_trap(mailbox_t *mailbox, mips_cpu_t *cpu, mailbox_copy_fn copy, void *context, uint32_t *fault_va) {
+bool mailbox_trap(mailbox_t *mailbox, mailbox_call_t *call, mailbox_copy_fn copy, void *context, uint32_t *fault_va) {
     bool faulted = false;
     uint32_t result = (uint32_t)-1;
-    switch (cpu->gpr[REGISTER_A0]) {
+    switch (call->operation) {
     case MAILBOX_PROBE:
         result = MAILBOX_VERSION;
-        cpu->gpr[REGISTER_V1] = MAILBOX_MESSAGE_MAX;
+        call->extra = MAILBOX_MESSAGE_MAX;
         break;
-    case MAILBOX_RECV: result = receive(mailbox, cpu, copy, context, fault_va, &faulted); break;
-    case MAILBOX_SEND: result = send(mailbox, cpu, copy, context, fault_va, &faulted); break;
+    case MAILBOX_RECV: result = receive(mailbox, call, copy, context, fault_va, &faulted); break;
+    case MAILBOX_SEND: result = send(mailbox, call, copy, context, fault_va, &faulted); break;
     }
     if (faulted) return false;
-    cpu->gpr[REGISTER_V0] = result;
+    call->result = result;
     return true;
 }

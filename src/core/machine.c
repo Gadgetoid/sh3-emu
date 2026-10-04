@@ -7,6 +7,7 @@
 #include <time.h>
 #include <zlib.h>
 
+#include "core/mailbox.h"
 #include "core/sh7709.h"
 
 #define DRAM_PA            0x0C000000u
@@ -91,6 +92,14 @@
 
 #define STATE_MAGIC        "SH3ODO01"
 
+#define MAILBOX_FAULT_TRIES 4
+#define MAILBOX_PAGES      ((MAILBOX_MESSAGE_MAX >> 10) + 2)
+
+typedef struct {
+    uint32_t page, pa;
+    bool     write;
+} mailbox_page_t;
+
 typedef struct {
     uint16_t csr_a, csr_b;
     char     line[256];
@@ -122,6 +131,13 @@ struct machine {
     uint16_t  adc_x, adc_y;
     bool      pen_down;
     uint64_t  pen_timer_at;
+
+    mailbox_t mailbox;
+    uint32_t  mailbox_fault_va;
+    int       mailbox_fault_tries;
+    uint32_t  mailbox_pc;
+    mailbox_page_t mailbox_pages[MAILBOX_PAGES];
+    int       mailbox_page_count;
 
     machine_log_fn log;
     sh3_debug_t exception_debug;
@@ -460,6 +476,65 @@ static uint64_t hash_bytes(const uint8_t *data, size_t length) {
     return hash;
 }
 
+static bool mailbox_page(machine_t *m, uint32_t va, bool write, uint32_t *pa) {
+    uint32_t page = va & ~0x3FFu;
+    for (int i = 0; i < m->mailbox_page_count; i++) {
+        if (m->mailbox_pages[i].page == page && (m->mailbox_pages[i].write || !write)) {
+            *pa = m->mailbox_pages[i].pa | (va & 0x3FFu);
+            return true;
+        }
+    }
+    if (va >= 0x80000000u || !sh3_translate(&m->cpu, va, write, pa)) return false;
+    if (m->mailbox_page_count < (int)MAILBOX_PAGES)
+        m->mailbox_pages[m->mailbox_page_count++] = (mailbox_page_t){ page, *pa & ~0x3FFu, write };
+    return true;
+}
+
+static bool mailbox_copy(void *context, uint32_t va, uint8_t *data, uint32_t length, bool write) {
+    machine_t *m = context;
+    uint32_t pa;
+    if (!mailbox_page(m, va, write, &pa)) return false;
+    pa &= AREA_MASK;
+    if (pa - DRAM_PA >= m->dram_size || length > m->dram_size - (pa - DRAM_PA)) return false;
+    if (write) memcpy(m->dram + (pa - DRAM_PA), data, length);
+    else memcpy(data, m->dram + (pa - DRAM_PA), length);
+    return true;
+}
+
+static bool on_trapa(void *context, uint32_t number) {
+    machine_t *m = context;
+    sh3_cpu_t *cpu = &m->cpu;
+    if (number != MAILBOX_TRAPA || !sh3_user_mode(cpu)) return false;
+    uint32_t pc = cpu->pc - 2;
+    if (pc != m->mailbox_pc) {
+        m->mailbox_pc = pc;
+        m->mailbox_page_count = 0;
+        m->mailbox_fault_tries = 0;
+    }
+    mailbox_call_t call = { .operation = cpu->r[4], .buffer = cpu->r[5], .length = cpu->r[6], .extra = cpu->r[1] };
+    uint32_t fault_va;
+    if (mailbox_trap(&m->mailbox, &call, mailbox_copy, m, &fault_va)) {
+        cpu->r[0] = call.result;
+        cpu->r[1] = call.extra;
+        m->mailbox_pc = 0;
+        m->mailbox_page_count = 0;
+        m->mailbox_fault_tries = 0;
+        return true;
+    }
+    if (fault_va != m->mailbox_fault_va) m->mailbox_fault_tries = 0;
+    m->mailbox_fault_va = fault_va;
+    if (++m->mailbox_fault_tries > MAILBOX_FAULT_TRIES) {
+        m->mailbox_fault_tries = 0;
+        m->mailbox_pc = 0;
+        cpu->r[0] = (uint32_t)-1;
+        return true;
+    }
+    sh3_raise_memory_fault(cpu, fault_va, call.operation == MAILBOX_RECV);
+    return true;
+}
+
+mailbox_t *machine_mailbox(machine_t *m) { return &m->mailbox; }
+
 static void on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
     machine_logf(m, "watch: pc %08X r4=%08X r5=%08X r6=%08X r7=%08X pr=%08X\n", pc, m->cpu.r[4], m->cpu.r[5], m->cpu.r[6], m->cpu.r[7], m->cpu.pr);
@@ -501,7 +576,11 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     }
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.on_watch = on_watch;
+    m->cpu.on_trapa = on_trapa;
     sh3_reset(&m->cpu);
+    mailbox_clear(&m->mailbox);
+    m->mailbox_pc = 0;
+    m->mailbox_page_count = 0;
     m->cpu.pc = m->entry;
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
@@ -540,6 +619,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
 
 void machine_destroy(machine_t *m) {
     if (!m) return;
+    mailbox_clear(&m->mailbox);
     free(m->dram);
     free(m->image);
     free(m);
@@ -830,7 +910,8 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.debug = debug;
     m->cpu.on_watch = on_watch;
-    m->cpu.on_trapa = NULL;
+    m->cpu.on_trapa = on_trapa;
+    mailbox_clear(&m->mailbox);
     m->cpu.on_interrupt = NULL;
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);

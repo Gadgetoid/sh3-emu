@@ -4,6 +4,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "core/agent.h"
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
@@ -21,8 +22,21 @@ static void request_stop(int signal_number) {
     stop_requested = 1;
 }
 
+static agent_t *agent;
+
+#define AGENT_POLL_CYCLES (MACHINE_CLOCK_HZ / 100)
+
 static void advance(machine_t *machine, uint64_t cycles) {
-    machine_run(machine, cycles);
+    if (!agent) {
+        machine_run(machine, cycles);
+        return;
+    }
+    while (cycles && !stop_requested) {
+        uint64_t step = cycles < AGENT_POLL_CYCLES ? cycles : AGENT_POLL_CYCLES;
+        machine_run(machine, step);
+        agent_poll(agent, machine_mailbox(machine));
+        cycles -= step;
+    }
 }
 
 static double wall_seconds(void) {
@@ -118,13 +132,14 @@ typedef struct {
     int      type_count;
     uint32_t memory, speed;
     screen_size_t screen;
+    const char *agent_socket;
     bool     debug_output;
 } run_t;
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DISK, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_INSERT_DISK, OPT_EJECT_DISK,
-    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
+    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_AGENT, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
 };
 
@@ -152,6 +167,7 @@ static const option_t OPTIONS[] = {
     [OPT_HEADING_NET] = { NULL, NULL, "Serial and network", 0 },
     [OPT_NET] = { "net", "SECONDS", "connect COM1 to the PPP gateway and web proxy", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the Velo's RAPI port on a Unix socket, for velo-rapi --socket", 0 },
+    [OPT_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's trapa #0xCE mailbox and one client on this Unix socket", 0 },
     [OPT_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
     [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, as the app does after a speed change", 0 },
     [OPT_CABLE] = { "cable", "SECONDS", "connect a bare serial cable, with nothing at the other end", 0 },
@@ -252,6 +268,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         return true;
     case OPT_NET: return option_number(value, &run->net_at) && run->net_at >= 0;
     case OPT_RAPI: run->net_options.rapi_socket = value; return true;
+    case OPT_AGENT: run->agent_socket = value; return true;
     case OPT_USER_AGENT: run->net_options.user_agent = value; return true;
     case OPT_REPLUG: return option_number(value, &run->replug_at) && run->replug_at >= 0;
     case OPT_CABLE: return option_number(value, &run->cable_at) && run->cable_at >= 0;
@@ -338,6 +355,10 @@ int main(int argc, char **argv) {
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     if (run.disk && !machine_insert_disk(machine, run.disk, false)) { fprintf(stderr, "cannot open disk image %s\n", run.disk); return 1; }
+    if (run.agent_socket && !(agent = agent_create(run.agent_socket, log_stderr))) {
+        fprintf(stderr, "cannot listen on agent socket %s\n", run.agent_socket);
+        return 1;
+    }
     screen_size_t screen = machine_screen_size(machine);
     for (int t = 0; t < run.tap_count; t++) {
         if (run.tap_x[t] >= screen.width || run.tap_y[t] >= screen.height) {
@@ -387,6 +408,7 @@ int main(int argc, char **argv) {
         }
         if (run.replug_at >= 0 && gateway && (uint64_t)(run.replug_at * MACHINE_CLOCK_HZ) < done + slice) {
             net_gateway_destroy(gateway);
+    agent_destroy(agent);
             gateway = NULL;
             machine_serial_connect(machine, false);
             run.net_at = run.replug_at + 2;
@@ -488,6 +510,7 @@ int main(int argc, char **argv) {
     }
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     net_gateway_destroy(gateway);
+    agent_destroy(agent);
     machine_destroy(machine);
     free(rom);
     return 0;

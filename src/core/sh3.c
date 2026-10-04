@@ -230,6 +230,13 @@ static void memory_fault(sh3_cpu_t *cpu, translate_result_t result, uint32_t va,
     }
 }
 
+void sh3_raise_memory_fault(sh3_cpu_t *cpu, uint32_t va, bool write) {
+    uint32_t pa;
+    translate_result_t result = translate(cpu, va, write, &pa);
+    if (result == TRANSLATE_OK) result = TRANSLATE_MISS;
+    memory_fault(cpu, result, va, write);
+}
+
 static uint32_t cache_tag(const sh3_cpu_t *cpu, uint32_t va) {
     return (va & 0xFFFFFC00u) | (sh3_asid(cpu) << 2) | (sh3_user_mode(cpu) ? 2u : 0u) | 1u;
 }

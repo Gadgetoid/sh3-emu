@@ -124,6 +124,7 @@ void sh3_reset(sh3_cpu_t *cpu);
 void sh3_run(sh3_cpu_t *cpu, uint64_t until_cycle);
 void sh3_set_interrupt(sh3_cpu_t *cpu, uint32_t level, uint32_t code);
 void sh3_set_sr(sh3_cpu_t *cpu, uint32_t value);
+void sh3_raise_memory_fault(sh3_cpu_t *cpu, uint32_t va, bool write);
 bool sh3_translate(sh3_cpu_t *cpu, uint32_t va, bool write, uint32_t *pa);
 void sh3_flush_translations(sh3_cpu_t *cpu);
 bool sh3_user_mode(const sh3_cpu_t *cpu);
