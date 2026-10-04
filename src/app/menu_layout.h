@@ -110,6 +110,9 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_HEADING, 0, "Host Folder (PPFS)", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_HOST_FOLDER, "Choose Host Folder" ELLIPSIS, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_STOP_HOST_FOLDER, "Stop Sharing Folder", 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_HEADING, 0, "Serial Port (COM1)", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_NETWORK, "Network (PPP)", 'n', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 };
 

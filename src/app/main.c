@@ -18,6 +18,7 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
+#include "net/net_link.h"
 #include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
@@ -32,6 +33,7 @@
 
 #define WINDOW_SCALE     2
 #define IDLE_FRAME_NS    (SDL_NS_PER_SECOND / 60)
+#define NETWORK_REPLUG_MS 2000
 #define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
@@ -176,6 +178,17 @@ static void input_clear(input_queue_t *input) {
 
 static gdb_t *debugger;
 static agent_t *agent;
+static net_link_t network;
+
+static bool set_network(machine_t *machine, bool on, uint64_t *plug_at) {
+    machine_serial_connect(machine, false);
+    *plug_at = 0;
+    if (!on) return true;
+    if (!network.gateway) network.gateway = net_gateway_create(NULL);
+    if (!network.gateway) return false;
+    *plug_at = SDL_GetTicks() + NETWORK_REPLUG_MS;
+    return true;
+}
 
 static void log_gdb(const char *message) {
     fputs(message, stderr);
@@ -214,6 +227,7 @@ static int run_machine(void *context) {
                 machine_run(runner->machine, RUN_SLICE_CYCLES);
                 owed -= RUN_SLICE_CYCLES;
                 if (agent) agent_poll(agent, machine_mailbox(runner->machine));
+                net_link_pump(&network, runner->machine);
                 if (!debugger) continue;
                 gdb_after_run(debugger);
                 if (gdb_halted(debugger)) break;
@@ -489,6 +503,7 @@ typedef struct {
     char     machine[64];
     uint32_t display;
     char     host_folder[1024];
+    uint32_t network;
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -542,6 +557,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
         else if (!strncmp(line, "machine=", 8)) copy_setting(settings.machine, sizeof settings.machine, line + 8);
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
+        else if (sscanf(line, "network=%u", &value) == 1) settings.network = value;
         else if (!strncmp(line, "host_folder=", 12)) copy_setting(settings.host_folder, sizeof settings.host_folder, line + 12);
     }
     fclose(file);
@@ -553,9 +569,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nhost_folder=%s\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nhost_folder=%s\nnetwork=%u\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->host_folder);
+            settings->host_folder, settings->network);
     fclose(file);
 }
 
@@ -927,7 +943,7 @@ typedef struct {
 
 enum {
     LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_FOLDER, LAUNCH_MEMORY, LAUNCH_SPEED,
-    LAUNCH_HEADING_CONNECTIONS, LAUNCH_AGENT,
+    LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
 
@@ -941,6 +957,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
+    [LAUNCH_NET] = { "net", NULL, "plug COM1 into the PPP network (Devices > Network), and remember that", 0 },
     [LAUNCH_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's trapa #0xCE mailbox and one client on this Unix socket", 0 },
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
     [LAUNCH_VERBOSE] = { "verbose", NULL, "log unmodelled hardware accesses to stderr", 0 },
@@ -976,6 +993,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
         launch->gdb_port = (int)integer;
         return true;
     case LAUNCH_GDB_PROCESS: launch->gdb_process = value; return true;
+    case LAUNCH_NET: settings->network = 1; return true;
     case LAUNCH_AGENT: launch->agent_socket = value; return true;
     }
     return false;
@@ -1090,6 +1108,11 @@ int main(int argc, char **argv) {
             return 1;
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
+    }
+    uint64_t network_plug_at = 0;
+    if (settings.network && !set_network(machine, true, &network_plug_at)) {
+        fprintf(stderr, "sh3emu: the network needs a build with libslirp\n");
+        settings.network = 0;
     }
     if (launch.agent_socket && !(agent = agent_create(launch.agent_socket, log_gdb))) {
         fprintf(stderr, "sh3emu: cannot listen on agent socket %s\n", launch.agent_socket);
@@ -1310,6 +1333,7 @@ int main(int argc, char **argv) {
             case MENU_LOAD_STATE:
                 backup_machine(machine, state);
                 notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
+                set_network(machine, settings.network != 0, &network_plug_at);
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_SHOW_STATE: reveal_file(state); break;
@@ -1367,6 +1391,17 @@ int main(int argc, char **argv) {
                 notice = folder_notice;
                 notice_left = NOTICE_SECONDS;
                 break;
+            case MENU_NETWORK:
+                if (!set_network(machine, !settings.network, &network_plug_at)) {
+                    notice = "this build has no network (libslirp)";
+                    notice_left = NOTICE_SECONDS * 2;
+                    break;
+                }
+                settings.network = !settings.network;
+                settings_save(&settings);
+                notice = settings.network ? "network cable plugged in; CE dials it" : "network cable unplugged";
+                notice_left = NOTICE_SECONDS * 2;
+                break;
             case MENU_EJECT_CARD:
                 machine_eject_card(machine);
                 notice = "card ejected";
@@ -1398,6 +1433,7 @@ int main(int argc, char **argv) {
                     snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
                     settings_save(&settings);
                     if (host_folder) machine_set_host_folder(machine, host_folder);
+                    set_network(machine, settings.network != 0, &network_plug_at);
                     since_backup = 0;
                     runner.machine = machine;
                     runner.restart = true;
@@ -1425,6 +1461,7 @@ int main(int argc, char **argv) {
                 static char snapshot_notice[1200];
                 if (machine_state_matches(machine, picked->paths[0])) backup_machine(machine, state);
                 if (machine_load(machine, picked->paths[0], NULL)) {
+                    set_network(machine, settings.network != 0, &network_plug_at);
                     snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked->paths[0]));
                 } else {
                     snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", file_leaf_name(picked->paths[0]));
@@ -1447,6 +1484,12 @@ int main(int argc, char **argv) {
         menu_ensure();
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_enabled(MENU_STOP_HOST_FOLDER, host_folder != NULL);
+        menu_set_enabled(MENU_NETWORK, net_gateway_available());
+        menu_set_checked(MENU_NETWORK, settings.network != 0);
+        if (network_plug_at && SDL_GetTicks() >= network_plug_at) {
+            network_plug_at = 0;
+            machine_serial_connect(machine, true);
+        }
         reap_reveal_children();
         menu_set_checked(MENU_PAUSE, paused);
         for (int i = 0; i < PROFILES_MAX; i++) {
@@ -1522,6 +1565,7 @@ int main(int argc, char **argv) {
     gdb_destroy(debugger);
     debugger = NULL;
     agent_destroy(agent);
+    net_gateway_destroy(network.gateway);
     agent = NULL;
     SDL_DestroyMutex(runner.lock);
     free(picked);

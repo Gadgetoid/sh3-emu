@@ -45,6 +45,13 @@ void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
 bool machine_set_host_folder(machine_t *machine, const char *path);
 
+void   machine_serial_connect(machine_t *machine, bool connected);
+bool   machine_serial_connected(machine_t *machine);
+bool   machine_serial_dtr(machine_t *machine);
+size_t machine_serial_space(machine_t *machine);
+size_t machine_serial_send(machine_t *machine, const uint8_t *data, size_t length);
+size_t machine_serial_take(machine_t *machine, uint8_t *out, size_t max);
+
 void machine_reset(machine_t *machine);
 void machine_soft_reset(machine_t *machine);
 bool machine_watch_pc(machine_t *machine, uint32_t va);

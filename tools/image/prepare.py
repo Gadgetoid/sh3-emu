@@ -48,8 +48,8 @@ def read_apps(apps_folder):
 
 
 def main():
-    tree, debugmgr = sys.argv[1], sys.argv[2]
-    apps_folder = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
+    tree, debugmgr, netdial = sys.argv[1], sys.argv[2], sys.argv[3]
+    apps_folder = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else None
     files = os.path.join(tree, "PLATFORM", "ODO", "FILES")
     apps = read_apps(apps_folder)
 
@@ -71,7 +71,9 @@ def main():
     ], "   FSRAMPERCENT=0x40404040\n")
 
     shutil.copyfile(debugmgr, os.path.join(files, "velo-debugmgr.exe"))
-    bib = ["", "FILES", "   velo-debugmgr.exe  $(_FLATRELEASEDIR)\\velo-debugmgr.exe  NK  S"]
+    shutil.copyfile(netdial, os.path.join(files, "netdial.exe"))
+    bib = ["", "FILES", "   velo-debugmgr.exe  $(_FLATRELEASEDIR)\\velo-debugmgr.exe  NK  S",
+           "   netdial.exe  $(_FLATRELEASEDIR)\\netdial.exe  NK  S"]
     dat = []
     folders = []
     for name, source, folder, title in apps:

@@ -1,6 +1,7 @@
 PROG      = sh3emu
 HEADLESS  = headless
 SH3RUN    = sh3-run
+GATEWAYCHECK = $(BUILD)/gateway-check
 APP       = SH3Emu.app
 BUILD     = build
 ROM      ?= rom/odo-sh3-ce212.bin
@@ -26,19 +27,30 @@ else
 SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
 endif
 
+ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
+SRC_NET   = src/net/net_gateway.c src/net/net_link.c
+CFLAGS   += $(shell pkg-config --cflags slirp)
+NET_LIBS  = $(shell pkg-config --libs slirp)
+else
+SRC_NET   = src/net/net_gateway_none.c src/net/net_link.c
+endif
+
 SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
-SRC_APP     = $(SRC_MACHINE) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
-OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
+OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
 all: $(HEADLESS) $(SH3RUN)
 
 $(PROG): $(OBJ_APP)
-	$(CC) -o $@ $^ $(LDFLAGS)
+	$(CC) -o $@ $^ $(LDFLAGS) $(NET_LIBS)
 
 $(HEADLESS): $(OBJ_HEADLESS)
-	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS)
+	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS) $(NET_LIBS)
+
+$(GATEWAYCHECK): $(filter-out %/net_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
+	$(CC) -o $@ $^ $(NET_LIBS)
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
 	$(CC) -o $@ $^
@@ -84,10 +96,11 @@ clean:
 
 .PHONY: all run clean test check app icons sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d
 
-check: $(HEADLESS) $(SH3RUN)
+check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK)
 	sh tests/check.sh
+	$(GATEWAYCHECK)
 
 test: $(HEADLESS) $(SH3RUN)
 	sh tests/sh3/run.sh

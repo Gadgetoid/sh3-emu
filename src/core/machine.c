@@ -96,10 +96,26 @@
 #define BCR2_INDEX         1
 #define CARD_PATH_MAX      1024
 
+#define SERA_RX_CHARACTER_INTR 0x8000u
+#define SERA_RX_CHANGED_INTR 0x0400u
+#define SERA_RI            0x0080u
+#define SERA_DSR           0x0040u
 #define SERA_TX_INTR       0x0010u
+#define SERA_CTS           0x0004u
+#define SERA_CD            0x0002u
 #define SERA_W1C_MASK      0xF618u
 #define SERA_RW_MASK       0x0901u
+#define SERA_LINES         (SERA_RI | SERA_DSR | SERA_CTS | SERA_CD)
+#define SERB_RX_EN         0x4000u
 #define SERB_TX_EN         0x2000u
+#define SERB_TX_STOP_AT_PAGE 0x1000u
+#define SERB_DTR           0x0100u
+#define INTR_PRODUCT_SERIAL 0x0008u
+#define SERIAL_TX_PAGE     0x800u
+#define SERIAL_RX_RING     0x1000u
+#define SERIAL_FIFO        16384
+#define SERIAL_BYTES_PER_TICK 12
+#define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / 1000)
 
 #define KB_RDRF            0x0001u
 #define KB_CLK_EN          0x8000u
@@ -143,6 +159,10 @@ struct machine {
     uint32_t  cpu_isr, cpu_mr;
     uint16_t  display_csr, display_xsize, display_ysize;
     p2_serial_t serial[3];
+    bool      serial_connected;
+    uint8_t   serial_rx[SERIAL_FIFO], serial_tx[SERIAL_FIFO];
+    uint32_t  serial_rx_head, serial_rx_count, serial_tx_count;
+    uint64_t  serial_tick_at;
     uint16_t  keyboard_csr, keyboard_isr;
     uint8_t   key_fifo[KEY_FIFO];
     uint32_t  key_head, key_count;
@@ -235,15 +255,71 @@ static p2_serial_t *serial_for(machine_t *m, uint32_t offset, int *slot) {
     return NULL;
 }
 
+static void update_product_serial_interrupt(machine_t *m) {
+    set_board_source(m, INTR_PRODUCT_SERIAL, (m->serial[1].csr_a & SERA_W1C_MASK) != 0);
+}
+
+static void set_serial_lines(machine_t *m) {
+    p2_serial_t *serial = &m->serial[1];
+    uint16_t lines = (uint16_t)(SERA_RI | (m->serial_connected ? 0 : SERA_DSR | SERA_CTS | SERA_CD));
+    if ((serial->csr_a & SERA_LINES) == lines) return;
+    serial->csr_a = (uint16_t)((serial->csr_a & ~SERA_LINES) | lines | SERA_RX_CHANGED_INTR);
+    update_product_serial_interrupt(m);
+}
+
+static void set_dma_low(machine_t *m, int slot, bool transmit, uint16_t value) {
+    uint32_t offset = ASIC_DMA_BASE + (uint32_t)slot * DMA_SLOT_STRIDE + (transmit ? 0x10000u : 0);
+    m->asic[(offset & (ASIC_SIZE - 1)) >> 1] = value;
+}
+
+static void product_serial_transmit(machine_t *m, p2_serial_t *serial) {
+    uint32_t pa = dma_pointer(m, SLOT_PRODUCT_SERIAL, true);
+    uint32_t end = (serial->csr_b & SERB_TX_STOP_AT_PAGE) ? (pa | (SERIAL_TX_PAGE - 1)) + 1 : pa + 1;
+    for (; pa < end; pa++) {
+        if (m->serial_connected && m->serial_tx_count < SERIAL_FIFO) m->serial_tx[m->serial_tx_count++] = read_dram_byte(m, pa);
+    }
+    uint32_t low = asic_get(m, ASIC_DMA_BASE + SLOT_PRODUCT_SERIAL * DMA_SLOT_STRIDE + 0x10000u);
+    set_dma_low(m, SLOT_PRODUCT_SERIAL, true, (uint16_t)(low + (end - dma_pointer(m, SLOT_PRODUCT_SERIAL, true))));
+    serial->csr_a |= SERA_TX_INTR;
+    update_product_serial_interrupt(m);
+}
+
+static void product_serial_receive(machine_t *m) {
+    p2_serial_t *serial = &m->serial[1];
+    if (!m->serial_rx_count || !(serial->csr_b & SERB_RX_EN)) return;
+    uint32_t base = ASIC_DMA_BASE + SLOT_PRODUCT_SERIAL * DMA_SLOT_STRIDE;
+    for (int i = 0; i < SERIAL_BYTES_PER_TICK && m->serial_rx_count; i++) {
+        uint32_t pa = dma_pointer(m, SLOT_PRODUCT_SERIAL, false);
+        if (pa - DRAM_PA < m->dram_size) m->dram[pa - DRAM_PA] = m->serial_rx[m->serial_rx_head];
+        m->serial_rx_head = (m->serial_rx_head + 1) % SERIAL_FIFO;
+        m->serial_rx_count--;
+        uint16_t low = asic_get(m, base);
+        set_dma_low(m, SLOT_PRODUCT_SERIAL, false, (uint16_t)((low & ~(SERIAL_RX_RING - 1)) | ((low + 1) & (SERIAL_RX_RING - 1))));
+    }
+    serial->csr_a |= SERA_RX_CHARACTER_INTR;
+    update_product_serial_interrupt(m);
+}
+
+static void serial_tick_event(machine_t *m) {
+    if (m->cpu.cycles < m->serial_tick_at) return;
+    m->serial_tick_at = m->cpu.cycles + SERIAL_TICK_CYCLES;
+    product_serial_receive(m);
+}
+
 static void serial_write(machine_t *m, p2_serial_t *serial, int slot, uint32_t offset, uint16_t value) {
     if ((offset & 0xF) == 0) {
         serial->csr_a &= (uint16_t)~(value & SERA_W1C_MASK);
         serial->csr_a = (uint16_t)((serial->csr_a & ~SERA_RW_MASK) | (value & SERA_RW_MASK));
+        if (slot == SLOT_PRODUCT_SERIAL) update_product_serial_interrupt(m);
         return;
     }
     uint16_t old = serial->csr_b;
     serial->csr_b = value;
     if (!(old & SERB_TX_EN) && (value & SERB_TX_EN)) {
+        if (slot == SLOT_PRODUCT_SERIAL) {
+            product_serial_transmit(m, serial);
+            return;
+        }
         uint8_t ch = read_dram_byte(m, dma_pointer(m, slot, true));
         if (slot == SLOT_DEBUG_SERIAL) debug_character(m, serial, ch);
         serial->csr_a |= SERA_TX_INTR;
@@ -710,6 +786,10 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     m->display_xsize = SCREEN_STOCK_WIDTH - 1;
     m->display_ysize = SCREEN_STOCK_HEIGHT - 1;
     memset(m->serial, 0, sizeof m->serial);
+    m->serial[1].csr_a = SERA_LINES;
+    set_serial_lines(m);
+    m->serial[1].csr_a &= (uint16_t)~SERA_RX_CHANGED_INTR;
+    m->serial_rx_count = m->serial_tx_count = 0;
     m->keyboard_csr = m->keyboard_isr = 0;
     m->key_head = m->key_count = 0;
     m->adc_cntr = m->adc_str = m->ucb_cntr = m->ucb_str = m->ucb_register = m->sound_cntr = m->sound_str = m->touch_mask = 0;
@@ -755,7 +835,9 @@ void machine_run(machine_t *m, uint64_t cycles) {
         sh7709_advance(&m->chip);
         pen_timer_event(m);
         pending_card_event(m);
+        serial_tick_event(m);
         uint64_t next = sh7709_next_event(&m->chip);
+        if (m->serial_rx_count && m->serial_tick_at < next) next = m->serial_tick_at;
         if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
         if (m->pen_timer_at && m->pen_timer_at < next) next = m->pen_timer_at;
         uint64_t until = next < target ? next : target;
@@ -882,6 +964,35 @@ void machine_eject_card(machine_t *m) {
 }
 
 bool machine_card_inserted(machine_t *m) { return m->card.inserted; }
+
+void machine_serial_connect(machine_t *m, bool connected) {
+    m->serial_connected = connected;
+    if (!connected) m->serial_rx_count = m->serial_tx_count = 0;
+    set_serial_lines(m);
+}
+
+bool machine_serial_connected(machine_t *m) { return m->serial_connected; }
+
+bool machine_serial_dtr(machine_t *m) { return (m->serial[1].csr_b & SERB_DTR) != 0; }
+
+size_t machine_serial_space(machine_t *m) { return SERIAL_FIFO - m->serial_rx_count; }
+
+size_t machine_serial_send(machine_t *m, const uint8_t *data, size_t length) {
+    size_t accepted = 0;
+    while (m->serial_connected && accepted < length && m->serial_rx_count < SERIAL_FIFO) {
+        m->serial_rx[(m->serial_rx_head + m->serial_rx_count) % SERIAL_FIFO] = data[accepted++];
+        m->serial_rx_count++;
+    }
+    return accepted;
+}
+
+size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) {
+    size_t count = m->serial_tx_count < max ? m->serial_tx_count : max;
+    memcpy(out, m->serial_tx, count);
+    memmove(m->serial_tx, m->serial_tx + count, m->serial_tx_count - count);
+    m->serial_tx_count -= (uint32_t)count;
+    return count;
+}
 
 static void ppfs_log(void *context, const char *message) {
     machine_logf(context, "%s", message);

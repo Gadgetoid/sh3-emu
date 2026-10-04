@@ -3,11 +3,12 @@ set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 EMU=$(cd "$HERE/../.." && pwd)
 usage() {
-    echo "usage: PB212_TREE=DIR DEBUGMGR=EXE [SH3_APPS=DIR] [WINE=wine] [OUTPUT=FILE] [FULL=1] $0" >&2
+    echo "usage: PB212_TREE=DIR DEBUGMGR=EXE NETDIAL=EXE [SH3_APPS=DIR] [WINE=wine] [OUTPUT=FILE] [FULL=1] $0" >&2
     exit 2
 }
 [ -n "$PB212_TREE" ] && [ -d "$PB212_TREE/PLATFORM/ODO" ] || usage
 [ -n "$DEBUGMGR" ] && [ -f "$DEBUGMGR" ] || usage
+[ -n "$NETDIAL" ] && [ -f "$NETDIAL" ] || usage
 TREE=$(cd "$PB212_TREE" && pwd)
 WINE=${WINE:-wine}
 WINESERVER=${WINESERVER:-$(dirname "$(command -v "$WINE")")/wineserver}
@@ -68,7 +69,7 @@ run() {
     "$WINESERVER" -w
 }
 
-python3 "$HERE/prepare.py" "$TREE" "$DEBUGMGR" "$SH3_APPS"
+python3 "$HERE/prepare.py" "$TREE" "$DEBUGMGR" "$NETDIAL" "$SH3_APPS"
 if [ -n "$FULL" ] || [ ! -f "$TREE/PUBLIC/MAXALL/cesysgen/oak/target/SHx/SH3/CE/retail/coredll.dll" ]; then
     echo "build: blddemo (log $WORK/sysgen.log)"
     run "$WORK/sysgen.log" 'W:\sysgen.bat'

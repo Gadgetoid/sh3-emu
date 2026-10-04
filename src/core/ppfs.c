@@ -127,7 +127,7 @@ static uint32_t open_file(ppfs_t *ppfs, uint32_t mode, const char *requested) {
     bool exists = find_host_name(ppfs, name, path, sizeof path);
     bool writing = (mode & MODE_ACCESS) != 0;
     if (!exists) {
-        if (ppfs->root[0] && name[0] && !(mode & MODE_CREATE)) ppfs_logf(ppfs, "ppfs: no %s in %s\n", name, ppfs->root);
+        if (ppfs->root[0] && strchr(name, '.') && !(mode & MODE_CREATE)) ppfs_logf(ppfs, "ppfs: no %s in %s\n", name, ppfs->root);
         if (!(mode & MODE_CREATE) || !ppfs->root[0] || !name[0]) return FAILURE;
         snprintf(path, sizeof path, "%s/%s", ppfs->root, name);
     }

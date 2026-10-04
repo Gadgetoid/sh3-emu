@@ -4,7 +4,7 @@ ROM=${1:-rom/odo-sh3-ce212.bin}
 OUT=${TMPDIR:-/tmp}/sh3-boot
 DESKTOP_HASH=f6b35a6e2df61df5b996cd2e8b250bd05f8cd3e968e5ac7b3f0b3712934d8831
 START_HASH=d4a4209f465f1cd22a0fded3cd266a3da23df0b171e0515e28325012d74c884f
-CONSOLE_HASH=96e3e1054315a66e722908554fd3b3a11576598ce3620f657403408076c43f89
+CONSOLE_HASH=586d21601c84321cb4fbb33a9c8898b49bcece36f1d6fb756e8f99a8d66e5b7d
 mkdir -p "$OUT"
 check() {
     name=$1; expected=$2; shift 2
@@ -55,6 +55,24 @@ if [ -f "$PROGRAM" ]; then
         grep -q "^ppfs: opened .*$name.exe" "$OUT/ppfs.log" && grep -q "^debug: $name: " "$OUT/ppfs.log"; then echo "ok   ppfs"; else echo "FAIL ppfs"; cat "$OUT/ppfs.log"; exit 1; fi
 else
     echo "skip ppfs: no $PROGRAM (an SH3 program that isn't in ROM)"
+fi
+NET_PROGRAM=${NET_PROGRAM:-build/guest/nettest.exe}
+if ./headless "$ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
+    echo "skip net: headless built without libslirp"
+elif [ ! -f "$NET_PROGRAM" ]; then
+    echo "skip net: no $NET_PROGRAM (guest/build.sh)"
+else
+    rm -rf "$OUT/netfolder" "$OUT/net.log" "$OUT/net.port" && mkdir -p "$OUT/netfolder" && cp "$NET_PROGRAM" "$OUT/netfolder/"
+    TOKEN=token-$$
+    python3 tests/net_server.py "$OUT/net.log" "$TOKEN" > "$OUT/net.port" &
+    SERVER=$!
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do [ -s "$OUT/net.port" ] && break; sleep 0.5; done
+    trap 'kill $SERVER 2>/dev/null || true' EXIT
+    ./headless "$ROM" --load="$OUT/desktop.state" --folder="$OUT/netfolder" --net --seconds=40 --key=5:14+76 --type=6:r "--type=7:nettest $(cat "$OUT/net.port")\n" > "$OUT/net.txt" 2>&1 || true
+    kill $SERVER
+    wait $SERVER 2>/dev/null || true
+    trap - EXIT
+    if [ "$(cat "$OUT/net.log" 2>/dev/null)" = "$(printf '/resolved/10.0.2.2\n/received/%s' "$TOKEN")" ]; then echo "ok   net"; else echo "FAIL net"; cat "$OUT/net.txt" "$OUT/net.log"; exit 1; fi
 fi
 rm -f "$OUT/agent.sock"
 ./headless "$ROM" --load="$OUT/debugmgr.state" --agent="$OUT/agent.sock" --seconds=120 --realtime=4 > "$OUT/agent.log" 2>&1 &

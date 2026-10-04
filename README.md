@@ -6,15 +6,17 @@ It boots Windows CE 2.12 (beta) and 2.11 images built from Platform Builder for 
 
 ## ROMs
 
-No ROMs are included. The image to use is `odo-sh3-ce212.bin`, built by `tools/image/build.sh` from Platform Builder 2.12 beta for the Odo platform, SH3, MAXALL: the H/PC Explorer shell, Pocket Word, Pocket IE and Inbox, PPFS, the PC Card and CompactFlash drivers, serial and PPP, velo-toolchain's debugmgr as `\Windows\velo-debugmgr.exe`, a preset touch calibration (no calibration screen), and optionally some third-party SH3 apps under Start > Programs. Put it (or a symlink) at `rom/odo-sh3-ce212.bin`.
+No ROMs are included. The image to use is `odo-sh3-ce212.bin`, built by `tools/image/build.sh` from Platform Builder 2.12 beta for the Odo platform, SH3, MAXALL: the H/PC Explorer shell, Pocket Word, Pocket IE and Inbox, PPFS, the PC Card and CompactFlash drivers, serial and PPP with a dialer that keeps a connection up (see [Network](#network)), velo-toolchain's debugmgr as `\Windows\velo-debugmgr.exe`, a preset touch calibration (no calibration screen), and optionally some third-party SH3 apps under Start > Programs. Put it (or a symlink) at `rom/odo-sh3-ce212.bin`.
 
 ```
-PB212_TREE=pb212/tree DEBUGMGR=velo-toolchain/build/debugmgr/ce2-sh3/velo-debugmgr.exe \
+VELO_TOOLCHAIN=velo-toolchain VELO_SH3_LLVM=llvm guest/build.sh
+PB212_TREE=pb212/tree DEBUGMGR=velo-toolchain/build/debugmgr/ce2-sh3/velo-debugmgr.exe NETDIAL=build/guest/netdial.exe \
     SH3_APPS=apps WINE=wine OUTPUT=rom/odo-sh3-ce212.bin tools/image/build.sh
 ```
 
 - `PB212_TREE`: the Platform Builder 2.12 beta tree for SH3 (discs 1, 2, 6 and 7 merged; the disc 2 ARM libraries aren't needed). The script edits files in it, keeping each original as `NAME.orig` and starting from that on every run, so it's best given a copy.
 - `DEBUGMGR`: velo-toolchain's `velo-debugmgr.exe` for SH3 (`make debugmgr-sh3` there).
+- `NETDIAL`: the dialer from `guest/`, which `guest/build.sh` builds with velo-toolchain (`VELO_TOOLCHAIN`) and an SH3 LLVM (`VELO_SH3_LLVM`), with the network test program `nettest.exe`.
 - `SH3_APPS`: optional folder with the apps listed in `tools/image/apps.txt`; missing ones are skipped.
 - `WINE`: the Wine to run Platform Builder's tools with. The script makes its own prefix in `build/image` and maps W: there.
 - `FULL=1` reruns blddemo (about 15 minutes); otherwise it runs only when the tree has no MAXALL build yet, and the platform build and makeimg take about a minute.
@@ -53,6 +55,18 @@ The card has a CompactFlash CIS, a configuration option register, and ATA IDENTI
 
 The Odo's parallel port carried Platform Builder's parallel-port file system: when CE can't find a program or DLL in ROM or the object store, the kernel asks the host for it. `--folder=DIR` makes the emulator that host, serving DIR, so programs built for SH3 run without rebuilding the image: copy `hello.exe` into DIR and run `hello` from Start > Run. Names are matched without their path and case-insensitively. Without `--folder`, the port answers that no file exists, so CE doesn't wait on a missing host. The folder isn't a drive CE can browse: start its programs by name from Run, `cmd` or a shortcut. Misses are logged as `ppfs: no NAME in DIR`; a folder that doesn't exist is an error.
 
+## Network
+
+COM1 is the Odo's product serial port (the system ASIC's DMA UART, which the BSP's `serial.dll` drives). `--net`, or Devices > Network (PPP) in `sh3emu`, plugs it into a PPP server on a libslirp user-mode network, as velo-emu does: CE gets 10.0.2.15, the host is 10.0.2.2 (the host's loopback), and DNS is 10.0.2.3, which forwards to the host's resolver and answers `host` itself with 10.0.2.2. Connections are outgoing only. Without libslirp the emulator builds without the network.
+
+The image starts `\Windows\netdial.exe` at boot (`HKLM\init`), which makes a direct-connection RAS entry, `Odo Network`, on `Serial Cable on COM1:` and keeps it dialled: it dials, waits while connected, and dials again 5 seconds after a failure or disconnection. So once the cable is in, Winsock programs just work. CE's own desktop connection on cable insertion (`AutoCnct`) is off. A direct connection starts with CE sending `CLIENT` and the server answering `CLIENTSERVER`; the gateway looks for `CLIENT` anywhere in what CE sends first, so stray text on the port doesn't stop it.
+
+```
+./headless rom/odo-sh3-ce212.bin --net --seconds=60 --folder=build/guest --key=30:14+76 --type=31:r "--type=32:nettest 8000\n"
+```
+
+`--net=SECONDS` plugs the cable in at that time; after `--load`, the cable goes in 2 seconds after the start (and the GUI does the same on a state load or machine switch), so CE notices it was out and dials again rather than reusing a PPP session the new gateway doesn't have.
+
 ## Debugging and file transfer
 
 The host mailbox and GDB stub are velo-emu's, ported to the SH-3.
@@ -89,17 +103,17 @@ gdb -ex "set architecture sh3" -ex "target extended-remote :1234" -ex 'set remot
 
 Guest time is the instruction count at 58.98 MHz, with the peripheral clock at 14.75 MHz.
 
-Not yet: sound output, serial ports to the host, PC Cards other than CompactFlash in socket 0, suspend, and PPFS's registry calls.
+Not yet: sound output, the IR port, PC Cards other than CompactFlash in socket 0, suspend, and PPFS's registry calls.
 
 ## GUI
 
-`make sh3emu` builds the windowed app (`make app` wraps it as `SH3Emu.app` on macOS). It runs the board with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus, and takes `--card`, `--folder`, `--memory`, `--agent` and `--gdb` like `headless`; Devices has the card and the PPFS host folder. Machines, states, snapshots and the ROMs folder live in `$XDG_DATA_HOME/sh3-emu` (otherwise `~/Library/Application Support/sh3-emu` on macOS, `~/.local/share/sh3-emu` elsewhere), and settings in `sh3emu.ini` in `$XDG_CONFIG_HOME/sh3-emu` (otherwise that data folder on macOS, `~/.config/sh3-emu` elsewhere), so it doesn't share anything with velo-emu.
+`make sh3emu` builds the windowed app (`make app` wraps it as `SH3Emu.app` on macOS). It runs the board with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus, and takes `--card`, `--folder`, `--net`, `--memory`, `--agent` and `--gdb` like `headless`; Devices has the card, the PPFS host folder and the network. Machines, states, snapshots and the ROMs folder live in `$XDG_DATA_HOME/sh3-emu` (otherwise `~/Library/Application Support/sh3-emu` on macOS, `~/.local/share/sh3-emu` elsewhere), and settings in `sh3emu.ini` in `$XDG_CONFIG_HOME/sh3-emu` (otherwise that data folder on macOS, `~/.config/sh3-emu` elsewhere), so it doesn't share anything with velo-emu.
 
 ## Testing
 
-- `make check` needs no ROMs: the command lines.
-- `make test` runs the CPU tests, boots `rom/odo-sh3-ce212.bin` (or `make test ROM=PATH`) to the desktop, the Start menu (a tap, so it checks the preset calibration) and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, and runs a program from `--folder` through Start > Run.
-- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, opens the console and lists a directory with injected mouse and key events, saves a screenshot, runs `mbtest` from the host folder set in `sh3emu.ini`, and checks it used its own data folder.
+- `make check` needs no ROMs: the command lines, and the gateway's `CLIENT` handshake after stray text.
+- `make test` runs the CPU tests, boots `rom/odo-sh3-ce212.bin` (or `make test ROM=PATH`) to the desktop, the Start menu (a tap, so it checks the preset calibration) and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, runs a program from `--folder` through Start > Run, and with `--net` runs `nettest` (from `guest/build.sh`, or `NET_PROGRAM=PATH`), which resolves `host` and makes two HTTP requests to a local server; the server checks the requests.
+- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, opens the console and lists a directory with injected mouse and key events, saves a screenshot, runs `nettest` over `--net` and `mbtest` from the host folder set in `sh3emu.ini`, and checks it used its own data folder.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 
