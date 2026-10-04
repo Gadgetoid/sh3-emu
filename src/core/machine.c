@@ -7,6 +7,7 @@
 #include <time.h>
 #include <zlib.h>
 
+#include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/sh7709.h"
 
@@ -23,7 +24,9 @@
 #define ASIC_PA            0x10000000u
 #define ASIC_SIZE          0x00100000u
 #define ASIC_CPU_STATUS    0x0400u
+#define ASIC_PCMCIA_CONTROL0 0x0410u
 #define ASIC_PCMCIA_INTR0  0x0414u
+#define ASIC_PCMCIA_CONTROL1 0x0418u
 #define ASIC_PCMCIA_INTR1  0x041Cu
 #define ASIC_CPU_ISR       0x0800u
 #define ASIC_CPU_MR        0x0804u
@@ -76,9 +79,18 @@
 #define DISP_LCD_ON        0x0004u
 
 #define PCMCIA_PA          0x14000000u
+#define PCMCIA_AREA6_PA    0x18000000u
 #define PCMCIA_END         0x1C000000u
 #define PCMCIA_NO_CARD     0x000Cu
+#define PCMCIA_CARD_INTR   0x0002u
 #define PCMCIA_STATE_INTR  0x0001u
+#define PCMCIA_RESET       0x0020u
+#define PCMCIA_SLOT_SHIFT  23
+#define PCMCIA_OFFSET_MASK 0x007FFFFFu
+#define PCMCIA_STATUS      0xFF00u
+#define INTR_SYSTEM        0x0001u
+#define BCR2_INDEX         1
+#define CARD_PATH_MAX      1024
 
 #define SERA_TX_INTR       0x0010u
 #define SERA_W1C_MASK      0xF618u
@@ -118,6 +130,12 @@ struct machine {
     uint64_t  rom_hash;
 
     uint16_t  asic[ASIC_SIZE / 2];
+    cfcard_t  card;
+    cfcard_slot_t card_slot;
+    char      card_path[CARD_PATH_MAX];
+    char      pending_card[CARD_PATH_MAX];
+    uint64_t  pending_card_at;
+    uint16_t  pcmcia_state;
     uint32_t  cpu_isr, cpu_mr;
     uint16_t  display_csr, display_xsize, display_ysize;
     p2_serial_t serial[3];
@@ -314,6 +332,23 @@ static void pen_timer_event(machine_t *m) {
     update_touch_interrupt(m);
 }
 
+static uint16_t pcmcia_interrupt_register(const machine_t *m, int socket) {
+    if (socket) return asic_get(m, ASIC_PCMCIA_INTR1) | PCMCIA_NO_CARD;
+    uint16_t value = m->pcmcia_state;
+    if (!m->card.inserted) return value | PCMCIA_NO_CARD;
+    bool line = cfcard_io_mode(&m->card) ? cfcard_interrupt(&m->card) : !cfcard_ready(&m->card);
+    return line ? (uint16_t)(value | PCMCIA_CARD_INTR) : value;
+}
+
+static void update_pcmcia_interrupt(machine_t *m) {
+    bool pending = false;
+    for (int socket = 0; socket < 2; socket++) {
+        uint16_t control = asic_get(m, socket ? ASIC_PCMCIA_CONTROL1 : ASIC_PCMCIA_CONTROL0);
+        if (pcmcia_interrupt_register(m, socket) & (control >> 3) & (PCMCIA_CARD_INTR | PCMCIA_STATE_INTR)) pending = true;
+    }
+    set_board_source(m, INTR_SYSTEM, pending);
+}
+
 static uint32_t asic_read(machine_t *m, uint32_t offset, int size) {
     int slot;
     p2_serial_t *serial = serial_for(m, offset, &slot);
@@ -328,8 +363,8 @@ static uint32_t asic_read(machine_t *m, uint32_t offset, int size) {
         case ASIC_DISPLAY + 12: return m->display_ysize;
         case ASIC_KEYBOARD: return m->keyboard_csr;
         case ASIC_KEYBOARD + 4: return m->keyboard_isr;
-        case ASIC_PCMCIA_INTR0:
-        case ASIC_PCMCIA_INTR1: return asic_get(m, offset) | PCMCIA_NO_CARD;
+        case ASIC_PCMCIA_INTR0: return pcmcia_interrupt_register(m, 0);
+        case ASIC_PCMCIA_INTR1: return pcmcia_interrupt_register(m, 1);
         default: break;
     }
     uint32_t value = asic_get(m, offset);
@@ -347,9 +382,19 @@ static void asic_write(machine_t *m, uint32_t offset, int size, uint32_t value) 
         case ASIC_CPU_MR: m->cpu_mr = value & 0xFFFFu; update_board_interrupt(m); return;
         case ASIC_CPU_ISR: return;
         case ASIC_PCMCIA_INTR0:
-        case ASIC_PCMCIA_INTR1:
-            m->asic[offset >> 1] &= (uint16_t)~(value & PCMCIA_STATE_INTR);
+            m->pcmcia_state &= (uint16_t)~(value & PCMCIA_STATE_INTR);
+            update_pcmcia_interrupt(m);
             return;
+        case ASIC_PCMCIA_INTR1:
+            return;
+        case ASIC_PCMCIA_CONTROL0:
+        case ASIC_PCMCIA_CONTROL1: {
+            uint16_t old = asic_get(m, offset);
+            m->asic[offset >> 1] = (uint16_t)value;
+            if (offset == ASIC_PCMCIA_CONTROL0 && (old & PCMCIA_RESET) && !(value & PCMCIA_RESET)) cfcard_reset(&m->card_slot);
+            update_pcmcia_interrupt(m);
+            return;
+        }
         case ASIC_DISPLAY + 4: m->display_csr = (uint16_t)value; return;
         case ASIC_DISPLAY + 8: m->display_xsize = (uint16_t)value; return;
         case ASIC_DISPLAY + 12: m->display_ysize = (uint16_t)value; return;
@@ -375,6 +420,64 @@ static void asic_write(machine_t *m, uint32_t offset, int size, uint32_t value) 
     if (size == 4) m->asic[(index + 1) & (ASIC_SIZE / 2 - 1)] = (uint16_t)(value >> 16);
 }
 
+static uint32_t pcmcia_access(machine_t *m, uint32_t pa, int size, bool write, uint32_t value) {
+    uint32_t offset = pa & PCMCIA_OFFSET_MASK;
+    bool slot0 = ((pa >> PCMCIA_SLOT_SHIFT) & 1) == 0;
+    uint32_t window = pa & 0xFF000000u;
+    if (window == 0x1B000000u) {
+        if (write) return 0;
+        uint32_t status = PCMCIA_STATUS;
+        return size == 1 ? (pa & 1 ? status >> 8 : status & 0xFF) : status;
+    }
+    if (!slot0) return write ? 0 : (size == 1 ? 0xFFu : 0xFFFFu);
+    cfcard_slot_t *slot = &m->card_slot;
+    uint32_t result = 0;
+    switch (window) {
+    case 0x14000000u:
+    case 0x18000000u:
+        if (write) cfcard_attribute_write(slot, offset, size, value);
+        else result = cfcard_attribute_read(slot, offset, size);
+        break;
+    case 0x15000000u:
+    case 0x19000000u:
+        if (write) cfcard_common_write(slot, offset, size, value);
+        else result = cfcard_common_read(slot, offset, size);
+        break;
+    case 0x1A000000u:
+        if (write) cfcard_io_write(slot, offset, size, value);
+        else result = cfcard_io_read(slot, offset, size);
+        break;
+    default:
+        result = size == 1 ? 0xFFu : 0xFFFFu;
+        break;
+    }
+    update_pcmcia_interrupt(m);
+    return result;
+}
+
+static int pcmcia_bus_width(const machine_t *m, uint32_t pa) {
+    uint32_t field = (m->chip.bsc[BCR2_INDEX] >> (pa >= PCMCIA_AREA6_PA ? 12 : 10)) & 3;
+    return field == 1 ? 1 : field == 2 ? 2 : 4;
+}
+
+static uint32_t pcmcia_read(machine_t *m, uint32_t pa, int size) {
+    int width = pcmcia_bus_width(m, pa);
+    if (size <= width) return pcmcia_access(m, pa, size, false, 0);
+    uint32_t value = 0;
+    for (int part = 0; part < size; part += width) value |= pcmcia_access(m, pa + (uint32_t)part, width, false, 0) << (8 * part);
+    return value;
+}
+
+static void pcmcia_write(machine_t *m, uint32_t pa, int size, uint32_t value) {
+    int width = pcmcia_bus_width(m, pa);
+    if (size <= width) {
+        pcmcia_access(m, pa, size, true, value);
+        return;
+    }
+    uint32_t mask = width == 1 ? 0xFFu : 0xFFFFu;
+    for (int part = 0; part < size; part += width) pcmcia_access(m, pa + (uint32_t)part, width, true, (value >> (8 * part)) & mask);
+}
+
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
@@ -391,7 +494,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     if (pa >= PCMCIA_PA && pa < PCMCIA_END) {
-        *value = size == 4 ? 0xFFFFFFFFu : size == 2 ? 0xFFFFu : 0xFFu;
+        *value = pcmcia_read(m, pa, size);
         return true;
     }
     if (pa - DRAM_PA < DRAM_AREA_SIZE) {
@@ -419,7 +522,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
         else if (pa >= LED_DISCRETE_PA) m->led_discrete = value;
         return true;
     }
-    if (pa >= PCMCIA_PA && pa < PCMCIA_END) return true;
+    if (pa >= PCMCIA_PA && pa < PCMCIA_END) {
+        pcmcia_write(m, pa, size, value);
+        return true;
+    }
     if (pa - DRAM_PA < DRAM_AREA_SIZE) {
         uint32_t offset = (pa - DRAM_PA) % m->dram_size;
         for (int i = 0; i < size; i++) m->dram[offset + (uint32_t)i] = (uint8_t)(value >> (8 * i));
@@ -588,6 +694,8 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
     if (m->host_clock) apply_host_time(m);
     memset(m->asic, 0, sizeof m->asic);
+    m->pcmcia_state = 0;
+    cfcard_reset(&m->card_slot);
     m->cpu_isr = m->cpu_mr = 0;
     m->display_csr = 0;
     m->display_xsize = SCREEN_STOCK_WIDTH - 1;
@@ -609,6 +717,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     memcpy(m->image, rom, rom_size);
     m->image_size = rom_size;
     m->rom_hash = hash_bytes(rom, rom_size);
+    m->card_slot.state = &m->card;
     m->dram_size_next = DRAM_DEFAULT_SIZE;
     if (!reset_machine(m, false, error, error_size)) {
         machine_destroy(m);
@@ -620,6 +729,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
 void machine_destroy(machine_t *m) {
     if (!m) return;
     mailbox_clear(&m->mailbox);
+    cfcard_eject(&m->card_slot);
     free(m->dram);
     free(m->image);
     free(m);
@@ -627,12 +737,16 @@ void machine_destroy(machine_t *m) {
 
 void machine_set_log(machine_t *m, machine_log_fn log) { m->log = log; }
 
+static void pending_card_event(machine_t *m);
+
 void machine_run(machine_t *m, uint64_t cycles) {
     uint64_t target = m->cpu.cycles + cycles;
     while (m->cpu.cycles < target) {
         sh7709_advance(&m->chip);
         pen_timer_event(m);
+        pending_card_event(m);
         uint64_t next = sh7709_next_event(&m->chip);
+        if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
         if (m->pen_timer_at && m->pen_timer_at < next) next = m->pen_timer_at;
         uint64_t until = next < target ? next : target;
         if (until <= m->cpu.cycles) until = m->cpu.cycles + 1;
@@ -728,9 +842,44 @@ size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate)
     return 0;
 }
 
-bool machine_insert_card(machine_t *m, const char *path) { (void)m; (void)path; return false; }
-void machine_eject_card(machine_t *m) { (void)m; }
-bool machine_card_inserted(machine_t *m) { (void)m; return false; }
+static bool insert_card_now(machine_t *m, const char *path) {
+    FILE *image = fopen(path, "r+b");
+    if (!image) return false;
+    cfcard_insert(&m->card_slot, image);
+    snprintf(m->card_path, sizeof m->card_path, "%s", path);
+    m->pcmcia_state |= PCMCIA_STATE_INTR;
+    update_pcmcia_interrupt(m);
+    return true;
+}
+
+bool machine_insert_card(machine_t *m, const char *path) {
+    if (m->card.inserted && !strcmp(path, m->card_path)) return true;
+    if (!m->card.inserted) return insert_card_now(m, path);
+    FILE *probe = fopen(path, "r+b");
+    if (!probe) return false;
+    fclose(probe);
+    machine_eject_card(m);
+    snprintf(m->pending_card, sizeof m->pending_card, "%s", path);
+    m->pending_card_at = m->cpu.cycles + MACHINE_CLOCK_HZ;
+    return true;
+}
+
+static void pending_card_event(machine_t *m) {
+    if (!m->pending_card_at || m->cpu.cycles < m->pending_card_at) return;
+    m->pending_card_at = 0;
+    if (!insert_card_now(m, m->pending_card)) machine_logf(m, "card: cannot open %s\n", m->pending_card);
+}
+
+void machine_eject_card(machine_t *m) {
+    m->pending_card_at = 0;
+    if (!m->card.inserted) return;
+    cfcard_eject(&m->card_slot);
+    m->card_path[0] = 0;
+    m->pcmcia_state |= PCMCIA_STATE_INTR;
+    update_pcmcia_interrupt(m);
+}
+
+bool machine_card_inserted(machine_t *m) { return m->card.inserted; }
 bool machine_insert_disk(machine_t *m, const char *path, bool read_only) { (void)m; (void)path; (void)read_only; return false; }
 void machine_eject_disk(machine_t *m) { (void)m; }
 bool machine_disk_inserted(machine_t *m) { (void)m; return false; }
@@ -807,7 +956,8 @@ void machine_dump_state(machine_t *m) {
     X(led_discrete, m->led_discrete) X(led_alpha, m->led_alpha) \
     X(adc_cntr, m->adc_cntr) X(adc_str, m->adc_str) X(ucb_cntr, m->ucb_cntr) X(ucb_str, m->ucb_str) \
     X(ucb_register, m->ucb_register) X(sound_cntr, m->sound_cntr) X(sound_str, m->sound_str) \
-    X(touch_mask, m->touch_mask) X(ucb_regs, m->ucb_regs) X(pen_timer_at, m->pen_timer_at)
+    X(touch_mask, m->touch_mask) X(ucb_regs, m->ucb_regs) X(pen_timer_at, m->pen_timer_at) \
+    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state)
 
 static bool write_bytes(gzFile file, const void *data, uint32_t size) {
     return size == 0 || gzwrite(file, data, size) == (int)size;
@@ -917,6 +1067,10 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     m->chip.cpu = &m->cpu;
+    cfcard_sanitize(&m->card);
+    FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
+    cfcard_rebind(&m->card_slot, image);
+    if (!image) m->card_path[0] = 0;
     m->chip.transmit = NULL;
     m->chip.transmit_context = NULL;
     sh3_flush_translations(&m->cpu);

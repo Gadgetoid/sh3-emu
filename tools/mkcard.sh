@@ -12,17 +12,17 @@ if [ "$(uname -s)" != Darwin ]; then
     truncate -s "${size}M" "$image"
     echo 'start=1, type=06' | sfdisk --quiet --no-reread --no-tell-kernel "$image" >/dev/null
     sectors=$((size * 2048 - 1))
-    mkfs.fat -F 16 -n VELOCARD -s 2 -r 512 -R 1 -a -g 16/32 -h 1 --offset 1 "$image" $((sectors / 2)) >/dev/null
+    mkfs.fat -F 16 -n SH3CARD -s 2 -r 512 -R 1 -a -g 16/32 -h 1 --offset 1 "$image" $((sectors / 2)) >/dev/null
     for dir in "$@"; do mcopy -i "$image@@512" -s -Q "$dir" ::/; done
     exit 0
 fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-hdiutil create -quiet -size "${size}m" -layout MBRSPUD -fs "MS-DOS FAT16" -volname VELOCARD -type UDIF "$work/card.dmg"
+hdiutil create -quiet -size "${size}m" -layout MBRSPUD -fs "MS-DOS FAT16" -volname SH3CARD -type UDIF "$work/card.dmg"
 hdiutil convert -quiet "$work/card.dmg" -format UDTO -o "$work/card"
 mv "$work/card.cdr" "$image"
 if [ $# -gt 0 ]; then
-    mount=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "$image" | awk '/VELOCARD/ {sub(/^.*\t/, ""); print}')
+    mount=$(hdiutil attach -imagekey diskimage-class=CRawDiskImage "$image" | awk '/SH3CARD/ {sub(/^.*\t/, ""); print}')
     touch "$mount/.metadata_never_index"
     for dir in "$@"; do cp -RX "$dir" "$mount/"; done
     rm -f "$mount/.metadata_never_index"

@@ -22,3 +22,17 @@ PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0));
 STUB=$!
 if python3 tests/gdb_client.py "$PORT"; then echo "ok   gdb"; else echo "FAIL gdb"; kill $STUB; cat "$OUT/gdb.log"; exit 1; fi
 wait $STUB
+card_read() {
+    if [ "$(uname -s)" = Darwin ]; then
+        mount=$(hdiutil attach -readonly -imagekey diskimage-class=CRawDiskImage "$1" | awk '/SH3CARD/ {sub(/^.*\t/, ""); print}')
+        cat "$mount/$2"
+        hdiutil detach -quiet "$mount"
+    else
+        mtype -i "$1@@512" "::$2"
+    fi
+}
+rm -rf "$OUT/cardsrc" && mkdir -p "$OUT/cardsrc/data" && echo "written on the host, copied by CE" > "$OUT/cardsrc/data/hello.txt"
+sh tools/mkcard.sh "$OUT/card.img" 16 "$OUT/cardsrc/data"
+./headless "$ROM" --load="$OUT/desktop.state" --card="$OUT/card.img" --seconds=18 --key=2:11+0D --tap=4:71:198:0.3 "--type=6:cmd\n" \
+    '--type=9:md "\Storage Card\fromce"\n' '--type=12:copy "\Storage Card\data\hello.txt" "\Storage Card\fromce\copy.txt"\n' > /dev/null 2>&1
+if [ "$(card_read "$OUT/card.img" fromce/copy.txt)" = "written on the host, copied by CE" ]; then echo "ok   card"; else echo "FAIL card"; exit 1; fi

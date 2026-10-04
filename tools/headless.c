@@ -105,7 +105,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double   seconds;
-    const char *png, *pgm, *load, *save, *agent_socket, *gdb_process;
+    const char *png, *pgm, *load, *save, *card, *agent_socket, *gdb_process;
     int      png_cell, png_backlight, gdb_port;
     bool     trace_pc, host_time, trace_exceptions, debug_output, seconds_given;
     double   key_times[32];
@@ -126,7 +126,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -137,6 +137,7 @@ static const option_t OPTIONS[] = {
     [OPT_SECONDS] = { "seconds", "N", "emulated seconds to run (default 5)", 0 },
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
+    [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for agent clients", 0 },
@@ -179,6 +180,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         return option_number(value, &run->seconds) && run->seconds > 0;
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
+    case OPT_CARD: run->card = value; return true;
     case OPT_MEMORY:
         if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
         run->memory = (uint32_t)integer;
@@ -301,6 +303,7 @@ int main(int argc, char **argv) {
     if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.trace_exceptions) machine_trace_exceptions(machine, true);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
+    if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.gdb_process && !run.gdb_port) {
         fprintf(stderr, "headless: --gdb-process needs --gdb\n");
