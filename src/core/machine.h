@@ -4,11 +4,11 @@
 #include <stdint.h>
 
 #include "core/key_text.h"
-#include "core/mailbox.h"
-#include "core/mips.h"
+#include "core/sh3.h"
 #include "core/screen.h"
 
-#define MACHINE_CLOCK_HZ      36864000u
+#define MACHINE_CLOCK_HZ      58982400u
+#define MACHINE_PERIPHERAL_HZ 14745600u
 #define MACHINE_WATCH_MAX     4
 
 typedef struct machine machine_t;
@@ -20,8 +20,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
 void       machine_destroy(machine_t *machine);
 void       machine_set_log(machine_t *machine, machine_log_fn log);
 void       machine_run(machine_t *machine, uint64_t cycles);
-mips_cpu_t *machine_cpu(machine_t *machine);
-mailbox_t *machine_mailbox(machine_t *machine);
+sh3_cpu_t *machine_cpu(machine_t *machine);
 bool       machine_read_physical(machine_t *machine, uint32_t pa, uint8_t *data, uint32_t length);
 bool       machine_write_physical(machine_t *machine, uint32_t pa, const uint8_t *data, uint32_t length);
 uint64_t   machine_cycles(machine_t *machine);
@@ -78,3 +77,4 @@ void machine_set_host_clock(machine_t *machine, bool enabled);
 void machine_set_debug_output(machine_t *machine, machine_debug_fn sink, void *context);
 
 void machine_dump_state(machine_t *machine);
+void machine_trace_exceptions(machine_t *machine, bool enabled);

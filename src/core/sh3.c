@@ -277,6 +277,10 @@ static uint32_t tlb_data_field(const sh3_tlb_entry_t *entry) {
 }
 
 bool sh3_control_read(sh3_cpu_t *cpu, uint32_t address, uint32_t *value) {
+    if (address < TLB_ADDRESS_ARRAY) {
+        *value = 0;
+        return true;
+    }
     if ((address & 0xFF000000u) == TLB_ADDRESS_ARRAY || (address & 0xFF000000u) == TLB_DATA_ARRAY) {
         const sh3_tlb_entry_t *entry = &cpu->tlb[(address >> 12) & 31][(address >> 8) & 3];
         *value = (address & 0xFF000000u) == TLB_ADDRESS_ARRAY ? tlb_address_field(entry) : tlb_data_field(entry);
@@ -296,6 +300,7 @@ bool sh3_control_read(sh3_cpu_t *cpu, uint32_t address, uint32_t *value) {
 }
 
 bool sh3_control_write(sh3_cpu_t *cpu, uint32_t address, uint32_t value) {
+    if (address < TLB_ADDRESS_ARRAY) return true;
     if ((address & 0xFF000000u) == TLB_ADDRESS_ARRAY) {
         uint32_t set = (address >> 12) & 31;
         if (address & 0x80u) {
@@ -366,7 +371,7 @@ static void physical_write(sh3_cpu_t *cpu, uint32_t pa, int size, uint32_t value
         write_host(cpu->bus.dram + (pa - cpu->bus.dram_base), size, value);
         return;
     }
-    if (pa >= CONTROL_SPACE && size == 4 && sh3_control_write(cpu, pa, value)) return;
+    if (pa >= CONTROL_SPACE && (size == 4 || pa < TLB_ADDRESS_ARRAY) && sh3_control_write(cpu, pa, value)) return;
     cpu->bus.write(cpu->bus.context, pa, size, value);
 }
 

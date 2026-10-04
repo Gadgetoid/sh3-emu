@@ -4,8 +4,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "core/agent.h"
-#include "core/gdb.h"
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
@@ -23,27 +21,8 @@ static void request_stop(int signal_number) {
     stop_requested = 1;
 }
 
-static gdb_t *debugger;
-static agent_t *agent;
-
-#define AGENT_POLL_CYCLES (MACHINE_CLOCK_HZ / 100)
-
-static void run_cycles(machine_t *machine, uint64_t cycles) {
-    if (!debugger) machine_run(machine, cycles);
-    else if (!gdb_run(debugger, cycles)) stop_requested = 1;
-}
-
 static void advance(machine_t *machine, uint64_t cycles) {
-    if (!agent) {
-        run_cycles(machine, cycles);
-        return;
-    }
-    while (cycles && !stop_requested) {
-        uint64_t step = cycles < AGENT_POLL_CYCLES ? cycles : AGENT_POLL_CYCLES;
-        run_cycles(machine, step);
-        agent_poll(agent, machine_mailbox(machine));
-        cycles -= step;
-    }
+    machine_run(machine, cycles);
 }
 
 static double wall_seconds(void) {
@@ -108,7 +87,7 @@ typedef struct {
     double   seconds;
     const char *png, *pgm, *load, *save, *wav, *card, *disk;
     int      png_cell, png_backlight;
-    bool     trace_pc, host_time;
+    bool     trace_pc, host_time, trace_exceptions;
     double   key_times[32];
     unsigned key_codes[32];
     int      key_count;
@@ -139,18 +118,13 @@ typedef struct {
     uint32_t memory, speed;
     screen_size_t screen;
     bool     debug_output;
-    bool     seconds_given;
-    int      gdb_port;
-    const char *gdb_process;
-    const char *agent_socket;
 } run_t;
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DISK, OPT_MEMORY, OPT_SCREEN, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_INSERT_DISK, OPT_EJECT_DISK,
-    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_AGENT, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
-    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_GDB,
-    OPT_GDB_PROCESS,
+    OPT_HEADING_NET, OPT_NET, OPT_RAPI, OPT_USER_AGENT, OPT_REPLUG, OPT_CABLE, OPT_CABLE_SEND,
+    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
 };
 
 static const option_t OPTIONS[] = {
@@ -160,14 +134,14 @@ static const option_t OPTIONS[] = {
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a PC Card image, after --load", 0 },
     [OPT_DISK] = { "disk", "IMAGE", "attach a disk image to the paravirtual disk, after --load", 0 },
-    [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 4, 8, 16, 20 or 32", 0 },
+    [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
     [OPT_SCREEN] = { "screen", "WxH", "screen for a cold boot: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for RAPI clients", 0 },
     [OPT_HOST_TIME] = { "host-time", NULL, "set the clock from this computer at a cold boot", 0 },
     [OPT_HEADING_INPUT] = { NULL, NULL, "Input, at emulated times in seconds", 0 },
     [OPT_TAP] = { "tap", "SECONDS:X:Y[:HOLD]", "hold the pen at a screen position, for 0.5 s by default (0.08 for double taps)", 32 },
-    [OPT_KEY] = { "key", "SECONDS:SCANCODE", "press a Velo scancode (hex) for 50 ms; the backlight key is 5E", 32 },
+    [OPT_KEY] = { "key", "SECONDS:SCANCODE", "press a PS/2 set 2 scancode (hex) for 50 ms; 80 and up are E0-prefixed", 32 },
     [OPT_TYPE] = { "type", "SECONDS:TEXT", "type text, with \\n for Enter", 16 },
     [OPT_POWER] = { "power", "SECONDS", "press the power button for 200 ms", 8 },
     [OPT_BACKLIGHT] = { "backlight", "SECONDS", "press the backlight button for 100 ms", 8 },
@@ -176,7 +150,6 @@ static const option_t OPTIONS[] = {
     [OPT_EJECT_DISK] = { "eject-disk", "SECONDS", "detach the paravirtual disk's image", 4 },
     [OPT_HEADING_NET] = { NULL, NULL, "Serial and network", 0 },
     [OPT_NET] = { "net", "SECONDS", "connect COM1 to the PPP gateway and web proxy", 0 },
-    [OPT_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's break 0x51CE mailbox and one client on this Unix socket", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the Velo's RAPI port on a Unix socket, for velo-rapi --socket", 0 },
     [OPT_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
     [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, as the app does after a speed change", 0 },
@@ -190,9 +163,8 @@ static const option_t OPTIONS[] = {
     [OPT_WAV] = { "wav", "FILE", "write the sound output, with silences removed", 0 },
     [OPT_TRACE_PC] = { "trace-pc", NULL, "print the program counter every emulated second", 0 },
     [OPT_WATCH_PC] = { "watch-pc", "VA", "log calls reaching an address (slot-relative below 0x02000000)", MACHINE_WATCH_MAX },
+    [OPT_TRACE_EXCEPTIONS] = { "trace-exceptions", NULL, "log CPU exceptions other than TLB misses and system calls", 0 },
     [OPT_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr", 0 },
-    [OPT_GDB] = { "gdb", "PORT", "wait for GDB on 127.0.0.1:PORT before running; runs until GDB detaches or kills, unless --seconds is given", 0 },
-    [OPT_GDB_PROCESS] = { "gdb-process", "NAME", "debug one process, e.g. maths.exe: breakpoints below 0x02000000 only stop there, and GDB stops when it starts", 0 },
 };
 
 
@@ -201,7 +173,6 @@ static bool print_debug_output;
 static void print_debug_line(void *context, const char *line) {
     (void)context;
     if (print_debug_output) fprintf(stderr, "debug: %s\n", line);
-    if (debugger) gdb_debug_line(debugger, line);
 }
 
 static bool parse_option(void *context, int option, const char *value, char *error, size_t error_size) {
@@ -211,14 +182,13 @@ static bool parse_option(void *context, int option, const char *value, char *err
     const char *rest;
     switch (option) {
     case OPT_SECONDS:
-        run->seconds_given = true;
         return option_number(value, &run->seconds) && run->seconds > 0;
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
     case OPT_DISK: run->disk = value; return true;
     case OPT_MEMORY:
-        if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
+        if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
         run->memory = (uint32_t)integer;
         return true;
     case OPT_SCREEN: return screen_parse(value, &run->screen);
@@ -274,7 +244,6 @@ static bool parse_option(void *context, int option, const char *value, char *err
         return true;
     case OPT_NET: return option_number(value, &run->net_at) && run->net_at >= 0;
     case OPT_RAPI: run->net_options.rapi_socket = value; return true;
-    case OPT_AGENT: run->agent_socket = value; return true;
     case OPT_USER_AGENT: run->net_options.user_agent = value; return true;
     case OPT_REPLUG: return option_number(value, &run->replug_at) && run->replug_at >= 0;
     case OPT_CABLE: return option_number(value, &run->cable_at) && run->cable_at >= 0;
@@ -295,11 +264,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_WAV: run->wav = value; return true;
     case OPT_TRACE_PC: run->trace_pc = true; return true;
     case OPT_DEBUG_OUTPUT: run->debug_output = true; return true;
-    case OPT_GDB:
-        if (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535) return false;
-        run->gdb_port = (int)integer;
-        return true;
-    case OPT_GDB_PROCESS: run->gdb_process = value; return true;
+    case OPT_TRACE_EXCEPTIONS: run->trace_exceptions = true; return true;
     case OPT_WATCH_PC:
         if (!option_integer(value, 0, &integer) || integer < 0) return false;
         run->watches[run->watch_count++] = (uint32_t)integer;
@@ -310,7 +275,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
 
 static const option_spec_t SPEC = {
     "headless", "ROM [OPTIONS]",
-    "Runs the Velo without a window, for tests and scripts. ROM is a CE 1.0 nk.bin, a CE 2.0 card ROM or merged image, or a B000FF image.",
+    "Runs the Odo SH3 board without a window, for tests and scripts. ROM is a Platform Builder nk.bin (B000FF) RAM image.",
     OPTIONS, (int)(sizeof OPTIONS / sizeof OPTIONS[0]),
     "Events at or after --seconds don't happen, and are reported. Options taking a value also accept it as the next argument.",
 };
@@ -330,7 +295,6 @@ int main(int argc, char **argv) {
         return 2;
     }
     run.rom_path = positional[0];
-    if (run.gdb_port && !run.seconds_given) run.seconds = 1e7;
     double latest = run.soft_reset_at;
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
     for (int t = 0; t < run.tap_count; t++) if (run.tap_times[t] > latest) latest = run.tap_times[t];
@@ -359,27 +323,13 @@ int main(int argc, char **argv) {
     if (run.speed) machine_set_speed(machine, run.speed);
     machine_set_host_clock(machine, run.host_time);
     print_debug_output = run.debug_output;
-    if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
+    if (run.trace_exceptions) machine_trace_exceptions(machine, true);
+    if (run.debug_output) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
     if (run.load) machine_serial_connect(machine, false);
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     if (run.disk && !machine_insert_disk(machine, run.disk, false)) { fprintf(stderr, "cannot open disk image %s\n", run.disk); return 1; }
-    if (run.gdb_process && !run.gdb_port) {
-        fprintf(stderr, "headless: --gdb-process needs --gdb\n");
-        return 2;
-    }
-    if (run.agent_socket && !(agent = agent_create(run.agent_socket, log_stderr))) {
-        fprintf(stderr, "cannot listen on agent socket %s\n", run.agent_socket);
-        return 1;
-    }
-    if (run.gdb_port) {
-        debugger = gdb_create(machine, run.gdb_port, log_stderr);
-        if (!debugger) { fprintf(stderr, "cannot listen for GDB on port %d\n", run.gdb_port); return 1; }
-        if (run.gdb_process && !gdb_set_process(debugger, run.gdb_process)) fprintf(stderr, "gdb: waiting for %s to start\n", run.gdb_process);
-        fprintf(stderr, "gdb: waiting for a connection: target remote :%d\n", run.gdb_port);
-        gdb_wait_for_client(debugger);
-    }
     screen_size_t screen = machine_screen_size(machine);
     for (int t = 0; t < run.tap_count; t++) {
         if (run.tap_x[t] >= screen.width || run.tap_y[t] >= screen.height) {
@@ -524,8 +474,6 @@ int main(int argc, char **argv) {
     }
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     net_gateway_destroy(gateway);
-    gdb_destroy(debugger);
-    agent_destroy(agent);
     machine_destroy(machine);
     free(rom);
     return 0;

@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define KEY_TEXT_SHIFT 0x51
+#define KEY_TEXT_SHIFT 0x12
 
 typedef enum { KEY_LAYOUT_ROM, KEY_LAYOUT_UPGRADE_CD } key_layout_t;
 
