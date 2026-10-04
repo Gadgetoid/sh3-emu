@@ -3,6 +3,10 @@ set -e
 PREFIX=${SH_PREFIX:-sh-elf-}
 RUNNER=${RUNNER:-./sh3-run}
 OUT=${TMPDIR:-/tmp}/sh3-tests
+if ! command -v "${PREFIX}as" > /dev/null; then
+    echo "skip sh3 tests: no ${PREFIX}as (set SH_PREFIX)"
+    exit 0
+fi
 mkdir -p "$OUT"
 cat > "$OUT/link.ld" <<'LINK'
 ENTRY(_start)
