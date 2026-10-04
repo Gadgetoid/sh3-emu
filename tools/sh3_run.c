@@ -17,6 +17,10 @@ typedef struct {
     bool      exited;
     int       exit_code;
     bool      trace;
+    bool      stop_on_exception;
+    bool      faulted;
+    uint32_t  fault_code;
+    uint32_t  fault_pc;
 } runner_t;
 
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
@@ -101,8 +105,18 @@ static bool trace_before(void *context, uint32_t pc) {
     return false;
 }
 
+static void on_exception(void *context, uint32_t code, uint32_t pc, bool user) {
+    runner_t *runner = context;
+    (void)user;
+    if (runner->faulted) return;
+    runner->faulted = true;
+    runner->fault_code = code;
+    runner->fault_pc = pc;
+    runner->cpu.yield = true;
+}
+
 static void usage(void) {
-    fprintf(stderr, "usage: sh3-run [--privileged] [--trace] [--cycles=N] PROGRAM.elf\n");
+    fprintf(stderr, "usage: sh3-run [--privileged] [--trace] [--stop-on-exception] [--cycles=N] PROGRAM.elf\n");
 }
 
 static runner_t runner;
@@ -114,6 +128,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--privileged")) privileged = true;
         else if (!strcmp(argv[i], "--trace")) runner.trace = true;
+        else if (!strcmp(argv[i], "--stop-on-exception")) runner.stop_on_exception = true;
         else if (!strncmp(argv[i], "--cycles=", 9)) cycles = strtoull(argv[i] + 9, NULL, 0);
         else if (argv[i][0] == '-') { usage(); return 2; }
         else path = argv[i];
@@ -131,18 +146,24 @@ int main(int argc, char **argv) {
     runner.ram = calloc(1, RAM_SIZE);
     runner.cpu.bus = (sh3_bus_t){ &runner, bus_read, bus_write, bus_fetch_page, runner.ram, 0, RAM_SIZE };
     runner.cpu.on_trapa = on_trapa;
-    static sh3_debug_t trace;
-    if (runner.trace) {
-        trace = (sh3_debug_t){ .context = &runner, .before = trace_before, .every = true };
-        runner.cpu.debug = &trace;
+    static sh3_debug_t debug;
+    debug = (sh3_debug_t){ .context = &runner, .before = trace_before, .every = true };
+    if (runner.stop_on_exception) {
+        debug.exception = on_exception;
+        debug.every = runner.trace;
     }
+    if (runner.trace || runner.stop_on_exception) runner.cpu.debug = &debug;
     sh3_reset(&runner.cpu);
     uint32_t entry;
     if (!load_elf(&runner, data, (size_t)size, &entry)) { fprintf(stderr, "%s: not an SH ELF\n", path); return 2; }
     sh3_set_sr(&runner.cpu, privileged ? SH3_SR_MD : 0);
     runner.cpu.pc = entry;
     runner.cpu.r[15] = STACK_TOP;
-    while (!runner.exited && runner.cpu.cycles < cycles) sh3_run(&runner.cpu, cycles);
+    while (!runner.exited && !runner.faulted && runner.cpu.cycles < cycles) sh3_run(&runner.cpu, cycles);
+    if (runner.faulted) {
+        fprintf(stderr, "exception %03x at pc %08x\n", runner.fault_code, runner.fault_pc);
+        return 4;
+    }
     if (!runner.exited) {
         fprintf(stderr, "did not exit: pc %08x sr %08x expevt %03x\n", runner.cpu.pc, runner.cpu.sr, runner.cpu.expevt);
         return 3;
