@@ -9,6 +9,7 @@
 
 #include "core/cfcard.h"
 #include "core/mailbox.h"
+#include "core/ppfs.h"
 #include "core/sh7709.h"
 
 #define DRAM_PA            0x0C000000u
@@ -20,6 +21,7 @@
 #define HKEEP_END          0x08000000u
 #define LED_DISCRETE_PA    0x04040000u
 #define LED_ALPHA_PA       0x04060000u
+#define PARALLEL_PA        0x04020000u
 
 #define ASIC_PA            0x10000000u
 #define ASIC_SIZE          0x00100000u
@@ -143,6 +145,7 @@ struct machine {
     uint8_t   key_fifo[KEY_FIFO];
     uint32_t  key_head, key_count;
     uint32_t  led_discrete, led_alpha;
+    ppfs_t    ppfs;
 
     uint16_t  adc_cntr, adc_str, ucb_cntr, ucb_str, ucb_register, sound_cntr, sound_str, touch_mask;
     uint16_t  ucb_regs[16];
@@ -490,7 +493,8 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     if (sh7709_read(&m->chip, pa, size, value)) return true;
     if (pa >= ASIC_PA && pa < ASIC_PA + ASIC_SIZE) { *value = asic_read(m, pa - ASIC_PA, size); return true; }
     if (pa >= HKEEP_PA && pa < HKEEP_END) {
-        *value = pa >= LED_ALPHA_PA ? m->led_alpha : pa >= LED_DISCRETE_PA ? m->led_discrete : 0;
+        if ((pa & ~3u) == PARALLEL_PA) *value = ppfs_read_register(&m->ppfs);
+        else *value = pa >= LED_ALPHA_PA ? m->led_alpha : pa >= LED_DISCRETE_PA ? m->led_discrete : 0;
         return true;
     }
     if (pa >= PCMCIA_PA && pa < PCMCIA_END) {
@@ -518,7 +522,8 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     if (sh7709_write(&m->chip, pa, size, value)) return true;
     if (pa >= ASIC_PA && pa < ASIC_PA + ASIC_SIZE) { asic_write(m, pa - ASIC_PA, size, value); return true; }
     if (pa >= HKEEP_PA && pa < HKEEP_END) {
-        if (pa >= LED_ALPHA_PA) m->led_alpha = value;
+        if ((pa & ~3u) == PARALLEL_PA) ppfs_write_register(&m->ppfs, value);
+        else if (pa >= LED_ALPHA_PA) m->led_alpha = value;
         else if (pa >= LED_DISCRETE_PA) m->led_discrete = value;
         return true;
     }
@@ -696,6 +701,8 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     memset(m->asic, 0, sizeof m->asic);
     m->pcmcia_state = 0;
     cfcard_reset(&m->card_slot);
+    ppfs_close_all(&m->ppfs);
+    ppfs_init(&m->ppfs);
     m->cpu_isr = m->cpu_mr = 0;
     m->display_csr = 0;
     m->display_xsize = SCREEN_STOCK_WIDTH - 1;
@@ -730,6 +737,7 @@ void machine_destroy(machine_t *m) {
     if (!m) return;
     mailbox_clear(&m->mailbox);
     cfcard_eject(&m->card_slot);
+    ppfs_close_all(&m->ppfs);
     free(m->dram);
     free(m->image);
     free(m);
@@ -880,6 +888,16 @@ void machine_eject_card(machine_t *m) {
 }
 
 bool machine_card_inserted(machine_t *m) { return m->card.inserted; }
+
+static void ppfs_log(void *context, const char *message) {
+    machine_logf(context, "%s", message);
+}
+
+void machine_set_host_folder(machine_t *m, const char *path) {
+    ppfs_set_root(&m->ppfs, path);
+    m->ppfs.log = ppfs_log;
+    m->ppfs.log_context = m;
+}
 bool machine_insert_disk(machine_t *m, const char *path, bool read_only) { (void)m; (void)path; (void)read_only; return false; }
 void machine_eject_disk(machine_t *m) { (void)m; }
 bool machine_disk_inserted(machine_t *m) { (void)m; return false; }
@@ -1067,6 +1085,8 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     m->chip.cpu = &m->cpu;
+    ppfs_close_all(&m->ppfs);
+    ppfs_init(&m->ppfs);
     cfcard_sanitize(&m->card);
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
     cfcard_rebind(&m->card_slot, image);

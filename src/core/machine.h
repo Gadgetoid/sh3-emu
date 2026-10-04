@@ -47,6 +47,7 @@ size_t machine_audio(machine_t *machine, int16_t *samples, size_t max, uint32_t 
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
+void machine_set_host_folder(machine_t *machine, const char *path);
 
 bool machine_insert_disk(machine_t *machine, const char *path, bool read_only);
 void machine_eject_disk(machine_t *machine);

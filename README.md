@@ -6,12 +6,9 @@ It boots a Windows CE 2.11 image built from Platform Builder 2.11 for Odo SH3 to
 
 ## ROMs
 
-No ROMs are included. The target image is a Platform Builder 2.11 `nk.bin` for the Odo platform, `_TGTCPU=SH3`, project MAXALL, built as a RAM image (loaded at 8C600000). Platform Builder 2.11 ships the Odo board support package with its source, and the SH3 kernel and OAK libraries, but no prebuilt SH3 image. Its build tools run under Wine. Two changes to the stock tree are needed for a usable image:
+No ROMs are included. The target image is a Platform Builder 2.11 `nk.bin` for the Odo platform, `_TGTCPU=SH3`, project MAXALL, built as a RAM image (loaded at 8C600000). Platform Builder 2.11 ships the Odo board support package with its source, and the SH3 kernel and OAK libraries, but no prebuilt SH3 image. Its build tools run under Wine. Under Wine, `nmake` hands `PUBLIC/COMMON/OAK/MISC/SRCGEN1.BAT` an argument with a trailing line break, which breaks `sources.gen`, so that file needs `%_PROJECTROOT%\cesysgen` in place of `%3`.
 
-- `PUBLIC/COMMON/OAK/MISC/SRCGEN1.BAT`: under Wine, `nmake` hands the batch file an argument with a trailing line break, which breaks `sources.gen`. Use `%_PROJECTROOT%\cesysgen` in place of `%3`.
-- `PLATFORM/ODO/KERNEL/HAL/MDPPFS.C`: set `NoPPFS = TRUE` at the top of `OEMParallelPortGetByte` and `OEMParallelPortSendByte`. Without a parallel port cable to a host, each PPFS access otherwise spins for seconds before timing out.
-
-Put the image at `rom/odo-sh3.bin` for the tests. For `rom/odo-sh3-debug.bin`, also build debugmgr as an Odo platform component (a `PLATFORM/ODO/TEST/DEBUGMGR` directory with a `SOURCES` file, `debugmgr.c` with its `host_call` replaced by the SH helper below, and the helper as `SHX/HOSTCALL.SRC`), and list it in `PLATFORM/ODO/FILES/PLATFORM.BIB` under MODULES as `debugmgr.exe $(_FLATRELEASEDIR)\debugmgr.exe NK S`.
+The tests expect velo-toolchain's debugmgr in the image: build it as an Odo platform component (a `PLATFORM/ODO/TEST/DEBUGMGR` directory with a `SOURCES` file, `debugmgr.c` with its `host_call` replaced by the SH helper below, and the helper as `SHX/HOSTCALL.SRC`), and list it in `PLATFORM/ODO/FILES/PLATFORM.BIB` under MODULES as `debugmgr.exe $(_FLATRELEASEDIR)\debugmgr.exe NK S`. Put the image at `rom/odo-sh3.bin`. The PPFS test also wants an SH3 program that isn't in ROM at `rom/mbtest.exe` (or `PPFS_PROGRAM=PATH`).
 
 ## Running
 
@@ -39,6 +36,10 @@ tools/mkcard.sh card.img 16 ~/some/folder
 `mkcard.sh` uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. To read the image on the host, `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` on macOS or `mcopy -i card.img@@512` on Linux.
 
 The card has a CompactFlash CIS, a configuration option register, and ATA IDENTIFY, READ and WRITE SECTORS (LBA and CHS) through memory, contiguous I/O or primary/secondary I/O decoding. The SH-3's area 5 and 6 bus widths (BCR2) apply, so the BSP's switch to 16-bit windows gives word access to the ATA data register.
+
+## Host folder (PPFS)
+
+The Odo's parallel port carried Platform Builder's parallel-port file system: when CE can't find a program or DLL in ROM or the object store, the kernel asks the host for it. `--folder=DIR` makes the emulator that host, serving DIR, so programs built for SH3 run without rebuilding the image: copy `hello.exe` into DIR and run `hello` from Task Manager's Run dialog. Names are matched without their path and case-insensitively. Without `--folder`, the port answers that no file exists, so CE doesn't wait on a missing host.
 
 ## Debugging and file transfer
 
@@ -71,16 +72,16 @@ gdb -ex "set architecture sh3" -ex "target extended-remote :1234" -ex 'set remot
 
 - CPU (`src/core/sh3.c`): the SH-3 instruction set, little-endian, with delay slots; banked registers, SR.MD/RB/BL; exceptions, TRAPA and interrupts through VBR+0x100/0x400/0x600 with EXPEVT, INTEVT, TRA, SPC and SSR; the MMU with the 128-entry 4-way UTLB, 1 KB and 4 KB pages, ASIDs, shared pages, MMUCR (AT, IX, TF, RC, SV), LDTLB, TLB miss, invalid, protection and initial page write exceptions, and the memory-mapped TLB arrays; SLEEP. No FPU or DSP.
 - On-chip peripherals (`src/core/sh7709.c`), SH7708 and SH7709: the INTC (IRL levels, IPRA to IPRE, IRQ0-5 on the SH7709), TMU channels 0-2 with underflow interrupts, the RTC (BCD counters, 64 Hz counter, alarm, periodic and carry interrupts), SCI, the two SH7709 SCIFs, and register storage for the BSC, CPG, WDT, CCR and the SH7709 ports. The cache isn't modelled.
-- Odo board (`src/core/machine.c`): 16 MB DRAM at 0x0C000000 (32 or 64 with `--memory`), the system ASIC at 0x10000000 (interrupt status and mask on IRL level 4, debug serial port output, the 480x240 2 bpp display DMA, the PS/2 keyboard, the touch and sound block with the UCB register interface and pen timer, the PC Card controller with a CompactFlash card in socket 0), and the housekeeping FPGA LEDs.
+- Odo board (`src/core/machine.c`): 16 MB DRAM at 0x0C000000 (32 or 64 with `--memory`), the system ASIC at 0x10000000 (interrupt status and mask on IRL level 4, debug serial port output, the 480x240 2 bpp display DMA, the PS/2 keyboard, the touch and sound block with the UCB register interface and pen timer, the PC Card controller with a CompactFlash card in socket 0), and the housekeeping FPGA (LEDs and the parallel port).
 
 Guest time is the instruction count at 58.98 MHz, with the peripheral clock at 14.75 MHz.
 
-Not yet: sound output, serial ports to the host, PC Cards other than CompactFlash in socket 0, suspend and the parallel port (PPFS). The GUI app (`make velo`) builds against the SH3 machine but is untested, and its menus still offer Velo features.
+Not yet: sound output, serial ports to the host, PC Cards other than CompactFlash in socket 0, suspend, and PPFS's registry calls. The GUI app (`make velo`) builds against the SH3 machine but is untested, and its menus still offer Velo features.
 
 ## Testing
 
 - `make check` needs no ROMs: the command lines and the web proxy.
-- `make test` runs the CPU tests, boots `rom/odo-sh3.bin` (or `make test ROM=PATH`) through calibration to the desktop and the console comparing framebuffer hashes, checks the GDB stub, and inserts a card image into the running desktop and has CE copy a file on it, checked on the host. With `rom/odo-sh3-debug.bin` (`DEBUG_ROM=PATH`), an image that also has `debugmgr.exe`, it starts debugmgr from Task Manager and checks GDB's file transfer, run, step and kill through it.
+- `make test` runs the CPU tests, boots `rom/odo-sh3.bin` (or `make test ROM=PATH`) through calibration to the desktop and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, and runs a program from `--folder`.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 

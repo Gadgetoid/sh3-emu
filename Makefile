@@ -5,7 +5,6 @@ VELORAPI  = velo-rapi
 SH3RUN    = sh3-run
 BUILD     = build
 ROM      ?= rom/odo-sh3.bin
-DEBUG_ROM ?= rom/odo-sh3-debug.bin
 
 .DEFAULT_GOAL := all
 
@@ -44,7 +43,7 @@ else
 SRC_NET  = src/net/net_gateway_none.c src/net/web_proxy_none.c
 endif
 
-SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
+SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
 SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
@@ -117,7 +116,6 @@ check: $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(SH3RUN)
 test: $(HEADLESS) $(SH3RUN)
 	sh tests/sh3/run.sh
 	sh tests/boot.sh $(ROM)
-	sh tests/debug.sh $(DEBUG_ROM)
 
 sh3-fuzz: $(SH3RUN)
 	python3 tests/sh3/fuzz.py --runner ./$(SH3RUN)
