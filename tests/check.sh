@@ -1,25 +1,23 @@
 #!/bin/sh
 set -e
-OUT=${TMPDIR:-/tmp}/velo-check
+OUT=${TMPDIR:-/tmp}/sh3-check
 mkdir -p "$OUT"
 expect_fail() {
     name=$1; pattern=$2; shift 2
     if "$@" > "$OUT/out.txt" 2>&1; then echo "FAIL $name (succeeded)"; exit 1; fi
     if grep -q -- "$pattern" "$OUT/out.txt"; then echo "ok   $name"; else echo "FAIL $name"; cat "$OUT/out.txt"; exit 1; fi
 }
-for tool in velo headless velo-rapi velo-state; do
+for tool in headless velo-rapi; do
     if ./$tool --help | grep -q "^usage: $tool" && ./$tool --version | grep -q "^$tool "; then echo "ok   ${tool}_help"; else echo "FAIL ${tool}_help"; exit 1; fi
 done
 expect_fail headless_no_rom "no ROM given" ./headless
 expect_fail headless_unknown "unknown option --tpa" ./headless rom.bin --tpa=1:2:3
 expect_fail headless_bad_tap "wants SECONDS:X:Y" ./headless rom.bin --tap=21:108
-expect_fail velo_bad_serial "wants net|pty|off|PORT" ./velo --serial=usb
-expect_fail headless_bad_screen "wants WxH" ./headless rom.bin --screen=1024x768
-expect_fail velo_bad_screen "wants WxH" ./velo --screen=640
+expect_fail headless_bad_key "wants SECONDS:SCANCODE" ./headless rom.bin --key=1:11+0D+12+14+59
+expect_fail headless_not_image "not a B000FF" ./headless Makefile --seconds=1
+expect_fail headless_bad_agent "cannot listen on agent socket" ./headless Makefile --seconds=1 --agent=/nonexistent/folder/agent.sock
 expect_fail velo_rapi_unknown "unknown option --frob" ./velo-rapi --frob
-expect_fail headless_bad_agent "cannot listen on agent socket" ./headless rom/nk.bin --seconds=1 --agent=/nonexistent/folder/agent.sock
-expect_fail velo_state_unknown "unknown option --frob" ./velo-state --frob
-expect_fail velo_state_not_state "is not a Velo state" ./velo-state Makefile ls
+expect_fail sh3_run_no_program "usage: sh3-run" ./sh3-run
 if pkg-config --exists slirp libcurl; then
     PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
     python3 -m http.server "$PORT" --bind 127.0.0.1 --directory tests/web >/dev/null 2>&1 &

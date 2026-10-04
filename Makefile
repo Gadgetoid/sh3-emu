@@ -2,12 +2,10 @@ PROG      = velo
 HEADLESS  = headless
 PROXYCHECK = proxycheck
 VELORAPI  = velo-rapi
-VELOSTATE = velo-state
 SH3RUN    = sh3-run
 BUILD     = build
 ROM      ?= rom/odo-sh3.bin
 DEBUG_ROM ?= rom/odo-sh3-debug.bin
-VELO_TOOLCHAIN ?= ../velo-toolchain
 
 .DEFAULT_GOAL := all
 
@@ -51,7 +49,7 @@ SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rap
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
-OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
+OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
 all: $(HEADLESS) $(SH3RUN) $(VELORAPI)
 
@@ -59,7 +57,7 @@ $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 $(HEADLESS): $(OBJ_HEADLESS)
-	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
+	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS)
 
 $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxy_check.o
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
@@ -69,9 +67,6 @@ $(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/t
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
 	$(CC) -o $@ $^
-
-$(VELOSTATE): $(BUILD)/src/util/options.o $(BUILD)/tools/velo_state.o
-	$(CC) -o $@ $^ -lz
 
 ICON_TOOL  = $(BUILD)/icon
 ICON_SIZES = 16 32 64 128 256 512 1024
@@ -106,30 +101,17 @@ $(BUILD)/%.o: %.m
 run: $(PROG)
 	./$(PROG) $(ROM)
 
-app: $(PROG) $(VELORAPI) $(VELOSTATE) icons
+app: $(PROG) $(VELORAPI) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh Velo.app
 
-GUEST_COMPONENTS = $(patsubst guest/%/CMakeLists.txt,%,$(wildcard guest/*/CMakeLists.txt))
-
-guest:
-	for component in $(GUEST_COMPONENTS); do \
-		for version in 1 2; do \
-			cmake -S guest/$$component -B $(BUILD)/guest/$$component/ce$$version -DCMAKE_TOOLCHAIN_FILE=$(abspath $(VELO_TOOLCHAIN))/cmake/velo-ce.cmake -DVELO_CE_VERSION=$$version && \
-			cmake --build $(BUILD)/guest/$$component/ce$$version || exit 1; \
-			cp guest/$$component/$$component.reg $(BUILD)/guest/$$component/ce$$version/ || exit 1; \
-		done; \
-	done
-
-vdisk: guest
-
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE) $(SH3RUN) Velo.app
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(SH3RUN) Velo.app
 
-.PHONY: all run clean test check app icons guest vdisk sh3-fuzz FORCE
+.PHONY: all run clean test check app icons sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/velo_state.d $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d
 
-check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
+check: $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(SH3RUN)
 	sh tests/check.sh
 
 test: $(HEADLESS) $(SH3RUN)

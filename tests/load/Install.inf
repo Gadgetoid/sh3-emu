@@ -1,7 +1,0 @@
-;
-;	Initialization file for HPC Installer
-;
-[Installer]
-AppName=Load Test
-AppTitle=Load Test
-InstallDir=\Program Files\Load Test
