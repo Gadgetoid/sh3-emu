@@ -2,10 +2,8 @@
 #include "app/menu.h"
 
 #ifdef __APPLE__
-#define MENU_HOST             "Mac"
 #define MENU_SCREENSHOT_PLACE "Desktop"
 #else
-#define MENU_HOST             "Computer"
 #define MENU_SCREENSHOT_PLACE "Pictures"
 #endif
 
@@ -36,9 +34,6 @@ typedef struct {
 
 static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_MENU, 0, "Machine", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_POWER, "Power Button", 'p', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
-    { MENU_ENTRY_ITEM, MENU_BACKLIGHT, "Backlight", 'b', MENU_KEY_PRIMARY },
-    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SOFT_RESET, "Soft Reset", 'r', MENU_KEY_PRIMARY },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_HEADING, 0, "Machines", 0, 0 },
@@ -111,54 +106,10 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_HEADING, 0, "PC Card", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_INSERT_CARD, "Insert Card Image" ELLIPSIS, 'o', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_EJECT_CARD, "Eject Card", 'e', MENU_KEY_PRIMARY },
-    { MENU_ENTRY_HEADING, 0, "Paravirtual Disk", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_INSERT_DISK, "Insert Disk Image" ELLIPSIS, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_NEW_DISK, "New Disk Image" ELLIPSIS, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_EJECT_DISK, "Eject Disk", 0, 0 },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
-    { MENU_ENTRY_HEADING, 0, "Serial Port", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_OFF, "Not Connected", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_NETWORK, "Network (PPP)", 'n', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PTY, "Pseudo-terminal", 0, 0 },
-    { MENU_ENTRY_SUBMENU, 0, "Host Serial Port", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 0, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 1, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 2, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 3, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 4, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 5, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 6, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 7, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 8, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 9, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 10, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 11, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 12, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 13, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 14, "", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 15, "", 0, 0 },
-    { MENU_ENTRY_END, 0, NULL, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_CONNECT_AT_LAUNCH, "Connect Network at Launch", 0, 0 },
-    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SOUND, "Sound", 0, 0 },
-    { MENU_ENTRY_END, 0, NULL, 0, 0 },
-
-    { MENU_ENTRY_MENU, 0, "PC Link", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SEND_FILES, "Send Files to Velo" ELLIPSIS, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_FETCH_DOCUMENTS, "Copy My Documents to " MENU_HOST ELLIPSIS, 0, 0 },
-    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SHARED_FOLDER, "Shared Folder" ELLIPSIS, 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SYNC_NOW, "Sync Shared Folder Now", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_STOP_SHARING, "Stop Sharing Folder", 0, 0 },
-    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
-    { MENU_ENTRY_HEADING, 0, "Velo Settings", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_SET_PROXY, "Set Up Pocket IE Proxy", 0, 0 },
-    { MENU_ENTRY_SUBMENU, 0, "Connection Speed", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_BAUD_19200, "19200 (original)", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_BAUD_38400, "38400", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_BAUD_57600, "57600", 0, 0 },
-    { MENU_ENTRY_ITEM, MENU_BAUD_115200, "115200", 0, 0 },
-    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+    { MENU_ENTRY_HEADING, 0, "Host Folder (PPFS)", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_HOST_FOLDER, "Choose Host Folder" ELLIPSIS, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_STOP_HOST_FOLDER, "Stop Sharing Folder", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 };
 

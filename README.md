@@ -2,7 +2,7 @@
 
 An emulator for Windows CE on the Hitachi SH-3, for testing an SH3 port of a Windows CE toolchain. It's a hard fork of velo-emu, the Philips Velo 1 (MIPS) emulator, with the MIPS core replaced by an SH-3 core and the Velo board by Microsoft's Odo reference board with the SH3 CPU module.
 
-It boots a Windows CE 2.11 image built from Platform Builder 2.11 for Odo SH3 to its shell, with the 480x240 2 bpp display, PS/2 keyboard and touch panel working. It runs as `headless` for tests and scripts, or in a window as `velo`.
+It boots a Windows CE 2.11 image built from Platform Builder 2.11 for Odo SH3 to its shell, with the 480x240 2 bpp display, PS/2 keyboard and touch panel working. It runs as `headless` for tests and scripts, or in a window as `sh3emu`.
 
 ## ROMs
 
@@ -76,13 +76,17 @@ gdb -ex "set architecture sh3" -ex "target extended-remote :1234" -ex 'set remot
 
 Guest time is the instruction count at 58.98 MHz, with the peripheral clock at 14.75 MHz.
 
-Not yet: sound output, serial ports to the host, PC Cards other than CompactFlash in socket 0, suspend, and PPFS's registry calls. The GUI app (`make velo`, window title Odo SH3) runs the board with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus; its menus still offer some Velo features (backlight, serial PPP, RAPI, paravirtual disk) that do nothing here.
+Not yet: sound output, serial ports to the host, PC Cards other than CompactFlash in socket 0, suspend, and PPFS's registry calls.
+
+## GUI
+
+`make sh3emu` builds the windowed app (`make app` wraps it as `SH3Emu.app` on macOS). It runs the board with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus, and takes `--card`, `--folder`, `--memory`, `--agent` and `--gdb` like `headless`; Devices has the card and the PPFS host folder. Machines, states, snapshots and the ROMs folder live in `$XDG_DATA_HOME/sh3-emu` (otherwise `~/Library/Application Support/sh3-emu` on macOS, `~/.local/share/sh3-emu` elsewhere), and settings in `sh3emu.ini` in `$XDG_CONFIG_HOME/sh3-emu` (otherwise that data folder on macOS, `~/.config/sh3-emu` elsewhere), so it doesn't share anything with velo-emu.
 
 ## Testing
 
-- `make check` needs no ROMs: the command lines and the web proxy.
+- `make check` needs no ROMs: the command lines.
 - `make test` runs the CPU tests, boots `rom/odo-sh3.bin` (or `make test ROM=PATH`) through calibration to the desktop and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, and runs a program from `--folder`.
-- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts the GUI app on a headless X server, calibrates, opens the console and lists a directory with injected mouse and key events, and saves a screenshot.
+- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, calibrates, opens the console and lists a directory with injected mouse and key events, saves a screenshot, and checks it used its own data folder.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 
@@ -96,4 +100,4 @@ MIT, see `LICENSE`. ROMs and Windows CE software are not included.
 
 ## Credits
 
-The SH-3 core and on-chip peripherals are written from Hitachi's SH-3 and SH7708/SH7709 hardware manuals and Microsoft's SH-3 reference; no emulator code was copied. The Odo system ASIC's register behaviour follows the Odo board support package in Platform Builder 2.11 and CERF's Odo ARM720 board (MIT, `licences/MIT-CERF.txt`), which shares the ASIC. velo-emu's tools and the rest of this tree also draw on [CERF](https://github.com/gweslab/cerf), [stb_image and stb_truetype](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).
+The SH-3 core and on-chip peripherals are written from Hitachi's SH-3 and SH7708/SH7709 hardware manuals and Microsoft's SH-3 reference; no emulator code was copied. The Odo system ASIC's register behaviour follows the Odo board support package in Platform Builder 2.11 and CERF's Odo ARM720 board (MIT, `licences/MIT-CERF.txt`), which shares the ASIC. velo-emu's tools and the rest of this tree also draw on [CERF](https://github.com/gweslab/cerf), [stb_truetype](https://github.com/nothings/stb) (public domain) and [nanosvg](https://github.com/memononen/nanosvg) (zlib, `licences/Zlib-nanosvg.txt`).

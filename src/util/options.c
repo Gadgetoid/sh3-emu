@@ -12,7 +12,7 @@
 #define REPEAT_MAX  64
 
 const char *options_version(void) {
-    return VELO_VERSION;
+    return SH3EMU_VERSION;
 }
 
 static void print_wrapped(const char *text, int column) {

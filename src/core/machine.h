@@ -30,7 +30,6 @@ uint32_t   machine_pc(machine_t *machine);
 
 bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
-void machine_backlight_button(machine_t *machine, bool down);
 bool machine_screen(machine_t *machine, uint8_t *levels);
 screen_size_t machine_screen_size(machine_t *machine);
 screen_size_t machine_screen_next(machine_t *machine);
@@ -39,27 +38,12 @@ bool          machine_set_screen(machine_t *machine, screen_size_t size);
 
 void machine_key(machine_t *machine, uint8_t scancode, bool up);
 void machine_touch(machine_t *machine, bool down, int x, int y);
-void machine_power_button(machine_t *machine, bool down);
 bool machine_suspended(machine_t *machine);
-
-size_t machine_audio(machine_t *machine, int16_t *samples, size_t max, uint32_t *rate);
 
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
 void machine_set_host_folder(machine_t *machine, const char *path);
-
-bool machine_insert_disk(machine_t *machine, const char *path, bool read_only);
-void machine_eject_disk(machine_t *machine);
-bool machine_disk_inserted(machine_t *machine);
-
-void   machine_serial_connect(machine_t *machine, bool connected);
-bool   machine_serial_connected(machine_t *machine);
-void   machine_set_serial_tag(machine_t *machine, uint32_t tag);
-uint32_t machine_serial_tag(machine_t *machine);
-void   machine_serial_send(machine_t *machine, const uint8_t *data, size_t length);
-size_t machine_serial_take(machine_t *machine, uint8_t *out, size_t max);
-uint32_t machine_serial_baud(machine_t *machine);
 
 void machine_reset(machine_t *machine);
 void machine_soft_reset(machine_t *machine);

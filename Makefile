@@ -1,8 +1,7 @@
-PROG      = velo
+PROG      = sh3emu
 HEADLESS  = headless
-PROXYCHECK = proxycheck
-VELORAPI  = velo-rapi
 SH3RUN    = sh3-run
+APP       = SH3Emu.app
 BUILD     = build
 ROM      ?= rom/odo-sh3.bin
 
@@ -27,42 +26,19 @@ else
 SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
 endif
 
-ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
-SRC_NET  = src/net/net_gateway.c
-CFLAGS  += $(shell pkg-config --cflags slirp)
-NET_LIBS = $(shell pkg-config --libs slirp)
-ifeq ($(shell pkg-config --exists libcurl && echo yes),yes)
-SRC_NET  += src/net/web_proxy.c src/net/web_image.c src/vendor/image.c src/vendor/svg.c
-CFLAGS   += $(shell pkg-config --cflags libcurl)
-NET_LIBS += $(shell pkg-config --libs libcurl)
-else
-SRC_NET  += src/net/web_proxy_none.c
-endif
-LDFLAGS += $(NET_LIBS)
-else
-SRC_NET  = src/net/net_gateway_none.c src/net/web_proxy_none.c
-endif
-
 SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
-SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
+SRC_APP     = $(SRC_MACHINE) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
-all: $(HEADLESS) $(SH3RUN) $(VELORAPI)
+all: $(HEADLESS) $(SH3RUN)
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
 $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS)
-
-$(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxy_check.o
-	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
-
-$(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/velo_rapi.o
-	$(CC) -o $@ $^
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
 	$(CC) -o $@ $^
@@ -73,9 +49,9 @@ ICON_SIZES = 16 32 64 128 256 512 1024
 $(ICON_TOOL): $(BUILD)/tools/icon.o $(BUILD)/src/util/png.o $(BUILD)/src/vendor/svg.o
 	$(CC) -o $@ $^ -lm -lz
 
-icons: $(ICON_TOOL) assets/velo.svg
+icons: $(ICON_TOOL) assets/icon.svg
 	@mkdir -p $(BUILD)/icons
-	@for size in $(ICON_SIZES); do $(ICON_TOOL) assets/velo.svg $$size $(BUILD)/icons/velo-$$size.png || exit 1; done
+	@for size in $(ICON_SIZES); do $(ICON_TOOL) assets/icon.svg $$size $(BUILD)/icons/icon-$$size.png || exit 1; done
 
 $(BUILD)/src/vendor/%.o: CFLAGS += -w
 
@@ -83,7 +59,7 @@ VERSION ?= $(shell git describe --always --dirty 2>/dev/null || echo unknown)
 
 $(BUILD)/version.h: FORCE
 	@mkdir -p $(BUILD)
-	@printf '#define VELO_VERSION "%s"\n' "$(VERSION)" > $@.tmp
+	@printf '#define SH3EMU_VERSION "%s"\n' "$(VERSION)" > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
@@ -100,17 +76,17 @@ $(BUILD)/%.o: %.m
 run: $(PROG)
 	./$(PROG) $(ROM)
 
-app: $(PROG) $(VELORAPI) icons
-	ICONS=$(BUILD)/icons sh tools/mkapp.sh Velo.app
+app: $(PROG) icons
+	ICONS=$(BUILD)/icons sh tools/mkapp.sh $(APP)
 
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(SH3RUN) Velo.app
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(APP)
 
 .PHONY: all run clean test check app icons sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d
 
-check: $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(SH3RUN)
+check: $(HEADLESS) $(SH3RUN)
 	sh tests/check.sh
 
 test: $(HEADLESS) $(SH3RUN)

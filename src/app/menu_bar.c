@@ -1215,7 +1215,7 @@ static int run_form(form_t *form) {
 
 static const char *SCREEN_LABELS[] = { "480 x 240 (original)", "640 x 240", "640 x 480", "800 x 600" };
 static const char *MEMORY_LABELS[DIALOG_MEMORY_COUNT] = {
-    "4 MB (original)", "8 MB", "16 MB", "20 MB (4 MB + 16 MB DRAM card)", "32 MB (16 MB + 16 MB DRAM card)",
+    "16 MB", "32 MB", "64 MB",
 };
 
 typedef struct {
@@ -1272,7 +1272,7 @@ static void rom_changed(form_t *form, int widget_index, void *context) {
         rom->selected = state->last_rom = state->count - 1;
     } else if (state->picked_path[0]) {
         const SDL_MessageBoxButtonData buttons[] = { { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 0, "OK" } };
-        const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_WARNING, main_window, "Not a Velo ROM", "That file isn't a ROM this emulator can run.", 1, buttons, NULL };
+        const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_WARNING, main_window, "Not an Odo SH3 ROM", "That file isn't a ROM this emulator can run.", 1, buttons, NULL };
         int chosen;
         SDL_ShowMessageBox(&dialog, &chosen);
     }

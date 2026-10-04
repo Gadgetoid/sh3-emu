@@ -1,11 +1,9 @@
 build/
-velo
+sh3emu
 headless
 rom/
 *.pgm
-proxycheck
-velo-rapi
-Velo.app/
+SH3Emu.app/
 dist/
 .DS_Store
 .claude/

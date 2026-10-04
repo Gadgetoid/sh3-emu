@@ -1,19 +1,19 @@
 #!/bin/sh
 set -e
-app=${1:-Velo.app}
+app=${1:-SH3Emu.app}
 version=${VERSION:-$(git describe --always --dirty 2>/dev/null || echo unknown)}
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
-cp velo velo-rapi "$app/Contents/MacOS/"
+cp sh3emu "$app/Contents/MacOS/"
 
 icons=${ICONS:-build/icons}
-iconset=$(mktemp -d)/Velo.iconset
+iconset=$(mktemp -d)/SH3Emu.iconset
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
-    cp "$icons/velo-$size.png" "$iconset/icon_${size}x${size}.png"
-    cp "$icons/velo-$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
+    cp "$icons/icon-$size.png" "$iconset/icon_${size}x${size}.png"
+    cp "$icons/icon-$((size * 2)).png" "$iconset/icon_${size}x${size}@2x.png"
 done
-iconutil -c icns "$iconset" -o "$app/Contents/Resources/Velo.icns"
+iconutil -c icns "$iconset" -o "$app/Contents/Resources/SH3Emu.icns"
 rm -rf "$(dirname "$iconset")"
 
 cat > "$app/Contents/Info.plist" <<EOF
@@ -21,16 +21,16 @@ cat > "$app/Contents/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Velo</string>
-    <key>CFBundleDisplayName</key><string>Velo</string>
-    <key>CFBundleIdentifier</key><string>org.velo-emu.Velo</string>
-    <key>CFBundleExecutable</key><string>velo</string>
-    <key>CFBundleIconFile</key><string>Velo</string>
+    <key>CFBundleName</key><string>Odo SH3</string>
+    <key>CFBundleDisplayName</key><string>Odo SH3</string>
+    <key>CFBundleIdentifier</key><string>org.sh3-emu.SH3Emu</string>
+    <key>CFBundleExecutable</key><string>sh3emu</string>
+    <key>CFBundleIconFile</key><string>SH3Emu</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Emulates a Philips Velo 1. ROMs not included.</string>
+    <key>NSHumanReadableCopyright</key><string>Emulates the Odo SH3 Windows CE reference board. ROMs not included.</string>
 </dict>
 </plist>
 EOF
@@ -52,22 +52,18 @@ bundle() {
     done
 }
 
-bundle "$app/Contents/MacOS/velo"
-bundle "$app/Contents/MacOS/velo-rapi"
-for binary in "$app/Contents/MacOS/velo" "$app/Contents/MacOS/velo-rapi" "$app/Contents/Frameworks/"*.dylib; do
+bundle "$app/Contents/MacOS/sh3emu"
+for binary in "$app/Contents/MacOS/sh3emu" "$app/Contents/Frameworks/"*.dylib; do
     [ -f "$binary" ] || continue
     for path in $(otool -l "$binary" | awk '/LC_RPATH/ { found = 1 } found && $1 == "path" { print $2; found = 0 }'); do
         install_name_tool -delete_rpath "$path" "$binary" 2>/dev/null || true
     done
 done
-for binary in "$app/Contents/MacOS/velo" "$app/Contents/MacOS/velo-rapi"; do
-    install_name_tool -add_rpath "@executable_path/../Frameworks" "$binary" 2>/dev/null || true
-done
+install_name_tool -add_rpath "@executable_path/../Frameworks" "$app/Contents/MacOS/sh3emu" 2>/dev/null || true
 
 for library in "$app/Contents/Frameworks/"*.dylib; do
     [ -f "$library" ] && codesign --force --sign - "$library"
 done
-codesign --force --sign - "$app/Contents/MacOS/velo-rapi"
-codesign --force --sign -
+codesign --force --sign - "$app/Contents/MacOS/sh3emu"
 codesign --force --sign - "$app"
 echo "built $app ($version)"

@@ -100,7 +100,7 @@ void profile_default_name(const profile_t *profile, int system, char *name, size
     snprintf(rom, sizeof rom, "%s", file_leaf_name(profile->rom));
     char *extension = strrchr(rom, '.');
     if (extension && extension != rom) *extension = 0;
-    const char *version = system == 1 ? "CE 1.0" : system == 2 ? "CE 2.0" : "CE";
+    const char *version = system ? "CE 2.11" : "CE";
     snprintf(name, size, "%s (%s), %u x %u, %u MB", version, rom, profile->screen.width, profile->screen.height, profile->memory);
 }
 

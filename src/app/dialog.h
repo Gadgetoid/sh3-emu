@@ -6,7 +6,7 @@
 
 #include "core/screen.h"
 
-#define DIALOG_MEMORY_COUNT 5
+#define DIALOG_MEMORY_COUNT 3
 
 extern const uint32_t DIALOG_MEMORY_SIZES[DIALOG_MEMORY_COUNT];
 

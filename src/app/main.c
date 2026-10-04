@@ -8,7 +8,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "app/desktop.h"
 #include "app/dialog.h"
 #include "app/menu.h"
 #include "app/profiles.h"
@@ -19,8 +18,6 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
-#include "net/net_gateway.h"
-#include "rapi/rapi.h"
 #include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
@@ -31,7 +28,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <spawn.h>
-#include <termios.h>
 #include <unistd.h>
 
 #define WINDOW_SCALE     2
@@ -44,9 +40,6 @@
 #define BACKUP_SECONDS   600
 #define BACKUP_KEEP      10
 #define NOTICE_SECONDS   2
-#define POWER_PRESS_SECONDS 0.2
-#define BACKLIGHT_PRESS_SECONDS 0.1
-#define AUDIO_CHUNK 8192
 #define WINDOW_TITLE     "Odo SH3"
 
 #ifdef __APPLE__
@@ -256,181 +249,7 @@ static void release_keys(input_queue_t *input, machine_t *machine, bool *held, i
     }
 }
 
-typedef enum { SERIAL_OFF, SERIAL_NETWORK, SERIAL_PTY, SERIAL_DEVICE } serial_mode_t;
-
-#define SERIAL_QUEUE 65536
-
-typedef struct {
-    serial_mode_t mode;
-    net_gateway_t *gateway;
-    int      pty;
-    int      pty_slave;
-    char     pty_name[128];
-    const char *user_agent;
-    const char *device;
-    uint32_t baud;
-    uint8_t  queue[SERIAL_QUEUE];
-    size_t   queued;
-} serial_t;
-
-#define SERIAL_PORT_MAX   16
-#define PORT_SCAN_SECONDS 2.0
-
-static bool is_serial_port(const char *name) {
-    return !strncmp(name, "cu.", 3) || !strncmp(name, "ttyUSB", 6) || !strncmp(name, "ttyACM", 6);
-}
-
-static int compare_names(const void *a, const void *b) {
-    return strcmp((const char *)a, (const char *)b);
-}
-
-static int list_serial_ports(char ports[][64], int max) {
-    DIR *dev = opendir("/dev");
-    if (!dev) return 0;
-    int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dev)) && count < max) {
-        if (!is_serial_port(entry->d_name) || strlen(entry->d_name) + 6 > 64) continue;
-        snprintf(ports[count++], 64, "/dev/%s", entry->d_name);
-    }
-    closedir(dev);
-    qsort(ports, (size_t)count, 64, compare_names);
-    return count;
-}
-
-static speed_t speed_for(uint32_t baud) {
-    static const struct { uint32_t baud; speed_t speed; } speeds[] = {
-        { 300, B300 }, { 1200, B1200 }, { 2400, B2400 }, { 4800, B4800 }, { 9600, B9600 },
-        { 19200, B19200 }, { 38400, B38400 }, { 57600, B57600 }, { 115200, B115200 },
-    };
-    speed_t best = B9600;
-    uint32_t best_error = UINT32_MAX;
-    for (size_t i = 0; i < sizeof speeds / sizeof speeds[0]; i++) {
-        uint32_t error = speeds[i].baud > baud ? speeds[i].baud - baud : baud - speeds[i].baud;
-        if (error < best_error) { best_error = error; best = speeds[i].speed; }
-    }
-    return best;
-}
-
-static void device_follow_baud(serial_t *serial, machine_t *machine) {
-    uint32_t baud = machine_serial_baud(machine);
-    if (serial->mode != SERIAL_DEVICE || !baud || baud == serial->baud) return;
-    struct termios settings;
-    if (tcgetattr(serial->pty, &settings) != 0) return;
-    cfsetispeed(&settings, speed_for(baud));
-    cfsetospeed(&settings, speed_for(baud));
-    tcsetattr(serial->pty, TCSANOW, &settings);
-    serial->baud = baud;
-    if (verbose) fprintf(stderr, "serial: %s at %u baud\n", serial->device, baud);
-}
-
-static void serial_log(const char *message) {
-    if (verbose) fputs(message, stderr);
-}
-
-static void serial_close(serial_t *serial, machine_t *machine) {
-    if (serial->gateway) net_gateway_destroy(serial->gateway);
-    if (serial->pty >= 0) close(serial->pty);
-    if (serial->pty_slave >= 0) close(serial->pty_slave);
-    serial->gateway = NULL;
-    serial->pty = -1;
-    serial->pty_slave = -1;
-    serial->queued = 0;
-    serial->baud = 0;
-    serial->mode = SERIAL_OFF;
-    machine_serial_connect(machine, false);
-}
-
-static const char *serial_open(serial_t *serial, machine_t *machine, serial_mode_t mode) {
-    serial_close(serial, machine);
-    if (mode == SERIAL_NETWORK) {
-        char rapi_socket[1024];
-        rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
-        net_gateway_options_t options = { serial->user_agent, rapi_socket };
-        serial->gateway = net_gateway_create(serial_log, &options);
-        if (!serial->gateway) return "built without libslirp";
-    } else if (mode == SERIAL_PTY) {
-        int fd = posix_openpt(O_RDWR | O_NOCTTY);
-        if (fd < 0 || grantpt(fd) != 0 || unlockpt(fd) != 0) {
-            if (fd >= 0) close(fd);
-            return "could not open a pseudo-terminal";
-        }
-        snprintf(serial->pty_name, sizeof serial->pty_name, "%s", ptsname(fd));
-        int slave = open(serial->pty_name, O_RDWR | O_NOCTTY);
-        struct termios settings;
-        tcgetattr(slave, &settings);
-        cfmakeraw(&settings);
-        tcsetattr(slave, TCSANOW, &settings);
-        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
-        serial->pty = fd;
-        serial->pty_slave = slave;
-        fprintf(stderr, "serial: COM1 on %s\n", serial->pty_name);
-    } else if (mode == SERIAL_DEVICE) {
-        if (!serial->device || !serial->device[0]) return "choose a host serial port first";
-        int fd = open(serial->device, O_RDWR | O_NOCTTY | O_NONBLOCK);
-        struct termios settings;
-        if (fd < 0 || tcgetattr(fd, &settings) != 0) {
-            if (fd >= 0) close(fd);
-            snprintf(serial->pty_name, sizeof serial->pty_name, "could not open %s", serial->device);
-            return serial->pty_name;
-        }
-        cfmakeraw(&settings);
-        settings.c_cflag |= CLOCAL | CREAD;
-        settings.c_cflag &= ~(tcflag_t)CRTSCTS;
-        cfsetispeed(&settings, B19200);
-        cfsetospeed(&settings, B19200);
-        tcsetattr(fd, TCSANOW, &settings);
-        serial->pty = fd;
-        snprintf(serial->pty_name, sizeof serial->pty_name, "COM1 on %s", serial->device);
-    }
-    serial->mode = mode;
-    machine_set_serial_tag(machine, (uint32_t)mode);
-    if (mode != SERIAL_OFF) machine_serial_connect(machine, true);
-    if (mode == SERIAL_DEVICE) device_follow_baud(serial, machine);
-    return mode == SERIAL_NETWORK ? "network cable connected" : mode != SERIAL_OFF ? serial->pty_name : "serial disconnected";
-}
-
-static void serial_restored(serial_t *serial, machine_t *machine, uint64_t *reconnect_at, serial_mode_t *reconnect_mode) {
-    bool was_connected = machine_serial_connected(machine);
-    serial_mode_t mode = (serial_mode_t)machine_serial_tag(machine);
-    serial_close(serial, machine);
-    *reconnect_at = 0;
-    if (was_connected && (mode == SERIAL_NETWORK || mode == SERIAL_PTY || (mode == SERIAL_DEVICE && serial->device && serial->device[0]))) {
-        *reconnect_mode = mode;
-        *reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
-    }
-}
-
-static void serial_pump(serial_t *serial, machine_t *machine) {
-    uint8_t buffer[4096];
-    size_t count;
-    device_follow_baud(serial, machine);
-    while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) {
-        if (serial->gateway) net_gateway_from_guest(serial->gateway, buffer, count);
-        else if (serial->mode == SERIAL_DEVICE) {
-            size_t room = sizeof serial->queue - serial->queued;
-            if (count > room) count = room;
-            memcpy(serial->queue + serial->queued, buffer, count);
-            serial->queued += count;
-        }
-        else if (serial->pty >= 0 && write(serial->pty, buffer, count) < 0) break;
-    }
-    if (serial->mode == SERIAL_DEVICE && serial->queued) {
-        ssize_t written = write(serial->pty, serial->queue, serial->queued);
-        if (written > 0) {
-            memmove(serial->queue, serial->queue + written, serial->queued - (size_t)written);
-            serial->queued -= (size_t)written;
-        }
-    }
-    if (serial->gateway) {
-        net_gateway_poll(serial->gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
-        while ((count = net_gateway_to_guest(serial->gateway, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, count);
-    } else if (serial->pty >= 0) {
-        ssize_t got;
-        while ((got = read(serial->pty, buffer, sizeof buffer)) > 0) machine_serial_send(machine, buffer, (size_t)got);
-    }
-}
-typedef enum { PICK_SEND = 1, PICK_FETCH, PICK_SHARED, PICK_SAVE_SNAPSHOT, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_DISK, PICK_NEW_DISK } pick_kind_t;
+typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_FOLDER } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -465,15 +284,6 @@ typedef struct {
     int  count;
 } dropped_t;
 
-#define BLANK_DISK_BYTES (32 * 1024 * 1024)
-
-static bool create_blank_disk(const char *path) {
-    FILE *file = fopen(path, "wb");
-    if (!file) return false;
-    bool sized = fseek(file, BLANK_DISK_BYTES - 1, SEEK_SET) == 0 && fputc(0, file) == 0;
-    return fclose(file) == 0 && sized;
-}
-
 static bool has_extension(const char *path, const char *extension) {
     const char *dot = strrchr(path, '.');
     return dot && !strcasecmp(dot, extension);
@@ -484,30 +294,19 @@ static bool is_directory(const char *path) {
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t *desktop, bool online) {
+static const char *handle_drop(dropped_t *dropped, machine_t *machine) {
     static char message[1200];
-    int files = 0, scripts = -1, cards = -1;
-    const char *list[PICK_MAX + 1];
+    const char *card = NULL;
+    int files = 0;
     for (int i = 0; i < dropped->count; i++) {
-        const char *path = dropped->paths[i];
-        if (is_directory(path)) continue;
-        if (has_extension(path, ".img") && cards < 0) cards = i;
-        else if (has_extension(path, ".load") && scripts < 0) scripts = i;
-        list[files++] = path;
+        if (is_directory(dropped->paths[i])) continue;
+        files++;
+        if (!card && has_extension(dropped->paths[i], ".img")) card = dropped->paths[i];
     }
-    list[files] = NULL;
     dropped->count = 0;
-    if (cards >= 0 && files == 1) {
-        snprintf(message, sizeof message, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", file_leaf_name(list[0]));
-        return message;
-    }
-    if (!files) return "drop files, a .load script or a card image";
-    if (!online) return "connect Devices > Network (PPP) to send files to the Velo";
-    if (scripts >= 0) {
-        snprintf(message, sizeof message, "installing %s", file_leaf_name(dropped->paths[scripts]));
-        return desktop_load(desktop, dropped->paths[scripts]) ? message : "busy with the last transfer";
-    }
-    return desktop_send(desktop, list) ? "sending to \\My Documents" : "busy with the last transfer";
+    if (!card || files != 1) return "drop a card image (.img)";
+    snprintf(message, sizeof message, machine_insert_card(machine, card) ? "inserted %s" : "could not open %s", file_leaf_name(card));
+    return message;
 }
 
 static void log_message(const char *message) {
@@ -563,35 +362,15 @@ static void start_debug_log(const char *rom_path) {
 }
 
 static void data_folder(char *path, size_t size) {
-    rapi_data_path("", path, size);
-    size_t length = strlen(path);
-    if (length > 1 && path[length - 1] == '/') path[length - 1] = 0;
-    SDL_CreateDirectory(path);
-}
-
-static void migrate_old_folders(void) {
+    const char *data_home = getenv("XDG_DATA_HOME");
+    const char *home = getenv("HOME") ? getenv("HOME") : ".";
+    if (data_home && data_home[0] == '/') snprintf(path, size, "%s/sh3-emu", data_home);
 #ifdef __APPLE__
-    if (getenv("XDG_DATA_HOME") || getenv("XDG_CONFIG_HOME")) return;
-    const char *home = getenv("HOME");
-    if (!home) return;
-    char folder[1024], old_data[1024], old_settings[1024], settings[1100];
-    rapi_data_path("", folder, sizeof folder);
-    folder[strlen(folder) - 1] = 0;
-    snprintf(old_data, sizeof old_data, "%s/.local/share/velo-emu", home);
-    snprintf(old_settings, sizeof old_settings, "%s/.config/velo-emu/emu.ini", home);
-    struct stat info;
-    if (stat(folder, &info) != 0 && stat(old_data, &info) == 0) {
-        char parent[1100];
-        snprintf(parent, sizeof parent, "%s/Library/Application Support", home);
-        SDL_CreateDirectory(parent);
-        if (rename(old_data, folder) == 0) fprintf(stderr, "moved %s to %s\n", old_data, folder);
-    }
-    SDL_CreateDirectory(folder);
-    snprintf(settings, sizeof settings, "%s/emu.ini", folder);
-    if (stat(settings, &info) != 0 && stat(old_settings, &info) == 0 && rename(old_settings, settings) == 0) {
-        fprintf(stderr, "moved %s to %s\n", old_settings, settings);
-    }
+    else snprintf(path, size, "%s/Library/Application Support/sh3-emu", home);
+#else
+    else snprintf(path, size, "%s/.local/share/sh3-emu", home);
 #endif
+    SDL_CreateDirectory(path);
 }
 
 static void snapshot_folder(char *path, size_t size) {
@@ -706,26 +485,23 @@ typedef struct {
     uint32_t speed;
     uint32_t host_time;
     uint32_t scale;
-    uint32_t connect_at_launch;
     uint32_t system;
     char     machine[64];
-    char     serial_device[1024];
     uint32_t display;
-    char     user_agent[256];
-    char     shared_folder[1024];
+    char     host_folder[1024];
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
     const char *config_home = getenv("XDG_CONFIG_HOME");
     char base[1024];
-    if (config_home && config_home[0] == '/') snprintf(base, sizeof base, "%s/velo-emu", config_home);
+    if (config_home && config_home[0] == '/') snprintf(base, sizeof base, "%s/sh3-emu", config_home);
 #ifdef __APPLE__
     else data_folder(base, sizeof base);
 #else
-    else snprintf(base, sizeof base, "%s/.config/velo-emu", getenv("HOME") ? getenv("HOME") : ".");
+    else snprintf(base, sizeof base, "%s/.config/sh3-emu", getenv("HOME") ? getenv("HOME") : ".");
 #endif
     SDL_CreateDirectory(base);
-    snprintf(path, size, "%s/emu.ini", base);
+    snprintf(path, size, "%s/sh3emu.ini", base);
 }
 
 static const uint32_t SCALES[] = { 50, 75, 100, 150, 200 };
@@ -746,7 +522,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { .memory = 4, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
+    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -763,13 +539,10 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
         else if (sscanf(line, "scale=%u", &value) == 1 && scale_index(value) >= 0) settings.scale = value;
-        else if (sscanf(line, "connect_at_launch=%u", &value) == 1) settings.connect_at_launch = value;
         else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
         else if (!strncmp(line, "machine=", 8)) copy_setting(settings.machine, sizeof settings.machine, line + 8);
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
-        else if (!strncmp(line, "user_agent=", 11)) copy_setting(settings.user_agent, sizeof settings.user_agent, line + 11);
-        else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
-        else if (!strncmp(line, "shared_folder=", 14)) copy_setting(settings.shared_folder, sizeof settings.shared_folder, line + 14);
+        else if (!strncmp(line, "host_folder=", 12)) copy_setting(settings.host_folder, sizeof settings.host_folder, line + 12);
     }
     fclose(file);
     return settings;
@@ -780,9 +553,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nconnect_at_launch=%u\nsystem=%u\nmachine=%s\nserial_device=%s\nuser_agent=%s\nshared_folder=%s\n", settings->memory,
-            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->connect_at_launch, settings->system, settings->machine, settings->serial_device,
-            settings->user_agent, settings->shared_folder);
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nhost_folder=%s\n", settings->memory,
+            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
+            settings->host_folder);
     fclose(file);
 }
 
@@ -951,18 +724,18 @@ static void find_roms(rom_set_t *roms) {
 static bool no_roms_dialog(void) {
     char folder[1100], message[1400];
     rom_folder(folder, sizeof folder);
-    snprintf(message, sizeof message, "Put a Velo 1 ROM in %s: the CE 1.0 nk.bin, the merged CE 2.0 image, or both.", folder);
+    snprintf(message, sizeof message, "Put an Odo SH3 nk.bin (a Platform Builder RAM image) in %s.", folder);
     const SDL_MessageBoxButtonData buttons[] = {
         { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
         { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Show ROM Folder" },
     };
-    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No Velo ROM found", message, 2, buttons, NULL };
+    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No ROM found", message, 2, buttons, NULL };
     int chosen = 0;
     if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_path(folder);
     return false;
 }
 
-const uint32_t DIALOG_MEMORY_SIZES[DIALOG_MEMORY_COUNT] = { 4, 8, 16, 20, 32 };
+const uint32_t DIALOG_MEMORY_SIZES[DIALOG_MEMORY_COUNT] = { 16, 32, 64 };
 
 static void machines_folder(char *path, size_t size) {
     char base[1024];
@@ -977,7 +750,8 @@ static uint32_t probe_rom(const char *path, char *label, size_t label_size) {
     uint32_t screens;
     int system = cached_rom_system(path, &info, &screens);
     if (!system) return 0;
-    snprintf(label, label_size, "%s: %s", system == 1 ? "CE 1.0" : "CE 2.0", file_leaf_name(path));
+    (void)system;
+    snprintf(label, label_size, "Odo SH3: %s", file_leaf_name(path));
     return screens;
 }
 
@@ -1020,7 +794,7 @@ static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
 }
 
 static void migrate_profiles(profiles_t *profiles, const rom_set_t *roms, const settings_t *settings, const char *folder) {
-    static const char *NAMES[] = { "", "Windows CE 1.0", "Windows CE 2.0" };
+    static const char *NAMES[] = { "", "Odo SH3", "Odo SH3" };
     for (int system = 1; system <= 2; system++) {
         if (!roms->path[system][0]) continue;
         profile_t profile = { .memory = settings->memory, .screen = settings->screen, .host_time = settings->host_time != 0 };
@@ -1120,8 +894,8 @@ static bool save_screenshot(view_t *view, char *path, size_t size) {
     char stamp[64];
     strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
     const char *folder = SDL_GetUserFolder(SCREENSHOT_FOLDER);
-    if (folder) snprintf(path, size, "%sVelo Screenshot %s.png", folder, stamp);
-    else snprintf(path, size, "%s/Velo Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
+    if (folder) snprintf(path, size, "%sOdo SH3 Screenshot %s.png", folder, stamp);
+    else snprintf(path, size, "%s/Odo SH3 Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
     FILE *file = fopen(path, "wb");
     bool saved = file && fwrite(png, 1, length, file) == length;
     if (file) fclose(file);
@@ -1144,8 +918,7 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
 
 typedef struct {
     settings_t   *settings;
-    serial_mode_t serial_mode;
-    const char   *card, *disk, *state_file, *machine;
+    const char   *card, *folder, *state_file, *machine;
     bool          fresh;
     int           gdb_port;
     const char   *gdb_process;
@@ -1153,8 +926,8 @@ typedef struct {
 } launch_t;
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_DISK, LAUNCH_MEMORY, LAUNCH_SCREEN, LAUNCH_SPEED,
-    LAUNCH_HEADING_CONNECTIONS, LAUNCH_SERIAL, LAUNCH_USER_AGENT, LAUNCH_AGENT,
+    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_FOLDER, LAUNCH_MEMORY, LAUNCH_SPEED,
+    LAUNCH_HEADING_CONNECTIONS, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
 
@@ -1163,19 +936,16 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_MACHINE] = { "machine", "NAME", "open the machine with this name (from Machine > Machines)", 0 },
     [LAUNCH_STATE] = { "state", "FILE", "load, save and autosave FILE instead of the ROM's own state", 0 },
     [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
-    [LAUNCH_CARD] = { "card", "IMAGE", "insert a PC Card image", 0 },
-    [LAUNCH_DISK] = { "disk", "IMAGE", "attach a disk image to the paravirtual disk (needs vdisk.dll in the guest)", 0 },
-    [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 4, 8, 16, 20 or 32", 0 },
-    [LAUNCH_SCREEN] = { "screen", "WxH", "screen for a ROM given on the command line: 480x240, 640x240, 640x480 or 800x600, where the ROM supports it", 0 },
+    [LAUNCH_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image", 0 },
+    [LAUNCH_FOLDER] = { "folder", "DIR", "serve DIR to CE's parallel-port file system (PPFS), for programs that aren't in ROM", 0 },
+    [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
-    [LAUNCH_SERIAL] = { "serial", "net|pty|off|PORT", "COM1 on the PPP network, a pseudo-terminal, nothing, or a host serial port such as /dev/cu.usbserial-1", 0 },
-    [LAUNCH_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent", 0 },
     [LAUNCH_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's trapa #0xCE mailbox and one client on this Unix socket", 0 },
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
-    [LAUNCH_VERBOSE] = { "verbose", NULL, "log hardware, network and proxy activity to stderr", 0 },
+    [LAUNCH_VERBOSE] = { "verbose", NULL, "log unmodelled hardware accesses to stderr", 0 },
     [LAUNCH_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr as well as debug.log", 0 },
-    [LAUNCH_GDB] = { "gdb", "PORT", "listen for GDB on 127.0.0.1:PORT; it can attach and detach while the Velo runs", 0 },
+    [LAUNCH_GDB] = { "gdb", "PORT", "listen for GDB on 127.0.0.1:PORT; it can attach and detach while the machine runs", 0 },
     [LAUNCH_GDB_PROCESS] = { "gdb-process", "NAME", "debug one process, e.g. maths.exe: breakpoints below 0x02000000 only stop there, and GDB stops when it starts", 0 },
 };
 
@@ -1190,26 +960,15 @@ static bool launch_option(void *context, int option, const char *value, char *er
     case LAUNCH_STATE: launch->state_file = value; return true;
     case LAUNCH_FRESH: launch->fresh = true; return true;
     case LAUNCH_CARD: launch->card = value; return true;
-    case LAUNCH_DISK: launch->disk = value; return true;
+    case LAUNCH_FOLDER: launch->folder = value; return true;
     case LAUNCH_MEMORY:
-        if (!option_integer(value, 10, &integer) || (integer != 4 && integer != 8 && integer != 16 && integer != 20 && integer != 32)) return false;
+        if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
         settings->memory = (uint32_t)integer;
         return true;
-    case LAUNCH_SCREEN: return screen_parse(value, &settings->screen);
     case LAUNCH_SPEED:
         if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
         settings->speed = (uint32_t)integer;
         return true;
-    case LAUNCH_SERIAL:
-        if (!strcmp(value, "net")) launch->serial_mode = SERIAL_NETWORK;
-        else if (!strcmp(value, "pty")) launch->serial_mode = SERIAL_PTY;
-        else if (!strcmp(value, "off")) launch->serial_mode = SERIAL_OFF;
-        else if (value[0] == '/') {
-            snprintf(settings->serial_device, sizeof settings->serial_device, "%s", value);
-            launch->serial_mode = SERIAL_DEVICE;
-        } else return false;
-        return true;
-    case LAUNCH_USER_AGENT: snprintf(settings->user_agent, sizeof settings->user_agent, "%s", value); return true;
     case LAUNCH_VERBOSE: verbose = true; return true;
     case LAUNCH_DEBUG_OUTPUT: debug_to_stderr = true; return true;
     case LAUNCH_GDB:
@@ -1223,25 +982,24 @@ static bool launch_option(void *context, int option, const char *value, char *er
 }
 
 static const option_spec_t LAUNCH_SPEC = {
-    "velo", "[OPTIONS] [ROM]",
-    "Emulates a Philips Velo 1. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
+    "sh3emu", "[OPTIONS] [ROM]",
+    "Emulates Microsoft's Odo reference board with the Hitachi SH-3 CPU module, running a Platform Builder Windows CE image. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
     LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
-    "headless runs the machine without a window, for tests and scripts, and velo-rapi talks to a running Velo.",
+    "headless runs the machine without a window, for tests and scripts.",
 };
 
 int main(int argc, char **argv) {
     const char *rom_path = NULL;
-    migrate_old_folders();
     settings_t settings = settings_load();
-    launch_t launch = { &settings, settings.connect_at_launch ? SERIAL_NETWORK : SERIAL_OFF, NULL, NULL, NULL, NULL, false, 0, NULL, NULL };
+    launch_t launch = { &settings, NULL, NULL, NULL, NULL, false, 0, NULL, NULL };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
     if (parsed == OPTIONS_EXIT) return 0;
     if (parsed == OPTIONS_ERROR) return 2;
     if (positional_count) rom_path = positional[0];
-    serial_mode_t serial_mode = launch.serial_mode;
-    const char *card = launch.card, *disk = launch.disk, *state_file = launch.state_file;
+    const char *card = launch.card, *state_file = launch.state_file;
+    const char *host_folder = launch.folder ? launch.folder : settings.host_folder[0] ? settings.host_folder : NULL;
     bool fresh = launch.fresh;
     static rom_set_t roms;
     find_roms(&roms);
@@ -1279,12 +1037,12 @@ int main(int argc, char **argv) {
     screen_size_t screen = machine_screen_size(machine);
     lcd_set_size(screen.width, screen.height);
 
-    SDL_SetAppMetadata("Velo", options_version(), "velo-emu");
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    SDL_SetAppMetadata("Odo SH3", options_version(), "sh3-emu");
+    if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     pick_event_type = SDL_RegisterEvents(1);
     int window_width, window_height;
     window_size((view_display_t)settings.display, settings.scale, &window_width, &window_height);
-    SDL_Window *window = SDL_CreateWindow("Philips Velo 1", window_width, window_height, SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window *window = SDL_CreateWindow(WINDOW_TITLE, window_width, window_height, SDL_WINDOW_HIGH_PIXEL_DENSITY);
     SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, NULL) : NULL;
     if (!renderer) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_SetRenderVSync(renderer, 1);
@@ -1293,68 +1051,44 @@ int main(int argc, char **argv) {
 
 
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
-    if (disk && !machine_insert_disk(machine, disk, false)) fprintf(stderr, "cannot open disk image %s\n", disk);
+    if (host_folder) machine_set_host_folder(machine, host_folder);
 
     menu_install(window);
-
-    SDL_AudioSpec audio_spec = { SDL_AUDIO_S16, 1, 11025 };
-    SDL_AudioStream *audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, NULL, NULL);
-    if (audio) SDL_ResumeAudioStreamDevice(audio);
-    else if (verbose) fprintf(stderr, "audio: %s\n", SDL_GetError());
-    bool sound = true;
-    static int16_t samples[AUDIO_CHUNK];
 
     bool running = true, pen_down = false, paused = false;
     bool held[256] = { false };
     uint64_t last = SDL_GetPerformanceCounter();
     double frequency = (double)SDL_GetPerformanceFrequency();
     double since_autosave = 0, since_backup = 0, notice_left = 0;
-    uint64_t power_release_at = 0, backlight_release_at = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
-    static serial_t serial;
-    serial = (serial_t){ SERIAL_OFF, NULL, -1, -1, "", settings.user_agent, settings.serial_device, 0, { 0 }, 0 };
-    char rapi_socket[1024], sync_manifest[1024], desktop_notice[256], shared_notice[1200], paste_notice[64];
+    char folder_notice[1200], paste_notice[64];
     static typer_t typer;
     static scroller_t scroller;
     static input_queue_t input;
-    static char ports[SERIAL_PORT_MAX][64];
-    int port_count = 0;
-    double since_port_scan = 0;
     static dropped_t dropped;
     picked_t *picked = NULL;
-    rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket);
-    rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
-    desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
-    uint64_t serial_reconnect_at = 0;
-    serial_mode_t serial_reconnect_mode = SERIAL_OFF;
-    serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
-    if (serial_mode != SERIAL_OFF && serial_reconnect_at) {
-        serial_reconnect_mode = serial_mode;
-    } else if (serial_mode != SERIAL_OFF) {
-        const char *result = serial_open(&serial, machine, serial_mode);
-        if (!notice) { notice = result; notice_left = NOTICE_SECONDS * 2; }
-    }
+
 
     if (launch.gdb_process && !launch.gdb_port) {
-        fprintf(stderr, "velo: --gdb-process needs --gdb\n");
+        fprintf(stderr, "sh3emu: --gdb-process needs --gdb\n");
         return 2;
     }
     if (launch.gdb_port) {
         debugger = gdb_create(machine, launch.gdb_port, log_gdb);
         if (!debugger) {
-            fprintf(stderr, "velo: cannot listen for GDB on port %d\n", launch.gdb_port);
+            fprintf(stderr, "sh3emu: cannot listen for GDB on port %d\n", launch.gdb_port);
             return 1;
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
     }
     if (launch.agent_socket && !(agent = agent_create(launch.agent_socket, log_gdb))) {
-        fprintf(stderr, "velo: cannot listen on agent socket %s\n", launch.agent_socket);
+        fprintf(stderr, "sh3emu: cannot listen on agent socket %s\n", launch.agent_socket);
         return 1;
     }
     static runner_t runner;
     runner = (runner_t){ SDL_CreateMutex(), NULL, machine, &input, false, false, true, { 0 } };
-    runner.thread = SDL_CreateThread(run_machine, "velo-machine", &runner);
+    runner.thread = SDL_CreateThread(run_machine, "machine", &runner);
     while (running) {
         SDL_Event event;
         uint64_t frame_start = SDL_GetTicksNS();
@@ -1399,8 +1133,7 @@ int main(int argc, char **argv) {
                 break;
             case SDL_EVENT_DROP_COMPLETE:
                 if (dropped.count) {
-                    bool online = serial.gateway && net_gateway_online(serial.gateway);
-                    notice = handle_drop(&dropped, machine, desktop, online && !desktop_busy(desktop));
+                    notice = handle_drop(&dropped, machine);
                     notice_left = NOTICE_SECONDS * 2;
                 }
                 break;
@@ -1448,16 +1181,12 @@ int main(int argc, char **argv) {
         for (int item = menu_poll(); item >= 0; item = menu_poll()) {
             release_keys(&input, machine, held, -1);
             switch (item) {
-            case MENU_POWER:
-                machine_power_button(machine, true);
-                power_release_at = machine_cycles(machine) + (uint64_t)(POWER_PRESS_SECONDS * MACHINE_CLOCK_HZ);
-                break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
             case MENU_NEW_MACHINE: {
                 static dialog_rom_t rom_list[32];
                 int rom_count = list_roms(rom_list, 32);
-                dialog_machine_t chosen = { .memory = 4, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .host_time = settings.host_time != 0 };
+                dialog_machine_t chosen = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .host_time = settings.host_time != 0 };
                 if (rom_count) snprintf(chosen.rom, sizeof chosen.rom, "%s", current.rom);
                 events_seen = true;
                 if (!dialog_new_machine(window, rom_list, rom_count, probe_rom, &chosen)) break;
@@ -1556,10 +1285,6 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS * 2;
                 break;
             }
-            case MENU_CONNECT_AT_LAUNCH:
-                settings.connect_at_launch = !settings.connect_at_launch;
-                settings_save(&settings);
-                break;
             case MENU_PASTE: {
                 char *clipboard = SDL_GetClipboardText();
                 size_t typed = clipboard ? typer_start(&typer, key_layout, clipboard) : 0;
@@ -1575,29 +1300,19 @@ int main(int argc, char **argv) {
                 break;
             case MENU_LOAD_STATE:
                 backup_machine(machine, state);
-                if (machine_load(machine, state, NULL)) {
-                    serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
-                    notice = "state loaded";
-                } else {
-                    notice = "no saved state";
-                }
+                notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
                 notice_left = NOTICE_SECONDS;
                 break;
-            case MENU_BACKLIGHT:
-                machine_backlight_button(machine, true);
-                backlight_release_at = machine_cycles(machine) + (uint64_t)(BACKLIGHT_PRESS_SECONDS * MACHINE_CLOCK_HZ);
-                break;
-            case MENU_SOUND: sound = !sound; break;
             case MENU_SHOW_STATE: reveal_file(state); break;
             case MENU_SAVE_SNAPSHOT: {
-                static const SDL_DialogFileFilter filters[] = { { "Velo snapshot", "state" } };
+                static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state" } };
                 static char default_snapshot[1200];
                 snapshot_default_name(default_snapshot, sizeof default_snapshot);
                 SDL_ShowSaveFileDialog(pick_done, (void *)(intptr_t)PICK_SAVE_SNAPSHOT, window, filters, 1, default_snapshot);
                 break;
             }
             case MENU_LOAD_SNAPSHOT: {
-                static const SDL_DialogFileFilter filters[] = { { "Velo snapshot", "state;bin" } };
+                static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state;bin" } };
                 static char folder[1100];
                 snapshot_folder(folder, sizeof folder);
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_LOAD_SNAPSHOT, window, filters, 1, folder, false);
@@ -1626,67 +1341,21 @@ int main(int argc, char **argv) {
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_CARD, window, filters, 2, NULL, false);
                 break;
             }
-            case MENU_INSERT_DISK: {
-                static const SDL_DialogFileFilter filters[] = { { "Disk images", "img;bin;raw" }, { "All files", "*" } };
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_DISK, window, filters, 2, NULL, false);
-                break;
-            }
-            case MENU_NEW_DISK: {
-                static const SDL_DialogFileFilter filters[] = { { "Disk images", "img" } };
-                SDL_ShowSaveFileDialog(pick_done, (void *)(intptr_t)PICK_NEW_DISK, window, filters, 1, "Velo Disk.img");
-                break;
-            }
-            case MENU_EJECT_DISK:
-                machine_eject_disk(machine);
-                notice = "disk ejected";
-                notice_left = NOTICE_SECONDS;
-                break;
             default:
                 if (item >= MENU_MACHINE_FIRST && item <= MENU_MACHINE_LAST && item - MENU_MACHINE_FIRST < profiles.count && item - MENU_MACHINE_FIRST != current_index) {
                     switch_to = item - MENU_MACHINE_FIRST;
-                    break;
-                }
-                if (item >= MENU_SERIAL_PORT_FIRST && item <= MENU_SERIAL_PORT_LAST && item - MENU_SERIAL_PORT_FIRST < port_count) {
-                    snprintf(settings.serial_device, sizeof settings.serial_device, "%s", ports[item - MENU_SERIAL_PORT_FIRST]);
-                    settings_save(&settings);
-                    serial_reconnect_at = 0;
-                    notice = serial_open(&serial, machine, SERIAL_DEVICE);
-                    notice_left = NOTICE_SECONDS * 3;
                 }
                 break;
-            case MENU_SERIAL_NETWORK:
-            case MENU_SERIAL_PTY:
-            case MENU_SERIAL_OFF:
-                serial_reconnect_at = 0;
-                notice = serial_open(&serial, machine, item == MENU_SERIAL_NETWORK ? SERIAL_NETWORK : item == MENU_SERIAL_PTY ? SERIAL_PTY : SERIAL_OFF);
-                notice_left = NOTICE_SECONDS * 3;
+            case MENU_HOST_FOLDER:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FOLDER, window, host_folder, false);
                 break;
-            case MENU_SEND_FILES:
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
-                break;
-            case MENU_FETCH_DOCUMENTS:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
-                break;
-            case MENU_SHARED_FOLDER:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
-                break;
-            case MENU_SYNC_NOW:
-                desktop_sync(desktop, settings.shared_folder);
-                break;
-            case MENU_SET_PROXY:
-                desktop_set_proxy(desktop);
-                break;
-            case MENU_BAUD_19200:
-            case MENU_BAUD_38400:
-            case MENU_BAUD_57600:
-            case MENU_BAUD_115200:
-                desktop_set_baud(desktop, item == MENU_BAUD_19200 ? 19200 : item == MENU_BAUD_38400 ? 38400 : item == MENU_BAUD_57600 ? 57600 : 115200);
-                break;
-            case MENU_STOP_SHARING:
-                snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", file_leaf_name(settings.shared_folder));
-                settings.shared_folder[0] = 0;
+            case MENU_STOP_HOST_FOLDER:
+                snprintf(folder_notice, sizeof folder_notice, "stopped sharing %s", host_folder ? file_leaf_name(host_folder) : "");
+                settings.host_folder[0] = 0;
                 settings_save(&settings);
-                notice = shared_notice;
+                host_folder = NULL;
+                machine_set_host_folder(machine, NULL);
+                notice = folder_notice;
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_EJECT_CARD:
@@ -1697,10 +1366,7 @@ int main(int argc, char **argv) {
             }
         }
         if (switch_to >= 0 && switch_to < profiles.count && switch_to != current_index) {
-            if (desktop_busy(desktop)) {
-                notice = "busy with a desktop transfer";
-                notice_left = NOTICE_SECONDS;
-            } else {
+            {
                 const char *switch_notice = NULL;
                 char next_state[sizeof state];
                 profile_t next_profile = profiles.entries[switch_to];
@@ -1709,8 +1375,6 @@ int main(int argc, char **argv) {
                     notice = switch_notice;
                     notice_left = NOTICE_SECONDS * 2;
                 } else {
-                    serial_mode_t mode = serial.mode;
-                    serial_close(&serial, machine);
                     if (pen_down) machine_touch(machine, false, 0, 0);
                     input_clear(&input);
                     pen_down = false;
@@ -1724,12 +1388,7 @@ int main(int argc, char **argv) {
                     key_layout = machine_key_layout(machine);
                     snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
                     settings_save(&settings);
-                    serial_reconnect_at = 0;
-                    if (mode != SERIAL_OFF) {
-                        serial_reconnect_mode = mode;
-                        serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
-                    }
-                    power_release_at = backlight_release_at = 0;
+                    if (host_folder) machine_set_host_folder(machine, host_folder);
                     since_backup = 0;
                     runner.machine = machine;
                     runner.restart = true;
@@ -1741,27 +1400,10 @@ int main(int argc, char **argv) {
                 }
             }
         }
-        bool velo_online = serial.gateway && net_gateway_online(serial.gateway);
         if (picked) {
             if (picked->kind == PICK_CARD) {
                 notice = machine_insert_card(machine, picked->paths[0]) ? "card inserted" : "could not open card image";
                 notice_left = NOTICE_SECONDS;
-            } else if (picked->kind == PICK_DISK) {
-                notice = machine_insert_disk(machine, picked->paths[0], false) ? "disk inserted" : "could not open disk image";
-                notice_left = NOTICE_SECONDS;
-            } else if (picked->kind == PICK_NEW_DISK) {
-                static char disk_notice[1200];
-                char path[1100];
-                snprintf(path, sizeof path, "%s%s", picked->paths[0], has_extension(picked->paths[0], ".img") ? "" : ".img");
-                bool made = create_blank_disk(path) && machine_insert_disk(machine, path, false);
-                snprintf(disk_notice, sizeof disk_notice, made ? "inserted new disk %s; the Velo offers to format it" : "could not create %s", file_leaf_name(path));
-                notice = disk_notice;
-                notice_left = NOTICE_SECONDS * 2;
-            } else if (picked->kind == PICK_SEND) {
-                const char *files[PICK_MAX + 1];
-                for (int i = 0; i < picked->count; i++) files[i] = picked->paths[i];
-                files[picked->count] = NULL;
-                desktop_send(desktop, files);
             } else if (picked->kind == PICK_SAVE_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 char path[1100];
@@ -1774,74 +1416,29 @@ int main(int argc, char **argv) {
                 static char snapshot_notice[1200];
                 if (machine_state_matches(machine, picked->paths[0])) backup_machine(machine, state);
                 if (machine_load(machine, picked->paths[0], NULL)) {
-                    serial_restored(&serial, machine, &serial_reconnect_at, &serial_reconnect_mode);
                     snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked->paths[0]));
                 } else {
                     snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", file_leaf_name(picked->paths[0]));
                 }
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
-            } else if (picked->kind == PICK_FETCH) {
-                desktop_fetch(desktop, picked->paths[0]);
-            } else if (picked->kind == PICK_SHARED) {
-                snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", picked->paths[0]);
+            } else if (picked->kind == PICK_FOLDER) {
+                snprintf(settings.host_folder, sizeof settings.host_folder, "%s", picked->paths[0]);
                 settings_save(&settings);
-                snprintf(shared_notice, sizeof shared_notice, "sharing %s with \\My Documents", file_leaf_name(settings.shared_folder));
-                notice = shared_notice;
+                host_folder = settings.host_folder;
+                machine_set_host_folder(machine, host_folder);
+                snprintf(folder_notice, sizeof folder_notice, "sharing %s as \\PPFS", file_leaf_name(host_folder));
+                notice = folder_notice;
                 notice_left = NOTICE_SECONDS * 2;
-                if (velo_online) desktop_sync(desktop, settings.shared_folder);
             }
             free(picked);
             picked = NULL;
         }
-        if (serial.gateway && net_gateway_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) {
-            desktop_sync(desktop, settings.shared_folder);
-        }
-        if (desktop_take_reconnect(desktop) && serial.mode == SERIAL_NETWORK) {
-            serial_open(&serial, machine, SERIAL_OFF);
-            serial_reconnect_mode = SERIAL_NETWORK;
-            serial_reconnect_at = machine_cycles(machine) + 2ull * MACHINE_CLOCK_HZ;
-        }
-        if (desktop_take_status(desktop, desktop_notice, sizeof desktop_notice)) {
-            notice = desktop_notice;
-            notice_left = NOTICE_SECONDS * 2;
-        }
-        bool desktop_free = velo_online && !desktop_busy(desktop);
         menu_ensure();
-        menu_set_enabled(MENU_SEND_FILES, desktop_free);
-        menu_set_enabled(MENU_FETCH_DOCUMENTS, desktop_free);
-        menu_set_enabled(MENU_SYNC_NOW, desktop_free && settings.shared_folder[0]);
-        menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
-        menu_set_enabled(MENU_SET_PROXY, desktop_free);
-        static const uint32_t LINK_SPEEDS[] = { 19200, 38400, 57600, 115200 };
-        uint32_t link_baud = velo_online ? machine_serial_baud(machine) : 0;
-        for (int baud_item = MENU_BAUD_19200; baud_item <= MENU_BAUD_115200; baud_item++) {
-            uint32_t speed = LINK_SPEEDS[baud_item - MENU_BAUD_19200];
-            menu_set_enabled(baud_item, desktop_free);
-            menu_set_checked(baud_item, link_baud && link_baud * 20 > speed * 19 && link_baud * 20 < speed * 21);
-        }
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
-        menu_set_enabled(MENU_EJECT_DISK, machine_disk_inserted(machine));
-        menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
-        menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
+        menu_set_enabled(MENU_STOP_HOST_FOLDER, host_folder != NULL);
         reap_reveal_children();
-        if (since_port_scan <= 0) {
-            since_port_scan = PORT_SCAN_SECONDS;
-            port_count = list_serial_ports(ports, SERIAL_PORT_MAX);
-        }
-        for (int i = 0; i < SERIAL_PORT_MAX; i++) {
-            int port_item = MENU_SERIAL_PORT_FIRST + i;
-            bool shown = i < port_count || (i == 0 && port_count == 0);
-            menu_set_hidden(port_item, !shown);
-            if (!shown) continue;
-            menu_set_title(port_item, port_count ? ports[i] + 5 : "No serial ports found");
-            menu_set_enabled(port_item, port_count > 0);
-            menu_set_checked(port_item, port_count && serial.mode == SERIAL_DEVICE && !strcmp(settings.serial_device, ports[i]));
-        }
-        menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
         menu_set_checked(MENU_PAUSE, paused);
-        menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
-        menu_set_checked(MENU_SOUND, sound);
         for (int i = 0; i < PROFILES_MAX; i++) {
             int machine_item = MENU_MACHINE_FIRST + i;
             menu_set_hidden(machine_item, i >= profiles.count);
@@ -1850,7 +1447,6 @@ int main(int argc, char **argv) {
             menu_set_checked(machine_item, i == current_index);
         }
         menu_set_enabled(MENU_NEW_MACHINE, profiles.count < PROFILES_MAX);
-        menu_set_checked(MENU_CONNECT_AT_LAUNCH, settings.connect_at_launch != 0);
         for (int scale_item = MENU_SCALE_50; scale_item <= MENU_SCALE_200; scale_item++) menu_set_checked(scale_item, settings.scale == SCALES[scale_item - MENU_SCALE_50]);
         menu_set_enabled(MENU_ZOOM_IN, settings.scale < SCALES[SCALE_COUNT - 1]);
         menu_set_enabled(MENU_ZOOM_OUT, settings.scale > SCALES[0]);
@@ -1873,7 +1469,6 @@ int main(int argc, char **argv) {
         set_title(window, current.name, notice, paused, machine_suspended(machine));
         since_autosave += elapsed;
         if (!paused) since_backup += elapsed;
-        since_port_scan -= elapsed;
         if (since_backup >= BACKUP_SECONDS) {
             since_backup = 0;
             backup_machine(machine, state);
@@ -1885,29 +1480,7 @@ int main(int argc, char **argv) {
         runner.paused = paused;
         typer_step(&typer, machine);
         scroller_step(&scroller, machine);
-        serial_pump(&serial, machine);
-        if (serial_reconnect_at && machine_cycles(machine) >= serial_reconnect_at) {
-            serial_reconnect_at = 0;
-            notice = serial_open(&serial, machine, serial_reconnect_mode);
-            notice_left = NOTICE_SECONDS * 2;
-        }
-        if (backlight_release_at && machine_cycles(machine) >= backlight_release_at) {
-            backlight_release_at = 0;
-            machine_backlight_button(machine, false);
-        }
-        if (power_release_at && machine_cycles(machine) >= power_release_at) {
-            power_release_at = 0;
-            machine_power_button(machine, false);
-        }
-        uint32_t rate;
-        for (size_t count; (count = machine_audio(machine, samples, AUDIO_CHUNK, &rate)) > 0;) {
-            if (!audio || !sound) continue;
-            if ((int)rate != audio_spec.freq) {
-                audio_spec.freq = (int)rate;
-                SDL_SetAudioStreamFormat(audio, &audio_spec, NULL);
-            }
-            SDL_PutAudioStreamData(audio, samples, (int)(count * sizeof samples[0]));
-        }
+
 
         screen = machine_screen_size(machine);
         if (screen.width != lcd_width() || screen.height != lcd_height()) {
@@ -1943,10 +1516,7 @@ int main(int argc, char **argv) {
     SDL_DestroyMutex(runner.lock);
     free(picked);
     machine_save(machine, state, (int64_t)time(NULL));
-    serial_close(&serial, machine);
-    desktop_destroy(desktop);
     if (verbose) machine_dump_state(machine);
-    SDL_DestroyAudioStream(audio);
     view_destroy(view);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

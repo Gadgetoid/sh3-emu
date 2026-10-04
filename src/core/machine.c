@@ -785,7 +785,6 @@ uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 
 bool machine_lcd_enabled(machine_t *m) { return (m->display_csr & DISP_LCD_ON) != 0; }
 bool machine_backlight(machine_t *m) { return machine_lcd_enabled(m); }
-void machine_backlight_button(machine_t *m, bool down) { (void)m; (void)down; }
 
 screen_size_t machine_screen_size(machine_t *m) {
     (void)m;
@@ -841,14 +840,7 @@ void machine_touch(machine_t *m, bool down, int x, int y) {
     m->pen_down = down;
     update_touch_interrupt(m);
 }
-void machine_power_button(machine_t *m, bool down) { (void)m; (void)down; }
 bool machine_suspended(machine_t *m) { (void)m; return false; }
-
-size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate) {
-    (void)m; (void)samples; (void)max;
-    *rate = 22050;
-    return 0;
-}
 
 static bool insert_card_now(machine_t *m, const char *path) {
     FILE *image = fopen(path, "r+b");
@@ -898,17 +890,6 @@ void machine_set_host_folder(machine_t *m, const char *path) {
     m->ppfs.log = ppfs_log;
     m->ppfs.log_context = m;
 }
-bool machine_insert_disk(machine_t *m, const char *path, bool read_only) { (void)m; (void)path; (void)read_only; return false; }
-void machine_eject_disk(machine_t *m) { (void)m; }
-bool machine_disk_inserted(machine_t *m) { (void)m; return false; }
-
-void machine_serial_connect(machine_t *m, bool connected) { (void)m; (void)connected; }
-bool machine_serial_connected(machine_t *m) { (void)m; return false; }
-void machine_set_serial_tag(machine_t *m, uint32_t tag) { (void)m; (void)tag; }
-uint32_t machine_serial_tag(machine_t *m) { (void)m; return 0; }
-void machine_serial_send(machine_t *m, const uint8_t *data, size_t length) { (void)m; (void)data; (void)length; }
-size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) { (void)m; (void)out; (void)max; return 0; }
-uint32_t machine_serial_baud(machine_t *m) { (void)m; return 0; }
 
 void machine_reset(machine_t *m) {
     char error[256];

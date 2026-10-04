@@ -6,10 +6,10 @@
 
 static NSString *const SCREEN_TITLES[] = { @"480 x 240 (original)", @"640 x 240", @"640 x 480", @"800 x 600" };
 static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
-    @"4 MB (original)", @"8 MB", @"16 MB", @"20 MB (4 MB + 16 MB DRAM card)", @"32 MB (16 MB + 16 MB DRAM card)",
+    @"16 MB", @"32 MB", @"64 MB",
 };
 
-@interface VeloMachineForm : NSObject
+@interface MachineForm : NSObject
 @property(strong) NSAlert *alert;
 @property(strong) NSTextField *name;
 @property(strong) NSPopUpButton *memory;
@@ -22,7 +22,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
 @property(assign) NSInteger lastRom;
 @end
 
-@implementation VeloMachineForm
+@implementation MachineForm
 
 - (void)updateScreens {
     NSInteger index = self.rom.indexOfSelectedItem;
@@ -42,7 +42,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
     panel.canChooseFiles = YES;
     panel.canChooseDirectories = NO;
     panel.allowsMultipleSelection = NO;
-    panel.message = @"Choose a Velo 1 ROM: a CE 1.0 nk.bin, a CE 2.0 card ROM or merged image, or a B000FF image.";
+    panel.message = @"Choose an Odo SH3 ROM: a Platform Builder nk.bin RAM image.";
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         const char *path = panel.URL.fileSystemRepresentation;
         char label[160];
@@ -58,7 +58,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
             return;
         }
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Not a Velo ROM";
+        alert.messageText = @"Not an Odo SH3 ROM";
         alert.informativeText = [NSString stringWithFormat:@"%@ isn't a ROM this emulator can run.", panel.URL.lastPathComponent];
         [alert runModal];
     }
@@ -80,8 +80,8 @@ static NSPopUpButton *popup(void) {
     return button;
 }
 
-static VeloMachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, dialog_probe_fn probe, const dialog_machine_t *result) {
-    VeloMachineForm *form = [[VeloMachineForm alloc] init];
+static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, dialog_probe_fn probe, const dialog_machine_t *result) {
+    MachineForm *form = [[MachineForm alloc] init];
     form.probe = probe;
     form.paths = [NSMutableArray array];
     form.screens = [NSMutableArray array];
@@ -154,7 +154,7 @@ static VeloMachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count
 bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_count, dialog_probe_fn probe, dialog_machine_t *result) {
     (void)window;
     @autoreleasepool {
-        VeloMachineForm *form = new_machine_form(roms, rom_count, probe, result);
+        MachineForm *form = new_machine_form(roms, rom_count, probe, result);
         NSTextField *name = form.name;
         NSPopUpButton *memory = form.memory;
         NSButton *clock = form.clock;
@@ -164,7 +164,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         if (rom < 0 || rom >= (NSInteger)form.paths.count) {
             NSAlert *missing = [[NSAlert alloc] init];
             missing.messageText = @"No ROM chosen";
-            missing.informativeText = @"Put a Velo ROM in the roms folder, or choose Other ROM File\u2026.";
+            missing.informativeText = @"Put an Odo SH3 ROM in the roms folder, or choose Other ROM File\u2026.";
             [missing runModal];
             return false;
         }
