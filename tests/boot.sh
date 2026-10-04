@@ -17,3 +17,8 @@ check desktop 644ad304df340ec56560db7229a83a2315bf3bc0a47eb74d813f0edb7e91db00 -
 ./headless "$ROM" --seconds=22 --save="$OUT/desktop.state" $CALIBRATE 2>/dev/null
 check resumed 644ad304df340ec56560db7229a83a2315bf3bc0a47eb74d813f0edb7e91db00 --seconds=1 --load="$OUT/desktop.state"
 check console 0c7192376347811dc03dee48e0d4b2a4943187bd492b37628a6ec1f97c2fa240 --seconds=12 --load="$OUT/desktop.state" --key=1:11+0D --tap=3:71:198:0.3 "--type=5:cmd\n" "--type=8:dir\n"
+PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+./headless "$ROM" --load="$OUT/desktop.state" --gdb="$PORT" > "$OUT/gdb.log" 2>&1 &
+STUB=$!
+if python3 tests/gdb_client.py "$PORT"; then echo "ok   gdb"; else echo "FAIL gdb"; kill $STUB; cat "$OUT/gdb.log"; exit 1; fi
+wait $STUB

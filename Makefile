@@ -6,6 +6,7 @@ VELOSTATE = velo-state
 SH3RUN    = sh3-run
 BUILD     = build
 ROM      ?= rom/odo-sh3.bin
+DEBUG_ROM ?= rom/odo-sh3-debug.bin
 VELO_TOOLCHAIN ?= ../velo-toolchain
 
 .DEFAULT_GOAL := all
@@ -134,6 +135,7 @@ check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
 test: $(HEADLESS) $(SH3RUN)
 	sh tests/sh3/run.sh
 	sh tests/boot.sh $(ROM)
+	sh tests/debug.sh $(DEBUG_ROM)
 
 sh3-fuzz: $(SH3RUN)
 	python3 tests/sh3/fuzz.py --runner ./$(SH3RUN)

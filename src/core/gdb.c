@@ -444,6 +444,7 @@ static bool on_access(void *context, uint32_t va, int size, bool write) {
 
 static void on_exception(void *context, uint32_t code, uint32_t pc, bool user) {
     gdb_t *gdb = context;
+    if (gdb->stepping && pc == gdb->step_pc) gdb->step_executed = false;
     if (!user) return;
     sh3_cpu_t *cpu = machine_cpu(gdb->machine);
     if (code == SH3_EXP_TLB_MISS_READ || code == SH3_EXP_TLB_MISS_WRITE || code == SH3_EXP_INITIAL_WRITE) return;

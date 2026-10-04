@@ -2,8 +2,9 @@ import socket
 import sys
 import time
 
-GENERAL_VECTOR = 0x80000080
-PC_REGISTER = 0x25
+PC_REGISTER = 16
+VBR_REGISTER = 19
+REGISTER_COUNT = 59
 
 
 class Client:
@@ -61,28 +62,55 @@ def check(name, condition, detail=""):
         raise SystemExit("%s failed %s" % (name, detail))
 
 
-def main():
-    client = Client(int(sys.argv[1]))
-    client.request("QStartNoAckMode")
-    supported = client.request("qSupported:xmlRegisters=mips")
+def basic(client):
+    supported = client.request("qSupported:xmlRegisters=sh")
     check("qSupported", "qXfer:features:read+" in supported and "qXfer:libraries:read+" in supported, supported)
     check("stop reason", client.request("?").startswith("T05"))
     target = client.request("qXfer:features:read:target.xml:0,fff")
-    check("target.xml", target.startswith("l") and "org.gnu.gdb.mips.cpu" in target and 'bitsize="32"' in target)
+    check("target.xml", target.startswith("l") and "<architecture>sh3</architecture>" in target, target)
     registers = client.request("g")
-    check("registers", len(registers) == 72 * 8, str(len(registers)))
+    check("registers", len(registers) == REGISTER_COUNT * 8, str(len(registers)))
     processes = client.monitor("processes")
     check("processes", "NK.EXE" in processes and "filesys.exe" in processes, processes)
-    check("memory", len(client.request("m80000080,8")) == 16)
-    check("breakpoint insert", client.request("Z0,%x,4" % GENERAL_VECTOR) == "OK")
+    interrupt_vector = client.register(VBR_REGISTER) + 0x600
+    check("memory", len(client.request("m%x,8" % interrupt_vector)) == 16)
+    check("breakpoint insert", client.request("Z0,%x,2" % interrupt_vector) == "OK")
     stop = client.request("c")
     check("breakpoint stop", stop.startswith("T05"), stop)
-    check("breakpoint pc", client.register(PC_REGISTER) == GENERAL_VECTOR, hex(client.register(PC_REGISTER)))
-    check("breakpoint remove", client.request("z0,%x,4" % GENERAL_VECTOR) == "OK")
+    check("breakpoint pc", client.register(PC_REGISTER) == interrupt_vector, hex(client.register(PC_REGISTER)))
+    check("breakpoint remove", client.request("z0,%x,2" % interrupt_vector) == "OK")
     stop = client.request("s")
-    check("step", stop.startswith("T05") and client.register(PC_REGISTER) == GENERAL_VECTOR + 4, hex(client.register(PC_REGISTER)))
+    check("step", stop.startswith("T05") and client.register(PC_REGISTER) == interrupt_vector + 2, hex(client.register(PC_REGISTER)))
     libraries = client.request("qXfer:libraries:read::0,fff")
     check("libraries", "coredll.elf" in libraries.lower(), libraries[:200])
+
+
+def run_program(client):
+    check("extended", client.request("!") == "OK")
+    reply = client.request("vFile:open:%s,%x,%x" % ("\\gdbtest.txt".encode().hex(), 0x601, 0o644))
+    check("vFile open", reply.startswith("F") and not reply.startswith("F-1"), reply)
+    descriptor = int(reply[1:].split(";")[0], 16)
+    reply = client.request("vFile:pwrite:%x,0,hello" % descriptor)
+    check("vFile pwrite", reply == "F5", reply)
+    reply = client.request("vFile:pread:%x,10,0" % descriptor)
+    check("vFile pread", reply == "F5;hello", reply)
+    check("vFile close", client.request("vFile:close:%x" % descriptor) == "F0")
+    stop = client.request("vRun;%s" % "\\Windows\\cmd.exe".encode().hex())
+    check("vRun", stop.startswith("T05"), stop)
+    pc = client.register(PC_REGISTER)
+    check("vRun first instruction", pc < 0x02000000, hex(pc))
+    stop = client.request("s")
+    check("vRun step", stop.startswith("T05") and client.register(PC_REGISTER) == pc + 2, hex(client.register(PC_REGISTER)))
+    check("vKill", client.request("vKill;1") == "OK")
+
+
+def main():
+    client = Client(int(sys.argv[1]))
+    client.request("QStartNoAckMode")
+    if len(sys.argv) > 2 and sys.argv[2] == "run":
+        run_program(client)
+    else:
+        basic(client)
     client.send("k")
 
 
