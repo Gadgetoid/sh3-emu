@@ -50,3 +50,8 @@ if [ -f "$PROGRAM" ]; then
 else
     echo "skip ppfs: no $PROGRAM (an SH3 program that isn't in ROM)"
 fi
+rm -f "$OUT/agent.sock"
+./headless "$ROM" --load="$OUT/debugmgr.state" --agent="$OUT/agent.sock" --seconds=120 --realtime=4 > "$OUT/agent.log" 2>&1 &
+STUB=$!
+if python3 tests/agent_reconnect.py "$OUT/agent.sock" 20 > "$OUT/reconnect.txt"; then echo "ok   agent_reconnect"; else echo "FAIL agent_reconnect"; kill $STUB; cat "$OUT/reconnect.txt"; exit 1; fi
+kill $STUB 2>/dev/null || true
