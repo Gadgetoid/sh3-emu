@@ -47,7 +47,7 @@
 #define POWER_PRESS_SECONDS 0.2
 #define BACKLIGHT_PRESS_SECONDS 0.1
 #define AUDIO_CHUNK 8192
-#define WINDOW_TITLE     "Philips Velo 1"
+#define WINDOW_TITLE     "Odo SH3"
 
 #ifdef __APPLE__
 #define SCREENSHOT_FOLDER SDL_FOLDER_DESKTOP
@@ -61,10 +61,14 @@ typedef struct {
 } key_binding_t;
 
 static const key_binding_t key_bindings[] = {
-    { SDLK_TAB, 0x11 }, { SDLK_BACKSPACE, 0x39 }, { SDLK_RETURN, 0x4B },
-    { SDLK_ESCAPE, 0x29 }, { SDLK_LSHIFT, 0x51 }, { SDLK_RSHIFT, 0x51 }, { SDLK_LCTRL, 0x01 },
-    { SDLK_RCTRL, 0x01 }, { SDLK_LALT, 0x19 }, { SDLK_RALT, 0x09 },
-    { SDLK_LEFT, 0x41 }, { SDLK_UP, 0x4A }, { SDLK_RIGHT, 0x32 }, { SDLK_DOWN, 0x49 },
+    { SDLK_TAB, 0x0D }, { SDLK_BACKSPACE, 0x66 }, { SDLK_RETURN, 0x5A }, { SDLK_ESCAPE, 0x76 },
+    { SDLK_LSHIFT, 0x12 }, { SDLK_RSHIFT, 0x59 }, { SDLK_LCTRL, 0x14 }, { SDLK_RCTRL, 0x94 },
+    { SDLK_LALT, 0x11 }, { SDLK_RALT, 0x91 }, { SDLK_CAPSLOCK, 0x58 },
+    { SDLK_LEFT, 0xEB }, { SDLK_UP, 0xF5 }, { SDLK_RIGHT, 0xF4 }, { SDLK_DOWN, 0xF2 },
+    { SDLK_DELETE, 0xF1 }, { SDLK_INSERT, 0xF0 }, { SDLK_HOME, 0xEC }, { SDLK_END, 0xE9 },
+    { SDLK_PAGEUP, 0xFD }, { SDLK_PAGEDOWN, 0xFA },
+    { SDLK_F1, 0x05 }, { SDLK_F2, 0x06 }, { SDLK_F3, 0x04 }, { SDLK_F4, 0x0C }, { SDLK_F5, 0x03 }, { SDLK_F6, 0x0B },
+    { SDLK_F7, 0x83 }, { SDLK_F8, 0x0A }, { SDLK_F9, 0x01 }, { SDLK_F10, 0x09 }, { SDLK_F11, 0x78 }, { SDLK_F12, 0x07 },
 };
 
 static bool find_scancode(key_layout_t layout, SDL_Keycode key, uint8_t *scancode) {
@@ -96,7 +100,7 @@ static void scroller_add(scroller_t *scroller, float vertical, float horizontal)
     scroller->horizontal += horizontal;
     float *axis = fabsf(scroller->vertical) >= fabsf(scroller->horizontal) ? &scroller->vertical : &scroller->horizontal;
     if (fabsf(*axis) < 1.0f) return;
-    uint8_t scancode = axis == &scroller->vertical ? (*axis > 0 ? 0x4A : 0x49) : (*axis > 0 ? 0x32 : 0x41);
+    uint8_t scancode = axis == &scroller->vertical ? (*axis > 0 ? 0xF5 : 0xF2) : (*axis > 0 ? 0xF4 : 0xEB);
     int steps = (int)fabsf(*axis);
     *axis -= *axis > 0 ? (float)steps : -(float)steps;
     if (scancode != scroller->scancode) {
@@ -232,7 +236,7 @@ static int run_machine(void *context) {
 
 static void release_keys(input_queue_t *input, machine_t *machine, bool *held, int only_modifiers_up) {
     static const struct { uint8_t scancode; int modifier; } modifiers[] = {
-        { 0x51, MENU_MOD_SHIFT }, { 0x01, MENU_MOD_CONTROL }, { 0x19, MENU_MOD_ALT }, { 0x09, MENU_MOD_ALT },
+        { 0x12, MENU_MOD_SHIFT }, { 0x59, MENU_MOD_SHIFT }, { 0x14, MENU_MOD_CONTROL }, { 0x94, MENU_MOD_CONTROL }, { 0x11, MENU_MOD_ALT }, { 0x91, MENU_MOD_ALT },
     };
     if (only_modifiers_up < 0) {
         for (int i = 0; i < 256; i++) {

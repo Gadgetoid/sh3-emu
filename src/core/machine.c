@@ -831,7 +831,7 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
 
 static uint16_t touch_raw(int pixel) {
     int raw = (pixel < 0 ? 0 : pixel) * TOUCH_SCALE;
-    return (uint16_t)(raw > (int)ADC_SAMPLE_MASK ? ADC_SAMPLE_MASK : raw);
+    return raw > (int)ADC_SAMPLE_MASK ? (uint16_t)ADC_SAMPLE_MASK : (uint16_t)raw;
 }
 
 void machine_touch(machine_t *m, bool down, int x, int y) {
