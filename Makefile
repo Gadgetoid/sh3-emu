@@ -5,8 +5,7 @@ VELORAPI  = velo-rapi
 VELOSTATE = velo-state
 SH3RUN    = sh3-run
 BUILD     = build
-ROM      ?= rom/nk.bin
-CE2_ROM  ?= rom/nk-ce2.bin
+ROM      ?= rom/odo-sh3.bin
 VELO_TOOLCHAIN ?= ../velo-toolchain
 
 .DEFAULT_GOAL := all
@@ -53,7 +52,7 @@ SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/l
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
-all: $(PROG) $(VELORAPI) $(VELOSTATE)
+all: $(HEADLESS) $(SH3RUN) $(VELORAPI)
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS)
@@ -132,8 +131,9 @@ clean:
 check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
 	sh tests/check.sh
 
-test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
-	sh tests/boot.sh $(ROM) $(CE2_ROM)
+test: $(HEADLESS) $(SH3RUN)
+	sh tests/sh3/run.sh
+	sh tests/boot.sh $(ROM)
 
 sh3-fuzz: $(SH3RUN)
 	python3 tests/sh3/fuzz.py --runner ./$(SH3RUN)
