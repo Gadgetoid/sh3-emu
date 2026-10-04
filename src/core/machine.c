@@ -22,6 +22,8 @@
 #define ASIC_PA            0x10000000u
 #define ASIC_SIZE          0x00100000u
 #define ASIC_CPU_STATUS    0x0400u
+#define ASIC_PCMCIA_INTR0  0x0414u
+#define ASIC_PCMCIA_INTR1  0x041Cu
 #define ASIC_CPU_ISR       0x0800u
 #define ASIC_CPU_MR        0x0804u
 #define ASIC_DISPLAY       0x1000u
@@ -71,6 +73,11 @@
 #define BOARD_IRL_LEVEL    4u
 
 #define DISP_LCD_ON        0x0004u
+
+#define PCMCIA_PA          0x14000000u
+#define PCMCIA_END         0x1C000000u
+#define PCMCIA_NO_CARD     0x000Cu
+#define PCMCIA_STATE_INTR  0x0001u
 
 #define SERA_TX_INTR       0x0010u
 #define SERA_W1C_MASK      0xF618u
@@ -305,6 +312,8 @@ static uint32_t asic_read(machine_t *m, uint32_t offset, int size) {
         case ASIC_DISPLAY + 12: return m->display_ysize;
         case ASIC_KEYBOARD: return m->keyboard_csr;
         case ASIC_KEYBOARD + 4: return m->keyboard_isr;
+        case ASIC_PCMCIA_INTR0:
+        case ASIC_PCMCIA_INTR1: return asic_get(m, offset) | PCMCIA_NO_CARD;
         default: break;
     }
     uint32_t value = asic_get(m, offset);
@@ -321,6 +330,10 @@ static void asic_write(machine_t *m, uint32_t offset, int size, uint32_t value) 
     switch (offset) {
         case ASIC_CPU_MR: m->cpu_mr = value & 0xFFFFu; update_board_interrupt(m); return;
         case ASIC_CPU_ISR: return;
+        case ASIC_PCMCIA_INTR0:
+        case ASIC_PCMCIA_INTR1:
+            m->asic[offset >> 1] &= (uint16_t)~(value & PCMCIA_STATE_INTR);
+            return;
         case ASIC_DISPLAY + 4: m->display_csr = (uint16_t)value; return;
         case ASIC_DISPLAY + 8: m->display_xsize = (uint16_t)value; return;
         case ASIC_DISPLAY + 12: m->display_ysize = (uint16_t)value; return;
@@ -361,6 +374,10 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         *value = pa >= LED_ALPHA_PA ? m->led_alpha : pa >= LED_DISCRETE_PA ? m->led_discrete : 0;
         return true;
     }
+    if (pa >= PCMCIA_PA && pa < PCMCIA_END) {
+        *value = size == 4 ? 0xFFFFFFFFu : size == 2 ? 0xFFFFu : 0xFFu;
+        return true;
+    }
     if (pa - DRAM_PA < DRAM_AREA_SIZE) {
         const uint8_t *base = m->dram + (pa - DRAM_PA) % m->dram_size;
         *value = size == 4 ? read_le32(base) : size == 2 ? (uint32_t)(base[0] | base[1] << 8) : base[0];
@@ -386,6 +403,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
         else if (pa >= LED_DISCRETE_PA) m->led_discrete = value;
         return true;
     }
+    if (pa >= PCMCIA_PA && pa < PCMCIA_END) return true;
     if (pa - DRAM_PA < DRAM_AREA_SIZE) {
         uint32_t offset = (pa - DRAM_PA) % m->dram_size;
         for (int i = 0; i < size; i++) m->dram[offset + (uint32_t)i] = (uint8_t)(value >> (8 * i));
