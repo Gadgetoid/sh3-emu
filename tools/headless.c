@@ -198,10 +198,15 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_TAP: {
         int n = run->tap_count;
         if (!option_timed(value, &run->tap_times[n], &rest)) return false;
-        char tail;
         run->tap_hold[n] = 0.5;
-        int got = sscanf(rest, "%d:%d:%lf%c", &run->tap_x[n], &run->tap_y[n], &run->tap_hold[n], &tail);
-        if (got != 2 && got != 3) return false;
+        int used = -1;
+        if (sscanf(rest, "%d:%d%n", &run->tap_x[n], &run->tap_y[n], &used) != 2 || used < 0) return false;
+        if (rest[used] == ':') {
+            int hold_used = -1;
+            if (sscanf(rest + used + 1, "%lf%n", &run->tap_hold[n], &hold_used) != 1 || hold_used <= 0 || run->tap_hold[n] <= 0) return false;
+            used += 1 + hold_used;
+        }
+        if (rest[used]) return false;
         if (run->tap_x[n] < 0 || run->tap_x[n] >= SCREEN_MAX_WIDTH || run->tap_y[n] < 0 || run->tap_y[n] >= SCREEN_MAX_HEIGHT) {
             snprintf(error, error_size, "--tap position %d,%d is off the screen", run->tap_x[n], run->tap_y[n]);
             return false;

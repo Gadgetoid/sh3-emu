@@ -20,7 +20,7 @@ make
 ./headless --help
 ```
 
-The first boot shows touch calibration. The Odo driver's five targets are the centre and points 1/10 of the screen in from each corner, so the taps above calibrate it, and Enter (5A) accepts. MAXALL's shell is a wallpaper with Task Manager on Alt-Tab (`11+0D`), whose Run button starts programs such as `cmd`.
+Each option is its own argument: in zsh, `CAL="--tap=... --tap=..."; ./headless $CAL` passes them as one, which `headless` rejects. The first boot shows touch calibration. The Odo driver's five targets are the centre and points 1/10 of the screen in from each corner, so the taps above calibrate it, and Enter (5A) accepts. MAXALL's shell is a wallpaper with Task Manager on Alt-Tab (`11+0D`), whose Run button starts programs such as `cmd`.
 
 `--key` takes PS/2 set 2 scancodes in hex, joined by `+` for a chord; codes from 80 up are sent with the E0 prefix. `--type` types text with `\n` for Enter. `--debug-output` prints the kernel's debug serial port. `--trace-exceptions` logs CPU exceptions other than TLB misses and CE's system call traps. `--pgm` and `--png` save the screen, and `--save` and `--load` keep the machine's state. Runs are deterministic.
 
