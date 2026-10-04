@@ -19,3 +19,5 @@ docs/philips/
 /hash.py
 /hash.sh
 /Windows_CE_Files.txt
+sh3-run
+__pycache__/

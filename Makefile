@@ -3,6 +3,7 @@ HEADLESS  = headless
 PROXYCHECK = proxycheck
 VELORAPI  = velo-rapi
 VELOSTATE = velo-state
+SH3RUN    = sh3-run
 BUILD     = build
 ROM      ?= rom/nk.bin
 CE2_ROM  ?= rom/nk-ce2.bin
@@ -66,6 +67,9 @@ $(PROXYCHECK): $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/tools/proxy_check.o
 $(VELORAPI): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/velo_rapi.o
 	$(CC) -o $@ $^
 
+$(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
+	$(CC) -o $@ $^
+
 $(VELOSTATE): $(BUILD)/src/util/options.o $(BUILD)/tools/velo_state.o
 	$(CC) -o $@ $^ -lz
 
@@ -119,14 +123,17 @@ guest:
 vdisk: guest
 
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE) Velo.app
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE) $(SH3RUN) Velo.app
 
-.PHONY: all run clean test check app icons guest vdisk FORCE
+.PHONY: all run clean test check app icons guest vdisk sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/velo_state.d $(BUILD)/tools/icon.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/proxy_check.d $(BUILD)/tools/velo_rapi.d $(BUILD)/tools/velo_state.d $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d
 
 check: $(PROG) $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
 	sh tests/check.sh
 
 test: $(HEADLESS) $(PROXYCHECK) $(VELORAPI) $(VELOSTATE)
 	sh tests/boot.sh $(ROM) $(CE2_ROM)
+
+sh3-fuzz: $(SH3RUN)
+	python3 tests/sh3/fuzz.py --runner ./$(SH3RUN)
