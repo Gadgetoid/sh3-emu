@@ -3,7 +3,7 @@ HEADLESS  = headless
 SH3RUN    = sh3-run
 APP       = SH3Emu.app
 BUILD     = build
-ROM      ?= rom/odo-sh3.bin
+ROM      ?= rom/odo-sh3-ce212.bin
 
 .DEFAULT_GOAL := all
 

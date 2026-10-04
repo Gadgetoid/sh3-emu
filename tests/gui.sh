@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-ROM=${1:-rom/odo-sh3.bin}
+ROM=${1:-rom/odo-sh3-ce212.bin}
 PROGRAM=${PPFS_PROGRAM:-rom/mbtest.exe}
 OUT=${TMPDIR:-/tmp}/sh3-gui
 DISPLAY_NUMBER=${GUI_DISPLAY:-:9}

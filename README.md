@@ -2,25 +2,37 @@
 
 An emulator for Windows CE on the Hitachi SH-3, for testing an SH3 port of a Windows CE toolchain. It's a hard fork of velo-emu, the Philips Velo 1 (MIPS) emulator, with the MIPS core replaced by an SH-3 core and the Velo board by Microsoft's Odo reference board with the SH3 CPU module.
 
-It boots a Windows CE 2.11 image built from Platform Builder 2.11 for Odo SH3 to its shell, with the 480x240 2 bpp display, PS/2 keyboard and touch panel working. It runs as `headless` for tests and scripts, or in a window as `sh3emu`.
+It boots Windows CE 2.12 (beta) and 2.11 images built from Platform Builder for Odo SH3 to their shells, with the 480x240 2 bpp display, PS/2 keyboard and touch panel working. It runs as `headless` for tests and scripts, or in a window as `sh3emu`.
 
 ## ROMs
 
-No ROMs are included. The target image is a Platform Builder 2.11 `nk.bin` for the Odo platform, `_TGTCPU=SH3`, project MAXALL, built as a RAM image (loaded at 8C600000). Platform Builder 2.11 ships the Odo board support package with its source, and the SH3 kernel and OAK libraries, but no prebuilt SH3 image. Its build tools run under Wine. Under Wine, `nmake` hands `PUBLIC/COMMON/OAK/MISC/SRCGEN1.BAT` an argument with a trailing line break, which breaks `sources.gen`, so that file needs `%_PROJECTROOT%\cesysgen` in place of `%3`.
+No ROMs are included. The image to use is `odo-sh3-ce212.bin`, built by `tools/image/build.sh` from Platform Builder 2.12 beta for the Odo platform, SH3, MAXALL: the H/PC Explorer shell, Pocket Word, Pocket IE and Inbox, PPFS, the PC Card and CompactFlash drivers, serial and PPP, velo-toolchain's debugmgr as `\Windows\velo-debugmgr.exe`, a preset touch calibration (no calibration screen), and optionally some third-party SH3 apps under Start > Programs. Put it (or a symlink) at `rom/odo-sh3-ce212.bin`.
 
-The tests expect velo-toolchain's debugmgr in the image: build it as an Odo platform component (a `PLATFORM/ODO/TEST/DEBUGMGR` directory with a `SOURCES` file, `debugmgr.c` with its `host_call` replaced by the SH helper below, and the helper as `SHX/HOSTCALL.SRC`), and list it in `PLATFORM/ODO/FILES/PLATFORM.BIB` under MODULES as `debugmgr.exe $(_FLATRELEASEDIR)\debugmgr.exe NK S`. Put the image at `rom/odo-sh3.bin`. The PPFS tests also want an SH3 program that isn't in ROM at `rom/mbtest.exe` (or `PPFS_PROGRAM=PATH`, a program that prints a debug line starting `NAME: `).
+```
+PB212_TREE=pb212/tree DEBUGMGR=velo-toolchain/build/debugmgr/ce2-sh3/velo-debugmgr.exe \
+    SH3_APPS=apps WINE=wine OUTPUT=rom/odo-sh3-ce212.bin tools/image/build.sh
+```
+
+- `PB212_TREE`: the Platform Builder 2.12 beta tree for SH3 (discs 1, 2, 6 and 7 merged; the disc 2 ARM libraries aren't needed). The script edits files in it, keeping each original as `NAME.orig` and starting from that on every run, so it's best given a copy.
+- `DEBUGMGR`: velo-toolchain's `velo-debugmgr.exe` for SH3 (`make debugmgr-sh3` there).
+- `SH3_APPS`: optional folder with the apps listed in `tools/image/apps.txt`; missing ones are skipped.
+- `WINE`: the Wine to run Platform Builder's tools with. The script makes its own prefix in `build/image` and maps W: there.
+- `FULL=1` reruns blddemo (about 15 minutes); otherwise it runs only when the tree has no MAXALL build yet, and the platform build and makeimg take about a minute.
+
+Wine stops a build that runs away (a log over 200 MB, or an xcopy prompt). The output has a manifest (`.manifest.txt`, the module and file lists) and a `.sha256`. The script's edits: Wine fixes to `SRCGEN1.BAT` and CPLMAIN's makefile, a 9 MB image slot at 8C700000 and RAM below it in `CONFIG.BIB`, and the files, shortcuts and registry entries in `tools/image`.
+
+The tests want an SH3 program that isn't in ROM at `rom/mbtest.exe` (or `PPFS_PROGRAM=PATH`, a program that prints a debug line starting `NAME: `) for PPFS.
 
 ## Running
 
 ```
 make
-./headless rom/odo-sh3.bin --seconds=3 --debug-output --png=calibration.png
-./headless rom/odo-sh3.bin --seconds=22 --tap=4:240:120 --tap=6:48:24 --tap=8:48:216 --tap=10:432:216 --tap=12:432:24 --key=15:5A --save=desktop.state
-./headless rom/odo-sh3.bin --load=desktop.state --seconds=12 --key=1:11+0D --tap=3:71:198 "--type=5:cmd\n" --png=cmd.png
+./headless rom/odo-sh3-ce212.bin --seconds=25 --save=desktop.state --png=desktop.png
+./headless rom/odo-sh3-ce212.bin --load=desktop.state --seconds=10 --key=1:14+76 --type=2:r "--type=3:cmd\n" --png=cmd.png
 ./headless --help
 ```
 
-Each option is its own argument: in zsh, `CAL="--tap=... --tap=..."; ./headless $CAL` passes them as one, which `headless` rejects. The first boot shows touch calibration. The Odo driver's five targets are the centre and points 1/10 of the screen in from each corner, so the taps above calibrate it, and Enter (5A) accepts. MAXALL's shell is a wallpaper with Task Manager on Alt-Tab (`11+0D`), whose Run button starts programs such as `cmd`.
+The desktop is up 25 seconds after a cold boot. Ctrl+Esc (`14+76`) opens the Start menu and `r` its Run dialog. Each option is its own argument: in zsh, `KEYS="--key=... --type=..."; ./headless $KEYS` passes them as one, which `headless` rejects.
 
 `--key` takes PS/2 set 2 scancodes in hex, joined by `+` for a chord; codes from 80 up are sent with the E0 prefix. `--type` types text with `\n` for Enter. `--debug-output` prints the kernel's debug serial port. `--trace-exceptions` logs CPU exceptions other than TLB misses and CE's system call traps. `--pgm` and `--png` save the screen, and `--save` and `--load` keep the machine's state. Runs are deterministic.
 
@@ -30,7 +42,7 @@ Socket 0 of the Odo PC Card controller takes a CompactFlash card in ATA mode, ba
 
 ```
 tools/mkcard.sh card.img 16 ~/some/folder
-./headless rom/odo-sh3.bin --load=desktop.state --card=card.img --seconds=10
+./headless rom/odo-sh3-ce212.bin --load=desktop.state --card=card.img --seconds=10
 ```
 
 `mkcard.sh` uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. To read the image on the host, `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` on macOS or `mcopy -i card.img@@512` on Linux.
@@ -39,7 +51,7 @@ The card has a CompactFlash CIS, a configuration option register, and ATA IDENTI
 
 ## Host folder (PPFS)
 
-The Odo's parallel port carried Platform Builder's parallel-port file system: when CE can't find a program or DLL in ROM or the object store, the kernel asks the host for it. `--folder=DIR` makes the emulator that host, serving DIR, so programs built for SH3 run without rebuilding the image: copy `hello.exe` into DIR and run `hello` from Task Manager's Run dialog. Names are matched without their path and case-insensitively. Without `--folder`, the port answers that no file exists, so CE doesn't wait on a missing host. The folder isn't a drive CE can browse: start its programs by name from Run, `cmd` or a shortcut. Misses are logged as `ppfs: no NAME in DIR`; a folder that doesn't exist is an error.
+The Odo's parallel port carried Platform Builder's parallel-port file system: when CE can't find a program or DLL in ROM or the object store, the kernel asks the host for it. `--folder=DIR` makes the emulator that host, serving DIR, so programs built for SH3 run without rebuilding the image: copy `hello.exe` into DIR and run `hello` from Start > Run. Names are matched without their path and case-insensitively. Without `--folder`, the port answers that no file exists, so CE doesn't wait on a missing host. The folder isn't a drive CE can browse: start its programs by name from Run, `cmd` or a shortcut. Misses are logged as `ppfs: no NAME in DIR`; a folder that doesn't exist is an error.
 
 ## Debugging and file transfer
 
@@ -60,11 +72,12 @@ The host mailbox and GDB stub are velo-emu's, ported to the SH-3.
   	nop
   ```
 
-- velo-toolchain's guest agent, debugmgr, builds for SH3 with Platform Builder's compiler using that helper. With it running on the device, file transfer, program start and kill work over `--agent`, and through the GDB stub.
-- `--gdb=PORT` serves GDB's remote protocol. The target description names the `sh3` architecture, and the `g` packet follows GDB's SH-3 register layout (r0-r15, pc, pr, gbr, vbr, mach, macl, sr, unused FPU slots, ssr, spc and both banks of r0-r7). Breakpoints, watchpoints and single steps are the emulator's own, not code patches. `monitor processes` and `monitor modules` read CE 2.11's process and module lists. In extended mode (`target extended-remote`), `remote put` and `remote get`, `set remote exec-file` with `starti` or `run`, and `kill` go through debugmgr.
+- velo-toolchain's guest agent, debugmgr, is in the image as `velo-debugmgr.exe`. With it running on the device, file transfer, program start and kill work over `--agent`, and through the GDB stub.
+- `--gdb=PORT` serves GDB's remote protocol. The target description names the `sh3` architecture, and the `g` packet follows GDB's SH-3 register layout (r0-r15, pc, pr, gbr, vbr, mach, macl, sr, unused FPU slots, ssr, spc and both banks of r0-r7). Breakpoints, watchpoints and single steps are the emulator's own, not code patches. `monitor processes` and `monitor modules` read CE 2.11's and 2.12's process and module lists. In extended mode (`target extended-remote`), `remote put` and `remote get`, `set remote exec-file` with `starti` or `run`, and `kill` go through debugmgr.
 
 ```
-./headless rom/odo-sh3.bin --load=debugmgr.state --gdb=1234
+./headless rom/odo-sh3-ce212.bin --load=desktop.state --seconds=8 --key=1:14+76 --type=2:r "--type=3:velo-debugmgr\n" --save=debugmgr.state
+./headless rom/odo-sh3-ce212.bin --load=debugmgr.state --gdb=1234
 gdb -ex "set architecture sh3" -ex "target extended-remote :1234" -ex 'set remote exec-file \Windows\cmd.exe' -ex starti
 ```
 
@@ -85,8 +98,8 @@ Not yet: sound output, serial ports to the host, PC Cards other than CompactFlas
 ## Testing
 
 - `make check` needs no ROMs: the command lines.
-- `make test` runs the CPU tests, boots `rom/odo-sh3.bin` (or `make test ROM=PATH`) through calibration to the desktop and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, and runs a program from `--folder`.
-- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, calibrates, opens the console and lists a directory with injected mouse and key events, saves a screenshot, runs `mbtest` from the host folder set in `sh3emu.ini`, and checks it used its own data folder.
+- `make test` runs the CPU tests, boots `rom/odo-sh3-ce212.bin` (or `make test ROM=PATH`) to the desktop, the Start menu (a tap, so it checks the preset calibration) and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, and runs a program from `--folder` through Start > Run.
+- `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, opens the console and lists a directory with injected mouse and key events, saves a screenshot, runs `mbtest` from the host folder set in `sh3emu.ini`, and checks it used its own data folder.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 

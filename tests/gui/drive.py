@@ -91,14 +91,10 @@ class Driver:
 
 def main():
     driver = Driver()
-    time.sleep(6)
-    for x, y in [(240, 120), (48, 24), (48, 216), (432, 216), (432, 24)]:
-        driver.tap(x, y)
-    driver.key("Return")
-    time.sleep(4)
-    driver.chord("Alt_L", "Tab")
+    time.sleep(30)
+    driver.chord("Control_L", "Escape")
     time.sleep(1)
-    driver.tap(71, 198, 0.3)
+    driver.text("r")
     time.sleep(1.5)
     driver.text("cmd")
     driver.key("Return")

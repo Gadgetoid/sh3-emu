@@ -1,7 +1,10 @@
 #!/bin/sh
 set -e
-ROM=${1:-rom/odo-sh3.bin}
+ROM=${1:-rom/odo-sh3-ce212.bin}
 OUT=${TMPDIR:-/tmp}/sh3-boot
+DESKTOP_HASH=f6b35a6e2df61df5b996cd2e8b250bd05f8cd3e968e5ac7b3f0b3712934d8831
+START_HASH=d4a4209f465f1cd22a0fded3cd266a3da23df0b171e0515e28325012d74c884f
+CONSOLE_HASH=96e3e1054315a66e722908554fd3b3a11576598ce3620f657403408076c43f89
 mkdir -p "$OUT"
 check() {
     name=$1; expected=$2; shift 2
@@ -10,13 +13,15 @@ check() {
     if [ -z "$expected" ]; then echo "$name $actual"; return; fi
     if [ "$actual" = "$expected" ]; then echo "ok   $name"; else echo "FAIL $name $actual"; exit 1; fi
 }
-CALIBRATE="--tap=4:240:120 --tap=6:48:24 --tap=8:48:216 --tap=10:432:216 --tap=12:432:24 --key=15:5A"
+run_at() {
+    printf -- '--key=%s:14+76 --type=%s:r --type=%s:%s\\n' "$1" $(($1 + 1)) $(($1 + 2)) "$2"
+}
 if ./headless "$ROM" --debug-output --seconds=1 2>&1 | grep -q "^debug: Windows CE Kernel for Hitachi SH"; then echo "ok   debug_output"; else echo "FAIL debug_output"; exit 1; fi
-check calibration 32543f4dd30c39ce3e8685a55408a10d60095af60bedb3862314d5f836c54b90 --seconds=3
-check desktop 644ad304df340ec56560db7229a83a2315bf3bc0a47eb74d813f0edb7e91db00 --seconds=22 $CALIBRATE
-./headless "$ROM" --seconds=22 --save="$OUT/desktop.state" $CALIBRATE 2>/dev/null
-check resumed 644ad304df340ec56560db7229a83a2315bf3bc0a47eb74d813f0edb7e91db00 --seconds=1 --load="$OUT/desktop.state"
-check console 0c7192376347811dc03dee48e0d4b2a4943187bd492b37628a6ec1f97c2fa240 --seconds=12 --load="$OUT/desktop.state" --key=1:11+0D --tap=3:71:198:0.3 "--type=5:cmd\n" "--type=8:dir\n"
+check desktop "$DESKTOP_HASH" --seconds=25
+./headless "$ROM" --seconds=25 --save="$OUT/desktop.state" 2>/dev/null
+check resumed "$DESKTOP_HASH" --seconds=1 --load="$OUT/desktop.state"
+check start_menu "$START_HASH" --seconds=3 --load="$OUT/desktop.state" --tap=1:30:226:0.2
+check console "$CONSOLE_HASH" --seconds=10 --load="$OUT/desktop.state" $(run_at 1 cmd) "--type=7:dir\n"
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 ./headless "$ROM" --load="$OUT/desktop.state" --gdb="$PORT" > "$OUT/gdb.log" 2>&1 &
 STUB=$!
@@ -33,10 +38,10 @@ card_read() {
 }
 rm -rf "$OUT/cardsrc" && mkdir -p "$OUT/cardsrc/data" && echo "written on the host, copied by CE" > "$OUT/cardsrc/data/hello.txt"
 sh tools/mkcard.sh "$OUT/card.img" 16 "$OUT/cardsrc/data"
-./headless "$ROM" --load="$OUT/desktop.state" --card="$OUT/card.img" --seconds=18 --key=2:11+0D --tap=4:71:198:0.3 "--type=6:cmd\n" \
-    '--type=9:md "\Storage Card\fromce"\n' '--type=12:copy "\Storage Card\data\hello.txt" "\Storage Card\fromce\copy.txt"\n' > /dev/null 2>&1
+./headless "$ROM" --load="$OUT/desktop.state" --card="$OUT/card.img" --seconds=16 $(run_at 2 cmd) \
+    '--type=7:md "\Storage Card\fromce"\n' '--type=10:copy "\Storage Card\data\hello.txt" "\Storage Card\fromce\copy.txt"\n' > /dev/null 2>&1
 if [ "$(card_read "$OUT/card.img" fromce/copy.txt)" = "written on the host, copied by CE" ]; then echo "ok   card"; else echo "FAIL card"; exit 1; fi
-./headless "$ROM" --load="$OUT/desktop.state" --seconds=8 --key=2:11+0D --key=4:11+2D "--type=6:debugmgr\n" --save="$OUT/debugmgr.state" > /dev/null 2>&1
+./headless "$ROM" --load="$OUT/desktop.state" --seconds=8 $(run_at 1 velo-debugmgr) --save="$OUT/debugmgr.state" > /dev/null 2>&1
 PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 ./headless "$ROM" --load="$OUT/debugmgr.state" --gdb="$PORT" > "$OUT/gdb_run.log" 2>&1 &
 STUB=$!
@@ -46,7 +51,7 @@ PROGRAM=${PPFS_PROGRAM:-rom/mbtest.exe}
 if [ -f "$PROGRAM" ]; then
     rm -rf "$OUT/folder" && mkdir -p "$OUT/folder" && cp "$PROGRAM" "$OUT/folder/"
     name=$(basename "$PROGRAM" .exe)
-    if ./headless "$ROM" --load="$OUT/desktop.state" --folder="$OUT/folder" --debug-output --seconds=8 --key=2:11+0D --key=4:11+2D "--type=6:$name\n" > "$OUT/ppfs.log" 2>&1 &&
+    if ./headless "$ROM" --load="$OUT/desktop.state" --folder="$OUT/folder" --debug-output --seconds=8 $(run_at 1 "$name") > "$OUT/ppfs.log" 2>&1 &&
         grep -q "^ppfs: opened .*$name.exe" "$OUT/ppfs.log" && grep -q "^debug: $name: " "$OUT/ppfs.log"; then echo "ok   ppfs"; else echo "FAIL ppfs"; cat "$OUT/ppfs.log"; exit 1; fi
 else
     echo "skip ppfs: no $PROGRAM (an SH3 program that isn't in ROM)"
