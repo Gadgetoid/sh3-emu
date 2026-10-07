@@ -55,6 +55,7 @@ size_t machine_serial_take(machine_t *machine, uint8_t *out, size_t max);
 
 void machine_reset(machine_t *machine);
 void machine_soft_reset(machine_t *machine);
+void machine_power_button(machine_t *machine, bool down);
 bool machine_watch_pc(machine_t *machine, uint32_t va);
 void     machine_set_memory(machine_t *machine, uint32_t megabytes);
 uint32_t machine_memory(machine_t *machine);
@@ -63,7 +64,17 @@ void     machine_set_speed(machine_t *machine, uint32_t multiplier);
 uint32_t machine_speed(machine_t *machine);
 bool machine_save(machine_t *machine, const char *path, int64_t host_time);
 uint64_t machine_rom_hash(machine_t *machine);
+enum {
+    MACHINE_BOARD_NONE,
+    MACHINE_BOARD_ODO,
+    MACHINE_BOARD_AUTOPC,
+    MACHINE_BOARD_CASIO,
+    MACHINE_BOARD_HP,
+    MACHINE_BOARD_COUNT,
+};
+
 int      machine_rom_system(machine_t *machine);
+const char *machine_board_name(int board);
 key_layout_t machine_key_layout(machine_t *machine);
 bool machine_state_matches(machine_t *machine, const char *path);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);

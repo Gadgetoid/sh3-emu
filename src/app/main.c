@@ -42,7 +42,8 @@
 #define BACKUP_SECONDS   600
 #define BACKUP_KEEP      10
 #define NOTICE_SECONDS   2
-#define WINDOW_TITLE     "Odo SH3"
+#define WINDOW_TITLE     "SH3Emu"
+#define POWER_PRESS_SECONDS 0.2
 
 #ifdef __APPLE__
 #define SCREENSHOT_FOLDER SDL_FOLDER_DESKTOP
@@ -645,8 +646,8 @@ static void set_title(SDL_Window *window, const char *name, const char *notice, 
 }
 
 typedef struct {
-    char   path[3][1024];
-    size_t size[3];
+    char   path[MACHINE_BOARD_COUNT][1024];
+    size_t size[MACHINE_BOARD_COUNT];
 } rom_set_t;
 
 static void rom_folder(char *path, size_t size) {
@@ -740,7 +741,7 @@ static void find_roms(rom_set_t *roms) {
 static bool no_roms_dialog(void) {
     char folder[1100], message[1400];
     rom_folder(folder, sizeof folder);
-    snprintf(message, sizeof message, "Put an Odo SH3 nk.bin (a Platform Builder RAM image) in %s.", folder);
+    snprintf(message, sizeof message, "Put a ROM in %s: an Odo SH3 or Clarion AutoPC nk.bin, or a Casio Cassiopeia A-51 or HP 320LX ROM image.", folder);
     const SDL_MessageBoxButtonData buttons[] = {
         { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
         { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Show ROM Folder" },
@@ -766,8 +767,7 @@ static uint32_t probe_rom(const char *path, char *label, size_t label_size) {
     uint32_t screens;
     int system = cached_rom_system(path, &info, &screens);
     if (!system) return 0;
-    (void)system;
-    snprintf(label, label_size, "Odo SH3: %s", file_leaf_name(path));
+    snprintf(label, label_size, "%s: %s", machine_board_name(system), file_leaf_name(path));
     return screens;
 }
 
@@ -810,11 +810,10 @@ static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
 }
 
 static void migrate_profiles(profiles_t *profiles, const rom_set_t *roms, const settings_t *settings, const char *folder) {
-    static const char *NAMES[] = { "", "Odo SH3", "Odo SH3" };
-    for (int system = 1; system <= 2; system++) {
+    for (int system = MACHINE_BOARD_ODO; system < MACHINE_BOARD_COUNT; system++) {
         if (!roms->path[system][0]) continue;
         profile_t profile = { .memory = settings->memory, .screen = settings->screen, .host_time = settings->host_time != 0 };
-        snprintf(profile.name, sizeof profile.name, "%s", NAMES[system]);
+        snprintf(profile.name, sizeof profile.name, "%s", machine_board_name(system));
         snprintf(profile.rom, sizeof profile.rom, "%s", roms->path[system]);
         if (!legacy_state_path(profile.rom, profile.state, sizeof profile.state)) continue;
         profile_make_unique(profiles, &profile, folder);
@@ -910,8 +909,8 @@ static bool save_screenshot(view_t *view, char *path, size_t size) {
     char stamp[64];
     strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
     const char *folder = SDL_GetUserFolder(SCREENSHOT_FOLDER);
-    if (folder) snprintf(path, size, "%sOdo SH3 Screenshot %s.png", folder, stamp);
-    else snprintf(path, size, "%s/Odo SH3 Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
+    if (folder) snprintf(path, size, "%sSH3Emu Screenshot %s.png", folder, stamp);
+    else snprintf(path, size, "%s/SH3Emu Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
     FILE *file = fopen(path, "wb");
     bool saved = file && fwrite(png, 1, length, file) == length;
     if (file) fclose(file);
@@ -1001,7 +1000,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
 
 static const option_spec_t LAUNCH_SPEC = {
     "sh3emu", "[OPTIONS] [ROM]",
-    "Emulates Microsoft's Odo reference board with the Hitachi SH-3 CPU module, running a Platform Builder Windows CE image. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
+    "Emulates Hitachi SH-3 Windows CE machines: Microsoft's Odo reference board, the Clarion AutoPC, the Casio Cassiopeia A-51 and the HP 320LX. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
     LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
     "headless runs the machine without a window, for tests and scripts.",
 };
@@ -1055,7 +1054,7 @@ int main(int argc, char **argv) {
     screen_size_t screen = machine_screen_size(machine);
     lcd_set_size(screen.width, screen.height);
 
-    SDL_SetAppMetadata("Odo SH3", options_version(), "sh3-emu");
+    SDL_SetAppMetadata("SH3Emu", options_version(), "sh3-emu");
     if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     pick_event_type = SDL_RegisterEvents(1);
     int window_width, window_height;
@@ -1109,7 +1108,7 @@ int main(int argc, char **argv) {
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
     }
-    uint64_t network_plug_at = 0;
+    uint64_t network_plug_at = 0, power_release_at = 0;
     if (settings.network && !set_network(machine, true, &network_plug_at)) {
         fprintf(stderr, "sh3emu: the network needs a build with libslirp\n");
         settings.network = 0;
@@ -1213,6 +1212,10 @@ int main(int argc, char **argv) {
         for (int item = menu_poll(); item >= 0; item = menu_poll()) {
             release_keys(&input, machine, held, -1);
             switch (item) {
+            case MENU_POWER:
+                machine_power_button(machine, true);
+                power_release_at = machine_cycles(machine) + (uint64_t)(POWER_PRESS_SECONDS * MACHINE_CLOCK_HZ);
+                break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET: machine_soft_reset(machine); break;
             case MENU_NEW_MACHINE: {
@@ -1486,6 +1489,10 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_STOP_HOST_FOLDER, host_folder != NULL);
         menu_set_enabled(MENU_NETWORK, net_gateway_available());
         menu_set_checked(MENU_NETWORK, settings.network != 0);
+        if (power_release_at && machine_cycles(machine) >= power_release_at) {
+            power_release_at = 0;
+            machine_power_button(machine, false);
+        }
         if (network_plug_at && SDL_GetTicks() >= network_plug_at) {
             network_plug_at = 0;
             machine_serial_connect(machine, true);

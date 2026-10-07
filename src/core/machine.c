@@ -1304,7 +1304,27 @@ uint32_t machine_memory_next(machine_t *m) { return m->dram_size_next >> 20; }
 void machine_set_speed(machine_t *m, uint32_t multiplier) { m->cpu.speed = multiplier ? multiplier : 1; }
 uint32_t machine_speed(machine_t *m) { return m->cpu.speed ? m->cpu.speed : 1; }
 uint64_t machine_rom_hash(machine_t *m) { return m->rom_hash; }
-int machine_rom_system(machine_t *m) { (void)m; return 2; }
+void machine_power_button(machine_t *m, bool down) {
+    if (m->hp) sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
+    if (m->casio && down) casio_power_key(m);
+}
+
+int machine_rom_system(machine_t *m) {
+    if (m->autopc) return MACHINE_BOARD_AUTOPC;
+    if (m->casio) return MACHINE_BOARD_CASIO;
+    if (m->hp) return MACHINE_BOARD_HP;
+    return MACHINE_BOARD_ODO;
+}
+
+const char *machine_board_name(int board) {
+    switch (board) {
+        case MACHINE_BOARD_ODO: return "Odo SH3";
+        case MACHINE_BOARD_AUTOPC: return "Clarion AutoPC";
+        case MACHINE_BOARD_CASIO: return "Casio A-51";
+        case MACHINE_BOARD_HP: return "HP 320LX";
+        default: return "Unknown";
+    }
+}
 key_layout_t machine_key_layout(machine_t *m) { (void)m; return KEY_LAYOUT_ROM; }
 
 void machine_set_host_clock(machine_t *m, bool enabled) {

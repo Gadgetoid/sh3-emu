@@ -7,6 +7,7 @@
 #include <string.h>
 #include <strings.h>
 
+#include "core/machine.h"
 #include "util/file.h"
 
 static void copy_value(char *destination, size_t size, const char *value) {
@@ -100,8 +101,7 @@ void profile_default_name(const profile_t *profile, int system, char *name, size
     snprintf(rom, sizeof rom, "%s", file_leaf_name(profile->rom));
     char *extension = strrchr(rom, '.');
     if (extension && extension != rom) *extension = 0;
-    const char *version = system ? "CE 2.11" : "CE";
-    snprintf(name, size, "%s (%s), %u x %u, %u MB", version, rom, profile->screen.width, profile->screen.height, profile->memory);
+    snprintf(name, size, "%s (%s), %u x %u, %u MB", machine_board_name(system), rom, profile->screen.width, profile->screen.height, profile->memory);
 }
 
 static bool name_taken(const profiles_t *profiles, const char *name) {

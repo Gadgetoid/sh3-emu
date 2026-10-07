@@ -8,6 +8,7 @@
 #define INTC_BASE   0xFFFFFEE0u
 #define ICR0_NMIL   0x8000u
 #define STBCR_STBY  0x80u
+#define PCC_NO_CARD 0x0Cu
 #define BSC_BASE    0xFFFFFF60u
 #define CPG_BASE    0xFFFFFF80u
 #define CCR_ADDRESS 0xFFFFFFECu
@@ -596,6 +597,7 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
         case 0x018: *value = chip->priority[3]; return true;
         case 0x01A: *value = chip->priority[4]; return true;
         case 0x0B0: *value = chip->ccr2; return true;
+        case 0x0E0: case 0x0F0: *value = PCC_NO_CARD; return true;
         default: break;
     }
     if (offset >= 0x080 && offset < 0x090) {
@@ -609,6 +611,7 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
         return true;
     }
     if (offset == 0x092) { *value = chip->adc_config; return true; }
+    if (offset >= 0x0E0 && offset < 0x100) { *value = chip->pcc[(offset - 0x0E0) / 2]; return true; }
     if (offset >= 0x100 && offset < 0x140) {
         *value = port_value(chip, (offset - 0x100) / 2);
         return true;
@@ -641,6 +644,7 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
         return true;
     }
     if (offset == 0x092) { chip->adc_config = (uint8_t)value; return true; }
+    if (offset >= 0x0E0 && offset < 0x100) { chip->pcc[(offset - 0x0E0) / 2] = (uint8_t)value; return true; }
     if (offset >= 0x100 && offset < 0x140) {
         chip->ports[(offset - 0x100) / 2] = (uint16_t)value;
         if (chip->ports_written) chip->ports_written(chip->transmit_context);

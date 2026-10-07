@@ -73,6 +73,7 @@ typedef struct {
     uint16_t watchdog_count, watchdog_control;
     uint32_t ccr, ccr2;
     uint16_t ports[64];
+    uint8_t  pcc[16];
     uint16_t port_input_mask[64], port_input[64];
 
     uint8_t  adc_control, adc_config;

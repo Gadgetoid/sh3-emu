@@ -42,7 +42,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
     panel.canChooseFiles = YES;
     panel.canChooseDirectories = NO;
     panel.allowsMultipleSelection = NO;
-    panel.message = @"Choose an Odo SH3 ROM: a Platform Builder nk.bin RAM image.";
+    panel.message = @"Choose a ROM: an Odo SH3 or Clarion AutoPC nk.bin, or a Casio Cassiopeia A-51 or HP 320LX ROM image.";
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         const char *path = panel.URL.fileSystemRepresentation;
         char label[160];
@@ -58,7 +58,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
             return;
         }
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Not an Odo SH3 ROM";
+        alert.messageText = @"Not a ROM this emulator can run";
         alert.informativeText = [NSString stringWithFormat:@"%@ isn't a ROM this emulator can run.", panel.URL.lastPathComponent];
         [alert runModal];
     }
@@ -164,7 +164,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         if (rom < 0 || rom >= (NSInteger)form.paths.count) {
             NSAlert *missing = [[NSAlert alloc] init];
             missing.messageText = @"No ROM chosen";
-            missing.informativeText = @"Put an Odo SH3 ROM in the roms folder, or choose Other ROM File\u2026.";
+            missing.informativeText = @"Put a ROM in the roms folder, or choose Other ROM File\u2026.";
             [missing runModal];
             return false;
         }

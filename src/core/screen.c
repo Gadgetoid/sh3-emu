@@ -5,6 +5,7 @@
 #include <string.h>
 
 const screen_size_t SCREEN_PRESETS[] = {
+    { 256, 64 },
     { 480, 240 },
     { 640, 240 },
     { 640, 480 },

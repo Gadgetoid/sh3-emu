@@ -3,6 +3,7 @@
 #include <stdbool.h>
 
 enum {
+    MENU_POWER,
     MENU_PAUSE,
     MENU_SOFT_RESET,
     MENU_MACHINE_FIRST,

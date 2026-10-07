@@ -164,6 +164,8 @@ Not yet: sound output, the IR port, PC Cards other than CompactFlash in socket 0
 
 `make sh3emu` builds the windowed app (`make app` wraps it as `SH3Emu.app` on macOS). It runs the board with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus, and takes `--card`, `--folder`, `--net`, `--memory`, `--agent` and `--gdb` like `headless`; Devices has the card, the PPFS host folder and the network. Machines, states, snapshots and the ROMs folder live in `$XDG_DATA_HOME/sh3-emu` (otherwise `~/Library/Application Support/sh3-emu` on macOS, `~/.local/share/sh3-emu` elsewhere), and settings in `sh3emu.ini` in `$XDG_CONFIG_HOME/sh3-emu` (otherwise that data folder on macOS, `~/.config/sh3-emu` elsewhere), so it doesn't share anything with velo-emu.
 
+Machine > New Machine lists the ROMs in the roms folder by board: Odo SH3, Clarion AutoPC, Casio A-51 or HP 320LX. Machine > Power Button (Cmd-Shift-P) presses the HP 320LX's ON key, which wakes it from suspend, and the Casio A-51's; `headless` does the same with `--power=SECONDS`.
+
 ## Testing
 
 - `make check` needs no ROMs: the command lines, and the gateway's `CLIENT` handshake after stray text.

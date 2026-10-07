@@ -125,6 +125,8 @@ typedef struct {
     double   type_times[16];
     const char *type_strings[16];
     int      type_count;
+    double   power_times[8];
+    int      power_count;
     double   soft_reset_at, realtime, net_at;
     bool     net;
     uint32_t watches[MACHINE_WATCH_MAX];
@@ -134,7 +136,7 @@ typedef struct {
 
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_FOLDER, OPT_NET, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
-    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_SOFT_RESET,
+    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
 };
@@ -155,6 +157,7 @@ static const option_t OPTIONS[] = {
     [OPT_TAP] = { "tap", "SECONDS:X:Y[:HOLD]", "hold the pen at a screen position, for 0.5 s by default (0.08 for double taps)", 32 },
     [OPT_KEY] = { "key", "SECONDS:SCANCODE[+SCANCODE]", "press PS/2 set 2 scancodes (hex) for 50 ms, several joined by + as a chord; 80 and up are E0-prefixed", 32 },
     [OPT_TYPE] = { "type", "SECONDS:TEXT", "type text, with \\n for Enter", 16 },
+    [OPT_POWER] = { "power", "SECONDS", "press the power button for 200 ms", 8 },
     [OPT_SOFT_RESET] = { "soft-reset", "SECONDS", "restart CE, keeping RAM", 0 },
     [OPT_HEADING_OUTPUT] = { NULL, NULL, "Output", 0 },
     [OPT_PGM] = { "pgm", "FILE", "save the raw greyscale screen at the end", 0 },
@@ -244,6 +247,12 @@ static bool parse_option(void *context, int option, const char *value, char *err
         if (!option_timed(value, &run->type_times[run->type_count], &rest)) return false;
         run->type_strings[run->type_count++] = rest;
         return true;
+    case OPT_POWER: {
+        double number;
+        if (!option_number(value, &number) || number < 0) return false;
+        run->power_times[run->power_count++] = number;
+        return true;
+    }
     case OPT_SOFT_RESET: return option_number(value, &run->soft_reset_at) && run->soft_reset_at >= 0;
     case OPT_PGM: run->pgm = value; return true;
     case OPT_PNG: run->png = value; return true;
@@ -308,6 +317,7 @@ int main(int argc, char **argv) {
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
     for (int t = 0; t < run.tap_count; t++) if (run.tap_times[t] > latest) latest = run.tap_times[t];
     for (int k = 0; k < run.type_count; k++) if (run.type_times[k] > latest) latest = run.type_times[k];
+    for (int b = 0; b < run.power_count; b++) if (run.power_times[b] > latest) latest = run.power_times[b];
     if (latest >= run.seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, run.seconds);
     if (run.agent_socket && !(agent = agent_create(run.agent_socket, log_stderr))) {
         fprintf(stderr, "cannot listen on agent socket %s\n", run.agent_socket);
@@ -383,6 +393,12 @@ int main(int argc, char **argv) {
         }
         for (int k = 0; k < run.type_count; k++)
             if (due(run.type_times[k], done, slice)) type_text(machine, run.type_strings[k]);
+        for (int b = 0; b < run.power_count; b++) {
+            if (!due(run.power_times[b], done, slice)) continue;
+            machine_power_button(machine, true);
+            advance(machine, MACHINE_CLOCK_HZ / 5);
+            machine_power_button(machine, false);
+        }
         if (due(run.soft_reset_at, done, slice)) machine_soft_reset(machine);
         if (run.net && due(run.net_at, done, slice)) machine_serial_connect(machine, true);
         advance(machine, slice);
