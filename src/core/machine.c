@@ -518,8 +518,12 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
+    uint64_t cycles = m->cpu.cycles;
     sh3_reset(&m->cpu);
-    if (keep_ram) m->cpu.expevt = SH3_EXP_MANUAL_RESET;
+    if (keep_ram) {
+        m->cpu.cycles = cycles;
+        m->cpu.expevt = SH3_EXP_MANUAL_RESET;
+    }
     mailbox_clear(&m->mailbox);
     m->mailbox_pc = 0;
     m->mailbox_page_count = 0;

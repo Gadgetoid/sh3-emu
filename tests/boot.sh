@@ -85,7 +85,7 @@ if [ -f "$CASIO_ROM" ]; then
         ./headless "$CASIO_ROM" --seconds=50 --net=22 > "$OUT/casio_net.log" 2>&1
         if grep -q "^ppp: IPCP up" "$OUT/casio_net.log" && grep -q "^desktop: connection from the device" "$OUT/casio_net.log"; then echo "ok   casio_net"; else echo "FAIL casio_net"; exit 1; fi
         reconnect_check casio_replug "$CASIO_ROM" --seconds=60 --net=22 --replug=37
-        reconnect_check casio_soft_reset "$CASIO_ROM" --seconds=90 --net=22 --soft-reset=37 --replug=65
+        reconnect_check casio_soft_reset "$CASIO_ROM" --seconds=110 --net=22 --soft-reset=60 --replug=88
         rapi_check casio_rapi "$CASIO_ROM" 22
         if [ -f "$CASIO_DICTIONARY" ]; then dictionary_check casio_dictionary "$CASIO_ROM" "$CASIO_DICTIONARY"; else echo "skip casio_dictionary: no $CASIO_DICTIONARY"; fi
     fi
@@ -122,7 +122,7 @@ if [ -f "$HP_ROM" ]; then
         ./headless "$HP_ROM" --seconds=50 --net=20 > "$OUT/hp_net.log" 2>&1
         if grep -q "^ppp: IPCP up" "$OUT/hp_net.log" && grep -q "^desktop: Handheld_PC, Windows CE 2" "$OUT/hp_net.log"; then echo "ok   hp_net"; else echo "FAIL hp_net"; exit 1; fi
         reconnect_check hp_replug "$HP_ROM" --seconds=60 --net=20 --replug=35
-        reconnect_check hp_soft_reset "$HP_ROM" --seconds=90 --net=20 --soft-reset=35 --replug=63
+        reconnect_check hp_soft_reset "$HP_ROM" --seconds=110 --net=20 --soft-reset=60 --replug=88
         rapi_check hp_rapi "$HP_ROM" 20
     fi
 else
