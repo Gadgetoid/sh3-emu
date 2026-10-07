@@ -18,3 +18,4 @@ docs/philips/
 /Windows_CE_Files.txt
 sh3-run
 __pycache__/
+.vscode/
