@@ -963,7 +963,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->autopc = autopc_detect(rom, rom_size);
     m->casio = rom_size < 7 || memcmp(rom, "B000FF\n", 7);
     m->board_host = (autopc_host_t){ autopc_debug_line, autopc_trace, autopc_irl, m, &m->card_slot };
-    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, m };
+    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, m };
     m->card_slot.state = &m->card;
     if (m->casio && !load_flash(m, error, error_size)) {
         machine_destroy(m);
@@ -1130,6 +1130,7 @@ static bool insert_card_now(machine_t *m, const char *path) {
     m->pcmcia_state |= PCMCIA_STATE_INTR;
     update_pcmcia_interrupt(m);
     if (m->autopc) autopc_card_changed(&m->board, &m->board_host);
+    if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
     return true;
 }
 
@@ -1159,6 +1160,7 @@ void machine_eject_card(machine_t *m) {
     m->pcmcia_state |= PCMCIA_STATE_INTR;
     update_pcmcia_interrupt(m);
     if (m->autopc) autopc_card_changed(&m->board, &m->board_host);
+    if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
 }
 
 bool machine_card_inserted(machine_t *m) { return m->card.inserted; }

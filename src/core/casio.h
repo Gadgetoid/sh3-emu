@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/cfcard.h"
+
 #define CASIO_SCREEN_WIDTH  480
 #define CASIO_SCREEN_HEIGHT 240
 #define CASIO_ASIC_WORDS    0x800
@@ -21,6 +23,7 @@ typedef struct {
     casio_interrupt_fn onchip;
     uint32_t           cpu_hz;
     uint32_t           timer_hz;
+    cfcard_slot_t     *card;
     void              *context;
 } casio_host_t;
 
@@ -55,5 +58,6 @@ bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size
 void casio_update(casio_t *board, const casio_host_t *host);
 uint64_t casio_next_event(const casio_t *board, const casio_host_t *host);
 void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool up);
+void casio_card_changed(casio_t *board, const casio_host_t *host);
 void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int y);
 void casio_screen(const casio_t *board, uint8_t *levels);

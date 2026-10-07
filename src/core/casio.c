@@ -11,6 +11,8 @@
 #define LOCK_LOW_KEY    0x5467u
 #define LOCK_HIGH_KEY   0x6946u
 #define LOCK_OPEN       0x0006u
+#define POWER_STATUS    0x260u
+#define POWER_AC        0x0002u
 #define INT_STATUS      0x028u
 #define INT_CLEAR       0x02Au
 #define INT_MASK        0x02Cu
@@ -36,6 +38,18 @@
 #define PINS_FIRST      0x040u
 #define PINS_LAST       0x066u
 #define PIN_INPUT       0x0030u
+#define CARD_SOCKET     0
+#define CARD_INTERRUPT  0x0080u
+#define CARD_VECTOR     3u
+#define CARD_CHANGE_INTERRUPT 0x0100u
+#define CARD_CHANGE_VECTOR 14u
+#define CARD_AREA5_PA   0x14000000u
+#define CARD_AREA6_PA   0x18000000u
+#define CARD_AREA_SIZE  0x04000000u
+#define CARD_WINDOW_SIZE 0x01000000u
+#define CARD_ATTRIBUTE  0
+#define CARD_COMMON     1
+#define CARD_IO         2
 #define SLOT0_STATUS    0x326u
 #define SLOT0_EMPTY     0x0006u
 #define SLOT1_STATUS    0x282u
@@ -88,7 +102,7 @@ static bool unlocked(const casio_t *board) {
 
 static bool asic_modelled(uint32_t offset) {
     switch (offset) {
-        case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
+        case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case POWER_STATUS: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
         case TOUCH_PEN_UP: case 0x098u: case 0x09Au: case 0x09Cu:
         case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: return true;
         default: return false;
@@ -105,14 +119,26 @@ static uint16_t key_columns(const casio_t *board) {
     return down;
 }
 
-static uint16_t asic_requests(const casio_t *board) {
-    return (uint16_t)((key_columns(board) ? KEY_INTERRUPT : 0) | board->latched_requests);
+static bool card_present(const casio_host_t *host, int socket) {
+    return socket == CARD_SOCKET && host->card && host->card->state->inserted;
 }
 
-static uint16_t asic_vector(const casio_t *board) {
-    uint16_t active = asic_requests(board) & board->asic[INT_MASK / 2];
+static bool card_line(const casio_host_t *host) {
+    if (!card_present(host, CARD_SOCKET)) return false;
+    const cfcard_t *card = host->card->state;
+    return cfcard_io_mode(card) ? cfcard_interrupt(card) : false;
+}
+
+static uint16_t asic_requests(const casio_t *board, const casio_host_t *host) {
+    return (uint16_t)((key_columns(board) ? KEY_INTERRUPT : 0) | (card_line(host) ? CARD_INTERRUPT : 0) | board->latched_requests);
+}
+
+static uint16_t asic_vector(const casio_t *board, const casio_host_t *host) {
+    uint16_t active = asic_requests(board, host) & board->asic[INT_MASK / 2];
     if (active & KEY_INTERRUPT) return KEY_VECTOR;
+    if (active & CARD_INTERRUPT) return CARD_VECTOR;
     if (active & TOUCH_INTERRUPT) return TOUCH_VECTOR;
+    if (active & CARD_CHANGE_INTERRUPT) return CARD_CHANGE_VECTOR;
     return 0;
 }
 
@@ -124,21 +150,22 @@ static uint16_t touch_result(const casio_t *board) {
     }
 }
 
-static uint16_t asic_read(casio_t *board, uint32_t offset) {
+static uint16_t asic_read(casio_t *board, const casio_host_t *host, uint32_t offset) {
     uint16_t stored = board->asic[offset / 2];
     if (offset - PINS_FIRST <= PINS_LAST - PINS_FIRST) return stored & (uint16_t)~PIN_INPUT;
     if (offset - TOUCH_RESULT_FIRST <= TOUCH_RESULT_LAST - TOUCH_RESULT_FIRST) return touch_result(board);
     switch (offset) {
-        case INT_STATUS: return asic_requests(board);
+        case POWER_STATUS: return stored | POWER_AC;
+        case INT_STATUS: return asic_requests(board, host);
         case INT_CLEAR: return 0;
         case TOUCH_PEN_UP: return board->pen_down ? 0 : 1;
-        case INT_VECTOR: return asic_vector(board);
+        case INT_VECTOR: return asic_vector(board, host);
         case KEY_COLUMNS: return (uint16_t)~key_columns(board);
         case LOCK_STATUS: return unlocked(board) ? LOCK_OPEN : 0;
         case LOCK_LOW: return board->lock_low;
         case LOCK_HIGH: return board->lock_high;
-        case SLOT0_STATUS: return stored | SLOT0_EMPTY;
-        case SLOT1_STATUS: return stored | SLOT1_EMPTY;
+        case SLOT0_STATUS: return card_present(host, 0) ? (uint16_t)(stored & ~SLOT0_EMPTY) : (uint16_t)(stored | SLOT0_EMPTY);
+        case SLOT1_STATUS: return card_present(host, 1) ? (uint16_t)(stored & ~SLOT1_EMPTY) : (uint16_t)(stored | SLOT1_EMPTY);
         default: return stored;
     }
 }
@@ -252,25 +279,64 @@ static bool vram_access(casio_t *board, const casio_host_t *host, uint32_t pa, i
     return true;
 }
 
+static bool card_access(casio_t *board, const casio_host_t *host, uint32_t pa, int size, bool write, uint32_t *value) {
+    int socket;
+    uint32_t offset;
+    if (pa - CARD_AREA5_PA < CARD_AREA_SIZE) {
+        socket = 1;
+        offset = pa - CARD_AREA5_PA;
+    } else if (pa - CARD_AREA6_PA < CARD_AREA_SIZE) {
+        socket = 0;
+        offset = pa - CARD_AREA6_PA;
+    } else {
+        return false;
+    }
+    uint32_t window = offset / CARD_WINDOW_SIZE, within = offset % CARD_WINDOW_SIZE;
+    if (!card_present(host, socket) || window > CARD_IO) {
+        if (!write) *value = size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu;
+        if (host->trace) host->trace(host->context, write, pa, size, *value);
+        return true;
+    }
+    cfcard_slot_t *slot = host->card;
+    switch (window) {
+        case CARD_ATTRIBUTE:
+            if (write) cfcard_attribute_write(slot, within, size, *value);
+            else *value = cfcard_attribute_read(slot, within, size);
+            break;
+        case CARD_COMMON:
+            if (write) cfcard_common_write(slot, within, size, *value);
+            else *value = cfcard_common_read(slot, within, size);
+            break;
+        default:
+            if (write) cfcard_io_write(slot, within, size, *value);
+            else *value = cfcard_io_read(slot, within, size);
+            break;
+    }
+    casio_update(board, host);
+    return true;
+}
+
 bool casio_read(casio_t *board, const casio_host_t *host, uint32_t pa, int size, uint32_t *value) {
+    if (card_access(board, host, pa, size, false, value)) return true;
     if (onchip_access(board, host, pa, size, false, value)) return true;
     if (vram_access(board, host, pa, size, false, value)) return true;
     if (pa - ASIC_PA >= ASIC_SIZE) return false;
     uint32_t offset = (pa - ASIC_PA) & ~1u;
-    *value = asic_read(board, offset);
-    if (size == 4) *value |= (uint32_t)asic_read(board, offset + 2) << 16;
+    *value = asic_read(board, host, offset);
+    if (size == 4) *value |= (uint32_t)asic_read(board, host, offset + 2) << 16;
     else if (size == 1) *value = (pa & 1) ? *value >> 8 : *value & 0xFFu;
     if (!asic_modelled(offset) && host->trace) host->trace(host->context, false, pa, size, *value);
     return true;
 }
 
 bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size, uint32_t value) {
+    if (card_access(board, host, pa, size, true, &value)) return true;
     if (onchip_access(board, host, pa, size, true, &value)) return true;
     if (vram_access(board, host, pa, size, true, &value)) return true;
     if (pa - ASIC_PA >= ASIC_SIZE) return false;
     uint32_t offset = (pa - ASIC_PA) & ~1u;
     if (size == 1) {
-        uint16_t old = asic_read(board, offset);
+        uint16_t old = asic_read(board, host, offset);
         value = (pa & 1) ? (old & 0x00FFu) | (value & 0xFFu) << 8 : (old & 0xFF00u) | (value & 0xFFu);
     }
     asic_write(board, offset, (uint16_t)value);
@@ -294,7 +360,7 @@ void casio_update(casio_t *board, const casio_host_t *host) {
         }
     }
     host->onchip(host->context, level, code);
-    host->irl(host->context, asic_vector(board) ? ASIC_IRL_LEVEL : 0, 0);
+    host->irl(host->context, asic_vector(board, host) ? ASIC_IRL_LEVEL : 0, 0);
 }
 
 uint64_t casio_next_event(const casio_t *board, const casio_host_t *host) {
@@ -342,5 +408,10 @@ void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int
     board->pen_y = (uint16_t)(y < 0 ? 0 : y >= CASIO_SCREEN_HEIGHT ? CASIO_SCREEN_HEIGHT - 1 : y);
     if (down && !board->pen_down) board->latched_requests |= TOUCH_INTERRUPT;
     board->pen_down = down;
+    casio_update(board, host);
+}
+
+void casio_card_changed(casio_t *board, const casio_host_t *host) {
+    board->latched_requests |= CARD_CHANGE_INTERRUPT;
     casio_update(board, host);
 }
