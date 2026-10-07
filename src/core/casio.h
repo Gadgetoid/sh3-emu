@@ -8,22 +8,27 @@
 #define CASIO_ASIC_WORDS    0x800
 #define CASIO_TIMERS        2
 #define CASIO_VRAM_SIZE     0x20000
+#define CASIO_KEY_ROWS      9
 
 typedef void (*casio_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef uint64_t (*casio_cycles_fn)(void *context);
+typedef void (*casio_interrupt_fn)(void *context, uint32_t level, uint32_t code);
 
 typedef struct {
-    casio_trace_fn  trace;
-    casio_cycles_fn cycles;
-    uint32_t        cpu_hz;
-    void           *context;
+    casio_trace_fn     trace;
+    casio_cycles_fn    cycles;
+    casio_interrupt_fn irl;
+    casio_interrupt_fn onchip;
+    uint32_t           cpu_hz;
+    uint32_t           timer_hz;
+    void              *context;
 } casio_host_t;
 
 typedef struct {
     uint32_t count, compare;
     uint64_t started;
     uint16_t mode;
-    bool     running;
+    bool     running, interrupt_enabled;
 } casio_timer_t;
 
 typedef struct {
@@ -33,9 +38,15 @@ typedef struct {
     uint16_t lock_low, lock_high;
     uint16_t onchip[0x40];
     uint16_t onchip_extra;
+    uint16_t onchip_priority;
+    uint8_t  keys_down[CASIO_KEY_ROWS];
+    bool     boot_ctrl_held;
 } casio_t;
 
 void casio_reset(casio_t *board);
 bool casio_read(casio_t *board, const casio_host_t *host, uint32_t pa, int size, uint32_t *value);
 bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size, uint32_t value);
+void casio_update(casio_t *board, const casio_host_t *host);
+uint64_t casio_next_event(const casio_t *board, const casio_host_t *host);
+void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool up);
 void casio_screen(const casio_t *board, uint8_t *levels);

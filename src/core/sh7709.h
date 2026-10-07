@@ -43,6 +43,7 @@ typedef struct {
     uint8_t  irr0, irr1, irr2;
     uint32_t irl_level;
     uint32_t irq_lines;
+    uint32_t extra_level, extra_code;
     bool     nmi;
 
     uint8_t  timer_start;
@@ -81,6 +82,7 @@ uint64_t sh7709_next_event(sh7709_t *chip);
 void sh7709_update_interrupts(sh7709_t *chip);
 void sh7709_set_irl(sh7709_t *chip, uint32_t level);
 void sh7709_set_irq(sh7709_t *chip, int line, bool asserted);
+void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code);
 void sh7709_receive(sh7709_t *chip, int port, uint8_t byte);
 void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second);
 void sh7709_add_seconds(sh7709_t *chip, uint32_t seconds);

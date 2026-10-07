@@ -271,6 +271,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     uint16_t ipra = chip->priority[0], iprb = chip->priority[1];
     if (chip->nmi) consider(&best, 16, 0x1C0, true);
     if (chip->irl_level) consider(&best, chip->irl_level, 0x200 + (15 - chip->irl_level) * 0x20, true);
+    consider(&best, chip->extra_level, chip->extra_code, chip->extra_level != 0);
     for (int i = 0; i < 3; i++) {
         uint16_t control = chip->timer[i].control;
         consider(&best, (ipra >> (12 - i * 4)) & 15, 0x400 + (uint32_t)i * 0x20, (control & TCR_UNF) && (control & TCR_UNIE));
@@ -295,6 +296,12 @@ void sh7709_update_interrupts(sh7709_t *chip) {
 
 void sh7709_set_irl(sh7709_t *chip, uint32_t level) {
     chip->irl_level = level & 15;
+    sh7709_update_interrupts(chip);
+}
+
+void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code) {
+    chip->extra_level = level & 15;
+    chip->extra_code = code;
     sh7709_update_interrupts(chip);
 }
 

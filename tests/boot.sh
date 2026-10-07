@@ -94,10 +94,14 @@ else
 fi
 CASIO_ROM=${CASIO_ROM:-rom/nk-a51-ce1.01.bin}
 CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
+CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
 if [ -f "$CASIO_ROM" ]; then
     ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
     actual=$(shasum -a 256 "$OUT/casio.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Windows CE Kernel for Hitachi SH" "$OUT/casio.log" && [ "$actual" = "$CASIO_HASH" ]; then echo "ok   casio"; else echo "FAIL casio $actual"; exit 1; fi
+    ./headless "$CASIO_ROM" --seconds=24 --key=20:5A --pgm="$OUT/casio_enter.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/casio_enter.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$CASIO_ENTER_HASH" ]; then echo "ok   casio_enter"; else echo "FAIL casio_enter $actual"; exit 1; fi
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
 fi

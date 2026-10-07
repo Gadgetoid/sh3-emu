@@ -23,6 +23,7 @@
 #define FLASH_SIZE         (16u << 20)
 #define RESET_VECTOR       0xA0000000u
 #define P4_ROUTINES_END    0xE0010000u
+#define CASIO_TIMER_HZ     (MACHINE_PERIPHERAL_HZ / 16)
 #define OP_RTS             0x000Bu
 #define OP_NOP             0x0009u
 #define ROM_HEADER_SIZE    0x54u
@@ -258,6 +259,17 @@ static void casio_trace(void *context, bool write, uint32_t pa, int size, uint32
 
 static uint64_t casio_cycles(void *context) {
     return ((machine_t *)context)->cpu.cycles;
+}
+
+static void casio_irl(void *context, uint32_t level, uint32_t code) {
+    machine_t *m = context;
+    (void)code;
+    if (m->chip.irl_level != level) sh7709_set_irl(&m->chip, level);
+}
+
+static void casio_onchip(void *context, uint32_t level, uint32_t code) {
+    machine_t *m = context;
+    if (m->chip.extra_level != level || m->chip.extra_code != code) sh7709_set_extra(&m->chip, level, code);
 }
 
 static void autopc_irl(void *context, bool asserted) {
@@ -944,7 +956,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->autopc = autopc_detect(rom, rom_size);
     m->casio = rom_size < 7 || memcmp(rom, "B000FF\n", 7);
     m->board_host = (autopc_host_t){ autopc_debug_line, autopc_trace, autopc_irl, m, &m->card_slot };
-    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, MACHINE_CLOCK_HZ, m };
+    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, m };
     m->card_slot.state = &m->card;
     if (m->casio && !load_flash(m, error, error_size)) {
         machine_destroy(m);
@@ -980,7 +992,12 @@ void machine_run(machine_t *m, uint64_t cycles) {
         pen_timer_event(m);
         pending_card_event(m);
         serial_tick_event(m);
+        if (m->casio) casio_update(&m->casio_board, &m->casio_host);
         uint64_t next = sh7709_next_event(&m->chip);
+        if (m->casio) {
+            uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
+            if (board_next < next) next = board_next;
+        }
         if (m->serial_rx_count && m->serial_tick_at < next) next = m->serial_tick_at;
         if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
         if (m->pen_timer_at && m->pen_timer_at < next) next = m->pen_timer_at;
@@ -1063,6 +1080,10 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
 void machine_key(machine_t *m, uint8_t scancode, bool up) {
     if (m->autopc) {
         autopc_key(&m->board, &m->board_host, scancode, up);
+        return;
+    }
+    if (m->casio) {
+        casio_key(&m->casio_board, &m->casio_host, scancode, up);
         return;
     }
     if (!(m->keyboard_csr & KB_CLK_EN)) return;
