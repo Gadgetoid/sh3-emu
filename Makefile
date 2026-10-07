@@ -28,11 +28,11 @@ SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
 endif
 
 ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
-SRC_NET   = src/net/net_gateway.c src/net/net_link.c
+SRC_NET   = src/net/net_gateway.c src/net/serial_link.c
 CFLAGS   += $(shell pkg-config --cflags slirp)
 NET_LIBS  = $(shell pkg-config --libs slirp)
 else
-SRC_NET   = src/net/net_gateway_none.c src/net/net_link.c
+SRC_NET   = src/net/net_gateway_none.c src/net/serial_link.c
 endif
 
 SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/autopc.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
@@ -49,7 +49,7 @@ $(PROG): $(OBJ_APP)
 $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS) $(NET_LIBS)
 
-$(GATEWAYCHECK): $(filter-out %/net_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
+$(GATEWAYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
 	$(CC) -o $@ $^ $(NET_LIBS)
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o

@@ -10,7 +10,7 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
-#include "net/net_link.h"
+#include "net/serial_link.h"
 #include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
@@ -26,7 +26,7 @@ static void request_stop(int signal_number) {
 
 static gdb_t *debugger;
 static agent_t *agent;
-static net_link_t network;
+static serial_link_t serial;
 
 #define AGENT_POLL_CYCLES (MACHINE_CLOCK_HZ / 100)
 
@@ -36,7 +36,7 @@ static void run_cycles(machine_t *machine, uint64_t cycles) {
 }
 
 static void advance(machine_t *machine, uint64_t cycles) {
-    if (!agent && !network.gateway) {
+    if (!agent && serial.mode == SERIAL_OFF) {
         run_cycles(machine, cycles);
         return;
     }
@@ -44,7 +44,7 @@ static void advance(machine_t *machine, uint64_t cycles) {
         uint64_t step = cycles < AGENT_POLL_CYCLES ? cycles : AGENT_POLL_CYCLES;
         run_cycles(machine, step);
         if (agent) agent_poll(agent, machine_mailbox(machine));
-        net_link_pump(&network, machine);
+        serial_link_pump(&serial, machine);
         cycles -= step;
     }
 }
@@ -128,14 +128,14 @@ typedef struct {
     double   power_times[8];
     int      power_count;
     double   soft_reset_at, realtime, net_at;
-    bool     net;
+    bool     net, pty;
     uint32_t watches[MACHINE_WATCH_MAX];
     int      watch_count;
     uint32_t memory, speed;
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_FOLDER, OPT_NET, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_FOLDER, OPT_NET, OPT_PTY, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -149,6 +149,7 @@ static const option_t OPTIONS[] = {
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
     [OPT_FOLDER] = { "folder", "DIR", "serve DIR to CE's parallel-port file system (PPFS), for programs that aren't in ROM", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 0 s, or 2 s after --load); CE dials it at boot", 0 },
+    [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 0 s, or 2 s after --load)", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for agent clients", 0 },
@@ -195,7 +196,9 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_CARD: run->card = value; return true;
     case OPT_FOLDER: run->folder = value; return true;
     case OPT_NET:
-        run->net = true;
+    case OPT_PTY:
+        if (option == OPT_NET) run->net = true;
+        else run->pty = true;
         run->net_at = -1;
         return !value || (option_number(value, &run->net_at) && run->net_at >= 0);
     case OPT_MEMORY:
@@ -340,10 +343,13 @@ int main(int argc, char **argv) {
     if (run.folder && !machine_set_host_folder(machine, run.folder)) { fprintf(stderr, "cannot open folder %s\n", run.folder); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
-    if (run.net) {
-        if (!net_gateway_available()) { fprintf(stderr, "headless: --net needs a build with libslirp\n"); return 2; }
-        network.gateway = net_gateway_create(log_stderr);
-        if (!network.gateway) { fprintf(stderr, "headless: cannot start the network\n"); return 1; }
+    serial_link_init(&serial, log_stderr);
+    if (run.net && run.pty) { fprintf(stderr, "headless: --net and --pty can't both be given\n"); return 2; }
+    if (run.net || run.pty) {
+        if (run.net && !net_gateway_available()) { fprintf(stderr, "headless: --net needs a build with libslirp\n"); return 2; }
+        const char *failure = serial_link_open(&serial, run.net ? SERIAL_NETWORK : SERIAL_PTY, NULL);
+        if (failure) { fprintf(stderr, "headless: %s\n", failure); return 1; }
+        if (run.pty) fprintf(stderr, "serial: COM1 on %s\n", serial.name);
         if (run.net_at < 0) run.net_at = run.load ? 2 : 0;
         machine_serial_connect(machine, false);
     }
@@ -400,7 +406,7 @@ int main(int argc, char **argv) {
             machine_power_button(machine, false);
         }
         if (due(run.soft_reset_at, done, slice)) machine_soft_reset(machine);
-        if (run.net && due(run.net_at, done, slice)) machine_serial_connect(machine, true);
+        if ((run.net || run.pty) && due(run.net_at, done, slice)) machine_serial_connect(machine, true);
         advance(machine, slice);
         pace(machine, run.realtime, wall_start, cycles_start);
         if (run.trace_pc) fprintf(stderr, "t=%.1fs pc=%08X lcd=%d\n", (double)machine_cycles(machine) / MACHINE_CLOCK_HZ, machine_pc(machine), machine_lcd_enabled(machine));
@@ -415,7 +421,7 @@ int main(int argc, char **argv) {
     if (run.png && !write_panel_png(run.png, machine, run.png_cell, run.png_backlight)) { fprintf(stderr, "cannot write %s\n", run.png); return 1; }
     gdb_destroy(debugger);
     agent_destroy(agent);
-    net_gateway_destroy(network.gateway);
+    serial_link_close(&serial);
     machine_destroy(machine);
     free(rom);
     return 0;

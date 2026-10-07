@@ -18,7 +18,7 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
-#include "net/net_link.h"
+#include "net/serial_link.h"
 #include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
@@ -44,6 +44,8 @@
 #define NOTICE_SECONDS   2
 #define WINDOW_TITLE     "SH3Emu"
 #define POWER_PRESS_SECONDS 0.2
+#define SERIAL_PORT_MAX  16
+#define PORT_SCAN_MS     2000
 
 #ifdef __APPLE__
 #define SCREENSHOT_FOLDER SDL_FOLDER_DESKTOP
@@ -179,16 +181,19 @@ static void input_clear(input_queue_t *input) {
 
 static gdb_t *debugger;
 static agent_t *agent;
-static net_link_t network;
+static serial_link_t serial;
 
-static bool set_network(machine_t *machine, bool on, uint64_t *plug_at) {
+static const char *set_serial(machine_t *machine, serial_mode_t mode, const char *device, uint64_t *plug_at) {
     machine_serial_connect(machine, false);
     *plug_at = 0;
-    if (!on) return true;
-    if (!network.gateway) network.gateway = net_gateway_create(NULL);
-    if (!network.gateway) return false;
-    *plug_at = SDL_GetTicks() + NETWORK_REPLUG_MS;
-    return true;
+    bool same = serial.mode == mode && (mode != SERIAL_DEVICE || !strcmp(serial.name, device));
+    if (!same) {
+        const char *failure = serial_link_open(&serial, mode, device);
+        if (failure) return failure;
+        if (mode == SERIAL_PTY) fprintf(stderr, "serial: COM1 on %s\n", serial.name);
+    }
+    if (mode != SERIAL_OFF) *plug_at = SDL_GetTicks() + NETWORK_REPLUG_MS;
+    return NULL;
 }
 
 static void log_gdb(const char *message) {
@@ -228,7 +233,7 @@ static int run_machine(void *context) {
                 machine_run(runner->machine, RUN_SLICE_CYCLES);
                 owed -= RUN_SLICE_CYCLES;
                 if (agent) agent_poll(agent, machine_mailbox(runner->machine));
-                net_link_pump(&network, runner->machine);
+                serial_link_pump(&serial, runner->machine);
                 if (!debugger) continue;
                 gdb_after_run(debugger);
                 if (gdb_halted(debugger)) break;
@@ -504,7 +509,8 @@ typedef struct {
     char     machine[64];
     uint32_t display;
     char     host_folder[1024];
-    uint32_t network;
+    uint32_t serial;
+    char     serial_device[SERIAL_LINK_PORT_NAME];
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -558,7 +564,9 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
         else if (!strncmp(line, "machine=", 8)) copy_setting(settings.machine, sizeof settings.machine, line + 8);
         else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
-        else if (sscanf(line, "network=%u", &value) == 1) settings.network = value;
+        else if (sscanf(line, "network=%u", &value) == 1) settings.serial = value ? SERIAL_NETWORK : SERIAL_OFF;
+        else if (sscanf(line, "serial=%u", &value) == 1 && value <= SERIAL_DEVICE) settings.serial = value;
+        else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
         else if (!strncmp(line, "host_folder=", 12)) copy_setting(settings.host_folder, sizeof settings.host_folder, line + 12);
     }
     fclose(file);
@@ -570,10 +578,23 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nhost_folder=%s\nnetwork=%u\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nhost_folder=%s\nserial=%u\nserial_device=%s\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->host_folder, settings->network);
+            settings->host_folder, settings->serial, settings->serial_device);
     fclose(file);
+}
+
+static const char *serial_choice(machine_t *machine, settings_t *settings, serial_mode_t mode, const char *device, uint64_t *plug_at) {
+    static char notice[320];
+    const char *failure = set_serial(machine, mode, device, plug_at);
+    if (failure) return failure;
+    settings->serial = mode;
+    if (device) snprintf(settings->serial_device, sizeof settings->serial_device, "%s", device);
+    settings_save(settings);
+    if (mode == SERIAL_NETWORK) return "network cable plugged in; CE dials it";
+    if (mode == SERIAL_OFF) return "serial cable unplugged";
+    snprintf(notice, sizeof notice, "COM1 on %s", serial.name);
+    return notice;
 }
 
 static bool confirm_action(SDL_Window *window, const char *title, const char *message, const char *action) {
@@ -970,7 +991,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
-    [LAUNCH_NET] = { "net", NULL, "plug COM1 into the PPP network (Devices > Network), and remember that", 0 },
+    [LAUNCH_NET] = { "net", NULL, "plug COM1 into the PPP network (Devices > Serial Port), and remember that", 0 },
     [LAUNCH_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's trapa #0xCE mailbox and one client on this Unix socket", 0 },
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
     [LAUNCH_VERBOSE] = { "verbose", NULL, "log unmodelled hardware accesses to stderr", 0 },
@@ -1006,7 +1027,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
         launch->gdb_port = (int)integer;
         return true;
     case LAUNCH_GDB_PROCESS: launch->gdb_process = value; return true;
-    case LAUNCH_NET: settings->network = 1; return true;
+    case LAUNCH_NET: settings->serial = SERIAL_NETWORK; return true;
     case LAUNCH_AGENT: launch->agent_socket = value; return true;
     }
     return false;
@@ -1122,10 +1143,14 @@ int main(int argc, char **argv) {
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
     }
-    uint64_t network_plug_at = 0, power_release_at = 0;
-    if (settings.network && !set_network(machine, true, &network_plug_at)) {
-        fprintf(stderr, "sh3emu: the network needs a build with libslirp\n");
-        settings.network = 0;
+    uint64_t serial_plug_at = 0, power_release_at = 0, port_scan_at = 0;
+    static char ports[SERIAL_PORT_MAX][SERIAL_LINK_PORT_NAME];
+    int port_count = 0;
+    serial_link_init(&serial, NULL);
+    const char *serial_failure = set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
+    if (serial_failure) {
+        fprintf(stderr, "sh3emu: %s\n", serial_failure);
+        settings.serial = SERIAL_OFF;
     }
     if (launch.agent_socket && !(agent = agent_create(launch.agent_socket, log_gdb))) {
         fprintf(stderr, "sh3emu: cannot listen on agent socket %s\n", launch.agent_socket);
@@ -1350,7 +1375,7 @@ int main(int argc, char **argv) {
             case MENU_LOAD_STATE:
                 backup_machine(machine, state);
                 notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
-                set_network(machine, settings.network != 0, &network_plug_at);
+                set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_SHOW_STATE: reveal_file(state); break;
@@ -1392,6 +1417,10 @@ int main(int argc, char **argv) {
                 break;
             }
             default:
+                if (item >= MENU_SERIAL_PORT_FIRST && item <= MENU_SERIAL_PORT_LAST && item - MENU_SERIAL_PORT_FIRST < port_count) {
+                    notice = serial_choice(machine, &settings, SERIAL_DEVICE, ports[item - MENU_SERIAL_PORT_FIRST], &serial_plug_at);
+                    notice_left = NOTICE_SECONDS * 3;
+                }
                 if (item >= MENU_MACHINE_FIRST && item <= MENU_MACHINE_LAST && item - MENU_MACHINE_FIRST < profiles.count && item - MENU_MACHINE_FIRST != current_index) {
                     switch_to = item - MENU_MACHINE_FIRST;
                 }
@@ -1408,17 +1437,14 @@ int main(int argc, char **argv) {
                 notice = folder_notice;
                 notice_left = NOTICE_SECONDS;
                 break;
-            case MENU_NETWORK:
-                if (!set_network(machine, !settings.network, &network_plug_at)) {
-                    notice = "this build has no network (libslirp)";
-                    notice_left = NOTICE_SECONDS * 2;
-                    break;
-                }
-                settings.network = !settings.network;
-                settings_save(&settings);
-                notice = settings.network ? "network cable plugged in; CE dials it" : "network cable unplugged";
-                notice_left = NOTICE_SECONDS * 2;
+            case MENU_SERIAL_OFF:
+            case MENU_SERIAL_NETWORK:
+            case MENU_SERIAL_PTY: {
+                serial_mode_t mode = item == MENU_SERIAL_NETWORK ? SERIAL_NETWORK : item == MENU_SERIAL_PTY ? SERIAL_PTY : SERIAL_OFF;
+                notice = serial_choice(machine, &settings, mode, NULL, &serial_plug_at);
+                notice_left = NOTICE_SECONDS * 3;
                 break;
+            }
             case MENU_EJECT_CARD:
                 machine_eject_card(machine);
                 notice = "card ejected";
@@ -1450,7 +1476,7 @@ int main(int argc, char **argv) {
                     snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
                     settings_save(&settings);
                     if (host_folder) machine_set_host_folder(machine, host_folder);
-                    set_network(machine, settings.network != 0, &network_plug_at);
+                    set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                     since_backup = 0;
                     runner.machine = machine;
                     runner.restart = true;
@@ -1478,7 +1504,7 @@ int main(int argc, char **argv) {
                 static char snapshot_notice[1200];
                 if (machine_state_matches(machine, picked->paths[0])) backup_machine(machine, state);
                 if (machine_load(machine, picked->paths[0], NULL)) {
-                    set_network(machine, settings.network != 0, &network_plug_at);
+                    set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                     snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked->paths[0]));
                 } else {
                     snprintf(snapshot_notice, sizeof snapshot_notice, "%s isn't a snapshot of this ROM", file_leaf_name(picked->paths[0]));
@@ -1501,14 +1527,29 @@ int main(int argc, char **argv) {
         menu_ensure();
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_enabled(MENU_STOP_HOST_FOLDER, host_folder != NULL);
-        menu_set_enabled(MENU_NETWORK, net_gateway_available());
-        menu_set_checked(MENU_NETWORK, settings.network != 0);
+        menu_set_enabled(MENU_SERIAL_NETWORK, net_gateway_available());
+        menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
+        menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
+        menu_set_checked(MENU_SERIAL_PTY, serial.mode == SERIAL_PTY);
+        if (SDL_GetTicks() >= port_scan_at) {
+            port_scan_at = SDL_GetTicks() + PORT_SCAN_MS;
+            port_count = serial_link_ports(ports, SERIAL_PORT_MAX);
+        }
+        for (int i = 0; i < SERIAL_PORT_MAX; i++) {
+            int port_item = MENU_SERIAL_PORT_FIRST + i;
+            bool shown = i < port_count || (i == 0 && port_count == 0);
+            menu_set_hidden(port_item, !shown);
+            if (!shown) continue;
+            menu_set_title(port_item, port_count ? ports[i] + 5 : "No serial ports found");
+            menu_set_enabled(port_item, port_count > 0);
+            menu_set_checked(port_item, port_count && serial.mode == SERIAL_DEVICE && !strcmp(serial.name, ports[i]));
+        }
         if (power_release_at && machine_cycles(machine) >= power_release_at) {
             power_release_at = 0;
             machine_power_button(machine, false);
         }
-        if (network_plug_at && SDL_GetTicks() >= network_plug_at) {
-            network_plug_at = 0;
+        if (serial_plug_at && SDL_GetTicks() >= serial_plug_at) {
+            serial_plug_at = 0;
             machine_serial_connect(machine, true);
         }
         reap_reveal_children();
@@ -1588,7 +1629,7 @@ int main(int argc, char **argv) {
     gdb_destroy(debugger);
     debugger = NULL;
     agent_destroy(agent);
-    net_gateway_destroy(network.gateway);
+    serial_link_close(&serial);
     agent = NULL;
     SDL_DestroyMutex(runner.lock);
     free(picked);
