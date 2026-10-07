@@ -647,15 +647,13 @@ uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 bool machine_lcd_enabled(machine_t *m) { return !machine_suspended(m); }
 bool machine_backlight(machine_t *m) {
     if (m->casio) return machine_lcd_enabled(m) && casio_backlight(&m->casio_board);
-    return machine_lcd_enabled(m);
+    return machine_lcd_enabled(m) && !(m->chip.ports[HP320LX_BACKLIGHT_PORT] & HP320LX_BACKLIGHT_OFF);
 }
-
-bool machine_has_backlight_button(machine_t *m) { return m->casio; }
 
 uint32_t machine_backlight_colour(machine_t *m) { return m->hp ? HP320LX_BACKLIGHT_COLOUR : CASIO_BACKLIGHT_COLOUR; }
 
 void machine_backlight_button(machine_t *m, bool down) {
-    if (m->casio) machine_key(m, SCANCODE_BACKLIGHT, !down);
+    machine_key(m, SCANCODE_BACKLIGHT, !down);
 }
 
 screen_size_t machine_screen_size(machine_t *m) {

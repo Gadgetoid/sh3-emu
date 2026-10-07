@@ -1681,7 +1681,6 @@ int main(int argc, char **argv) {
         }
         menu_set_checked(MENU_NETWORK_RAPI, settings.network_rapi != 0);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
-        menu_set_enabled(MENU_BACKLIGHT, machine_has_backlight_button(machine));
         menu_set_enabled(MENU_MOUNT_DICTIONARY, machine_has_dictionary_slot(machine));
         menu_set_enabled(MENU_UNMOUNT_DICTIONARY, machine_dictionary_mounted(machine));
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));

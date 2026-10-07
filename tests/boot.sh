@@ -115,6 +115,7 @@ if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --seconds=24 --wav="$OUT/hp_sound.wav" > /dev/null 2>&1
     SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 2.4 < len(a) / 22050 < 2.6 and max(map(abs, a)) > 2000 else 1)'
     if python3 -c "$SOUND" "$OUT/hp_sound.wav"; then echo "ok   hp_sound"; else echo "FAIL hp_sound"; exit 1; fi
+    if ./headless "$HP_ROM" --seconds=22 --backlight=20 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   hp_backlight"; else echo "FAIL hp_backlight"; exit 1; fi
     gdb_check hp_gdb "$HP_ROM"
     if ./headless "$HP_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
         echo "skip hp_net: headless built without libslirp"
