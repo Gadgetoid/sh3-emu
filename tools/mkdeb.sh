@@ -12,6 +12,7 @@ icons=${BUILD:-build}/icons
 
 install -D -m 755 sh3emu "$root/usr/bin/sh3emu"
 install -D -m 755 headless "$root/usr/bin/sh3emu-headless"
+install -D -m 755 sh3emu-rapi "$root/usr/bin/sh3emu-rapi"
 install -D -m 644 README.md "$root/usr/share/doc/$package/README.md"
 install -D -m 644 LICENSE "$root/usr/share/doc/$package/LICENSE"
 install -D -m 644 assets/icon.svg "$root/usr/share/icons/hicolor/scalable/apps/$package.svg"
@@ -55,7 +56,7 @@ EOF
 work=$(mktemp -d)
 mkdir -p "$work/debian"
 printf 'Source: %s\n\nPackage: %s\nArchitecture: any\n' "$package" "$package" > "$work/debian/control"
-depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/bin/sh3emu" "$root/usr/bin/sh3emu-headless" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
+depends=$(cd "$work" && dpkg-shlibdeps -O "$root/usr/bin/sh3emu" "$root/usr/bin/sh3emu-headless" "$root/usr/bin/sh3emu-rapi" 2>/dev/null | sed -n 's/^shlibs:Depends=//p')
 rm -rf "$work"
 
 size=$(du -sk "$root/usr" | cut -f1)
@@ -75,8 +76,9 @@ Description: Hitachi SH-3 Windows CE emulator
  Cassiopeia A-51 and the HP 320LX, with a simulated LCD, PC Card images,
  a serial port and a PPP network.
  .
- sh3emu is the emulator and sh3emu-headless runs it without a window for
- tests and scripts. ROMs are not included.
+ sh3emu is the emulator, sh3emu-headless runs it without a window for tests
+ and scripts, and sh3emu-rapi talks to a running device over RAPI. ROMs are
+ not included.
 EOF
 
 mkdir -p "$out"

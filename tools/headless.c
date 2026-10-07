@@ -129,13 +129,15 @@ typedef struct {
     int      power_count;
     double   soft_reset_at, realtime, net_at;
     bool     net, pty;
+    const char *rapi_socket;
+    int      rapi_port;
     uint32_t watches[MACHINE_WATCH_MAX];
     int      watch_count;
     uint32_t memory, speed;
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_NET, OPT_PTY, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_NET, OPT_PTY, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -148,6 +150,8 @@ static const option_t OPTIONS[] = {
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 0 s, or 2 s after --load); CE dials it at boot", 0 },
+    [OPT_RAPI] = { "rapi", "SOCKET", "expose the device's RAPI port on a Unix socket, for sh3emu-rapi --socket", 0 },
+    [OPT_RAPI_PORT] = { "rapi-port", "PORT", "expose the device's RAPI port on this TCP port on all interfaces, for sh3emu-rapi --connect", 0 },
     [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 0 s, or 2 s after --load)", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
@@ -193,6 +197,13 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
+    case OPT_RAPI: run->rapi_socket = value; return true;
+    case OPT_RAPI_PORT: {
+        double port;
+        if (!option_number(value, &port) || port < 1 || port > 65535) return false;
+        run->rapi_port = (int)port;
+        return true;
+    }
     case OPT_NET:
     case OPT_PTY:
         if (option == OPT_NET) run->net = true;
@@ -336,6 +347,8 @@ int main(int argc, char **argv) {
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     serial_link_init(&serial, log_stderr);
+    serial.options.rapi_socket = run.rapi_socket;
+    serial.options.rapi_port = run.rapi_port;
     if (run.net && run.pty) { fprintf(stderr, "headless: --net and --pty can't both be given\n"); return 2; }
     if (run.net || run.pty) {
         if (run.net && !net_gateway_available()) { fprintf(stderr, "headless: --net needs a build with libslirp\n"); return 2; }

@@ -8,7 +8,7 @@ An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs
 ## Install
 
 - **macOS (Apple silicon):** `SH3Emu.app`, from a release or `make app`. It isn't notarised: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine SH3Emu.app`.
-- **Debian 12 or later and Ubuntu 24.04 or later:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu` and `sh3emu-headless`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
+- **Debian 12 or later and Ubuntu 24.04 or later:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu`, `sh3emu-headless` and `sh3emu-rapi`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
 - **From source:** see Building.
 
 ## Supported ROMs
@@ -57,6 +57,19 @@ The Casio A-51 (DSR on the board ASIC) and the HP 320LX (PH2 low, IRQ2) notice t
 ```
 
 `--net=SECONDS` plugs the cable in at that time; after `--load`, the cable goes in 2 seconds after the start (and the GUI does the same on a state load or machine switch), so CE notices it was out and connects again rather than reusing a PPP session the new gateway doesn't have.
+
+The desktop then reaches the device with RAPI, CE's remote API, on its port 990. `headless --rapi=SOCKET` exposes it on a Unix socket (keep the path short), or `--rapi-port=PORT` on a TCP port on all interfaces, and `sh3emu-rapi` uses it, on both CE 1.01 and 2.0:
+
+```
+./headless rom/nk-a51-ce1.01.bin --net=22 --rapi=/tmp/a51.sock --realtime=1 --seconds=600 &
+sh3emu-rapi --socket=/tmp/a51.sock info
+sh3emu-rapi --socket=/tmp/a51.sock put notes.txt
+sh3emu-rapi --socket=/tmp/a51.sock ls
+sh3emu-rapi --socket=/tmp/a51.sock get notes.txt
+sh3emu-rapi --help
+```
+
+`sh3emu-rapi` also copies folders, reads and writes the registry, starts programs, syncs a folder, and runs H/PC Explorer `.load` install scripts (taking the `.sh3` build where there is one). Paths are relative to `\My Documents` unless they start with `/` or `\`.
 
 Devices > Serial Port can instead connect COM1 to a pseudo-terminal (its name is in the notice and on stderr) or to a host serial port, for a real desktop or another program at the other end. A host port follows CE's baud rate. `headless --pty[=SECONDS]` does the pseudo-terminal, naming it on stderr.
 
@@ -145,7 +158,7 @@ Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Po
 ## Testing
 
 - `make check` needs no ROMs: the command lines, and the gateway's `CLIENT` handshake after stray text.
-- `make test` runs the CPU tests and, with `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`), boots the Casio image and compares the Setup Wizard's framebuffer hash, before and after pressing Enter, after calibrating the touch panel, and with a card, after finishing the wizard and opening `\Storage Card`; checks the GDB stub; and with `--net`, that it brings PPP up. With `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) it boots the HP image and compares the Setup Wizard's framebuffer hash, after typing into Start > Run, after calibrating the touch panel and tapping a tab, and after it suspends and a key wakes it; checks the GDB stub; and with `--net`, that it brings PPP up.
+- `make test` runs the CPU tests and, with `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`), boots the Casio image and compares the Setup Wizard's framebuffer hash, before and after pressing Enter, after calibrating the touch panel, and with a card, after finishing the wizard and opening `\Storage Card`; checks the GDB stub; and with `--net`, that it brings PPP up and connects to the desktop, and that a file goes there and back over RAPI. With `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) it boots the HP image and compares the Setup Wizard's framebuffer hash, after typing into Start > Run, after calibrating the touch panel and tapping a tab, and after it suspends and a key wakes it; checks the GDB stub; and with `--net`, that it brings PPP up and connects to the desktop, and that a file goes there and back over RAPI.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 

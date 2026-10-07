@@ -1,6 +1,7 @@
 PROG      = sh3emu
 HEADLESS  = headless
 SH3RUN    = sh3-run
+RAPI_TOOL = sh3emu-rapi
 GATEWAYCHECK = $(BUILD)/gateway-check
 APP       = SH3Emu.app
 BUILD     = build
@@ -42,12 +43,13 @@ SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_l
 endif
 
 SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
+SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
 
-all: $(HEADLESS) $(SH3RUN)
+all: $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS) $(NET_LIBS)
@@ -59,6 +61,9 @@ $(GATEWAYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUI
 	$(CC) -o $@ $^ $(NET_LIBS)
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
+	$(CC) -o $@ $^
+
+$(RAPI_TOOL): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/sh3emu_rapi.o
 	$(CC) -o $@ $^
 
 ICON_TOOL  = $(BUILD)/icon
@@ -94,21 +99,21 @@ $(BUILD)/%.o: %.m
 run: $(PROG)
 	./$(PROG) $(ROM)
 
-app: $(PROG) icons
+app: $(PROG) $(RAPI_TOOL) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh $(APP)
 
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(APP)
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL) $(APP)
 
 .PHONY: all run clean test check app icons sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/sh3emu_rapi.d
 
 check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK)
 	sh tests/check.sh
 	$(GATEWAYCHECK)
 
-test: $(HEADLESS) $(SH3RUN)
+test: $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)
 	sh tests/sh3/run.sh
 	sh tests/boot.sh
 

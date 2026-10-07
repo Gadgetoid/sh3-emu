@@ -4,7 +4,7 @@ app=${1:-SH3Emu.app}
 version=${VERSION:-$(git describe --always --dirty 2>/dev/null || echo unknown)}
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Frameworks" "$app/Contents/Resources"
-cp sh3emu "$app/Contents/MacOS/"
+cp sh3emu sh3emu-rapi "$app/Contents/MacOS/"
 
 icons=${ICONS:-build/icons}
 iconset=$(mktemp -d)/SH3Emu.iconset

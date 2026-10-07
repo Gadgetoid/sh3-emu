@@ -19,3 +19,4 @@ docs/philips/
 sh3-run
 __pycache__/
 .vscode/
+sh3emu-rapi

@@ -11,6 +11,22 @@ gdb_check() {
     if python3 tests/gdb_client.py "$PORT"; then echo "ok   $name"; else echo "FAIL $name"; kill $STUB; cat "$OUT/$name.log"; exit 1; fi
     wait $STUB
 }
+rapi_check() {
+    name=$1; rom=$2; net_at=$3
+    socket=/tmp/sh3emu-rapi-$$.sock
+    rm -f "$socket"
+    echo "sent by sh3emu-rapi" > "$OUT/$name.txt"
+    ./headless "$rom" --seconds=300 --net="$net_at" --rapi="$socket" --realtime=4 > "$OUT/$name.log" 2>&1 &
+    EMULATOR=$!
+    for attempt in $(seq 1 120); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
+    sleep 2
+    ./sh3emu-rapi --socket="$socket" put "$OUT/$name.txt" > /dev/null 2>&1 || true
+    ./sh3emu-rapi --socket="$socket" get "$name.txt" "$OUT/$name.back" > /dev/null 2>&1 || true
+    kill $EMULATOR 2>/dev/null || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$socket"
+    if cmp -s "$OUT/$name.txt" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
+}
 CASIO_ROM=${CASIO_ROM:-rom/nk-a51-ce1.01.bin}
 CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
@@ -41,6 +57,7 @@ if [ -f "$CASIO_ROM" ]; then
     else
         ./headless "$CASIO_ROM" --seconds=50 --net=22 > "$OUT/casio_net.log" 2>&1
         if grep -q "^ppp: IPCP up" "$OUT/casio_net.log" && grep -q "^desktop: connection from the device" "$OUT/casio_net.log"; then echo "ok   casio_net"; else echo "FAIL casio_net"; exit 1; fi
+        rapi_check casio_rapi "$CASIO_ROM" 22
     fi
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
@@ -71,6 +88,7 @@ if [ -f "$HP_ROM" ]; then
     else
         ./headless "$HP_ROM" --seconds=50 --net=20 > "$OUT/hp_net.log" 2>&1
         if grep -q "^ppp: IPCP up" "$OUT/hp_net.log" && grep -q "^desktop: Handheld_PC, Windows CE 2" "$OUT/hp_net.log"; then echo "ok   hp_net"; else echo "FAIL hp_net"; exit 1; fi
+        rapi_check hp_rapi "$HP_ROM" 20
     fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
