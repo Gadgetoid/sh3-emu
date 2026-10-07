@@ -998,6 +998,10 @@ void sh3_run(sh3_cpu_t *cpu, uint64_t until_cycle) {
                 break;
             }
             cpu->sleeping = false;
+            if (cpu->standby_wakes_blocked) {
+                take_interrupt(cpu);
+                continue;
+            }
         }
         if (++cpu->speed_count >= speed) {
             cpu->speed_count = 0;

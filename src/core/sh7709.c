@@ -7,6 +7,7 @@
 #define RTC_BASE    0xFFFFFEC0u
 #define INTC_BASE   0xFFFFFEE0u
 #define ICR0_NMIL   0x8000u
+#define STBCR_STBY  0x80u
 #define BSC_BASE    0xFFFFFF60u
 #define CPG_BASE    0xFFFFFF80u
 #define CCR_ADDRESS 0xFFFFFFECu
@@ -367,6 +368,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     }
     sh3_set_interrupt(chip->cpu, best.level, best.code);
     chip->cpu->interrupt_source = best.source;
+    chip->cpu->standby_wakes_blocked = chip->variant == SH7709 && (chip->stbcr & STBCR_STBY);
 }
 
 void sh7709_set_irl(sh7709_t *chip, uint32_t level) {
@@ -601,7 +603,11 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
         *value = (offset & 2) ? (uint32_t)(sample & 3) << 6 : (uint32_t)(sample >> 2);
         return true;
     }
-    if (offset == 0x090) { *value = chip->adc_control; return true; }
+    if (offset == 0x090) {
+        advance_adc(chip, chip->cpu->cycles);
+        *value = chip->adc_control;
+        return true;
+    }
     if (offset == 0x092) { *value = chip->adc_config; return true; }
     if (offset >= 0x100 && offset < 0x140) {
         *value = port_value(chip, (offset - 0x100) / 2);

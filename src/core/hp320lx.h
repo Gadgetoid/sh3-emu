@@ -10,12 +10,15 @@
 #define HP320LX_ADC_HEALTHY   0x3A0u
 #define HP320LX_MODEL_PORT    0xA4000134u
 #define HP320LX_MODEL_LUKE    0x0010u
+#define HP320LX_SERIAL_PORT   0xA400012Eu
+#define HP320LX_SERIAL_NO_CABLE 0x0004u
 #define HP320LX_KEY_COLUMNS_LOW  0xA4000120u
 #define HP320LX_KEY_COLUMNS_HIGH 0xA4000122u
 #define HP320LX_KEY_ROWS      8
 #define HP320LX_KEY_COLUMNS   11
 #define HP320LX_KEY_EVENTS    64
 #define HP320LX_PEN_IRQ       3
+#define HP320LX_ON_IRQ        0
 
 typedef void (*hp320lx_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*hp320lx_line_fn)(void *context, const char *line);

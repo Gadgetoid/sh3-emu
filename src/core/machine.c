@@ -167,6 +167,7 @@ struct machine {
     bool      casio;
     bool      hp;
     hp320lx_t hp_board;
+    bool      hp_on_key;
     hp320lx_host_t hp_host;
     uint8_t  *flash;
     casio_t   casio_board;
@@ -764,6 +765,10 @@ static void hp_ports_written(void *context) {
     if (touch.pen_interrupt != (((m->chip.irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(&m->chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
 }
 
+static bool hp_suspended(machine_t *m) {
+    return m->cpu.sleeping && (m->chip.stbcr & STBCR_STANDBY);
+}
+
 static void casio_power_key(machine_t *m) {
     if (m->casio_board.powered_on || !m->cpu.sleeping || !(m->chip.stbcr & STBCR_STANDBY)) return;
     m->casio_board.powered_on = true;
@@ -956,6 +961,7 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
         sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_LUKE, HP320LX_MODEL_LUKE);
+        sh7709_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, HP320LX_SERIAL_NO_CABLE);
     }
     if (m->raw) {
         m->chip.transmit = casio_transmit;
@@ -1142,6 +1148,12 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
         return;
     }
     if (m->hp) {
+        if (!up && hp_suspended(m)) m->hp_on_key = true;
+        if (m->hp_on_key) {
+            sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, !up);
+            if (up) m->hp_on_key = false;
+            return;
+        }
         if (hp320lx_key(&m->hp_board, scancode, up)) hp_ports_written(m);
         return;
     }

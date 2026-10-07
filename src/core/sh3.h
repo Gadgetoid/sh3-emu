@@ -100,6 +100,7 @@ struct sh3_cpu {
     uint32_t interrupt_level;
     uint32_t interrupt_code;
     uint32_t interrupt_source, intevt2;
+    bool     standby_wakes_blocked;
     bool     sleeping;
     bool     in_slot;
     uint64_t cycles;
