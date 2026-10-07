@@ -122,10 +122,14 @@ fi
 
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
 HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
+HP_TYPE_HASH=4dc31d2529542b201f74f36dac630329503df9a4869ce0b53b3c09c6dcc1be52
 if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp.log" && [ "$actual" = "$HP_HASH" ]; then echo "ok   hp"; else echo "FAIL hp $actual"; exit 1; fi
+    ./headless "$HP_ROM" --seconds=28 --key=20:9F --key=21:2D --type=23:"Hello, World!" --pgm="$OUT/hp_type.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/hp_type.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$HP_TYPE_HASH" ]; then echo "ok   hp_type"; else echo "FAIL hp_type $actual"; exit 1; fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
 fi

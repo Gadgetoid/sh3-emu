@@ -30,6 +30,7 @@ typedef struct {
 } sh7709_serial_t;
 
 typedef void (*sh7709_transmit_fn)(void *context, int port, uint8_t byte);
+typedef void (*sh7709_ports_fn)(void *context);
 
 typedef struct {
     sh3_cpu_t *cpu;
@@ -61,6 +62,7 @@ typedef struct {
     sh7709_serial_t scif[2];
     sh7709_transmit_fn transmit;
     void    *transmit_context;
+    sh7709_ports_fn ports_written;
 
     uint16_t bsc[16];
     uint16_t refresh_count;

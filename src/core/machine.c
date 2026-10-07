@@ -753,6 +753,13 @@ static void casio_transmit(void *context, int port, uint8_t byte) {
     debug_character(m, &m->sci_line, byte);
 }
 
+static void hp_ports_written(void *context) {
+    machine_t *m = context;
+    uint16_t columns = hp320lx_key_columns(&m->hp_board, m->chip.ports);
+    sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
+    sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
+}
+
 static void casio_power_key(machine_t *m) {
     if (m->casio_board.powered_on || !m->cpu.sleeping || !(m->chip.stbcr & STBCR_STANDBY)) return;
     m->casio_board.powered_on = true;
@@ -950,6 +957,10 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
         m->chip.transmit = casio_transmit;
         m->chip.transmit_context = m;
     }
+    if (m->hp) {
+        m->chip.ports_written = hp_ports_written;
+        hp_ports_written(m);
+    }
     memset(m->asic, 0, sizeof m->asic);
     m->pcmcia_state = 0;
     cfcard_reset(&m->card_slot);
@@ -1124,6 +1135,10 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
     }
     if (m->casio) {
         casio_key(&m->casio_board, &m->casio_host, scancode, up);
+        return;
+    }
+    if (m->hp) {
+        if (hp320lx_key(&m->hp_board, scancode, up)) hp_ports_written(m);
         return;
     }
     if (!(m->keyboard_csr & KB_CLK_EN)) return;
@@ -1447,6 +1462,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     if (!image) m->card_path[0] = 0;
     m->chip.transmit = m->raw ? casio_transmit : NULL;
     m->chip.transmit_context = m->raw ? m : NULL;
+    m->chip.ports_written = m->hp ? hp_ports_written : NULL;
     sh3_flush_translations(&m->cpu);
     return true;
 }

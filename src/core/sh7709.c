@@ -23,6 +23,7 @@
 #define RCR1_AF  0x01u
 #define RCR2_PEF 0x80u
 #define RCR2_PES 0x70u
+#define RCR2_RTCEN 0x08u
 #define RCR2_RESET 0x02u
 #define RCR2_START 0x01u
 
@@ -50,6 +51,9 @@
 #define ADCSR_CH    0x07u
 #define ADC_CHANNEL_HZ 50000u
 
+#define PORT_A_DATA 0x10u
+#define PORT_B_DATA 0x11u
+
 #define RTC_TICK_HZ 64u
 #define RTC_OUTPUT_HZ 16384u
 
@@ -63,6 +67,7 @@ void sh7709_init(sh7709_t *chip, sh3_cpu_t *cpu, sh7709_variant_t variant, uint3
     chip->variant = variant;
     chip->cpu_hz = cpu_hz;
     chip->peripheral_hz = peripheral_hz;
+    chip->rtc_control2 = RCR2_RTCEN | RCR2_START;
     sh7709_reset(chip);
 }
 
@@ -76,6 +81,7 @@ void sh7709_reset(sh7709_t *chip) {
     uint32_t cpu_hz = chip->cpu_hz, peripheral_hz = chip->peripheral_hz;
     sh7709_transmit_fn transmit = chip->transmit;
     void *transmit_context = chip->transmit_context;
+    sh7709_ports_fn ports_written = chip->ports_written;
     uint16_t adc_input[4], port_input_mask[64], port_input[64];
     memcpy(adc_input, chip->adc_input, sizeof adc_input);
     memcpy(port_input_mask, chip->port_input_mask, sizeof port_input_mask);
@@ -90,9 +96,10 @@ void sh7709_reset(sh7709_t *chip) {
     chip->peripheral_hz = peripheral_hz;
     chip->transmit = transmit;
     chip->transmit_context = transmit_context;
+    chip->ports_written = ports_written;
     memcpy(chip->rtc_counter, counter, sizeof counter);
     memcpy(chip->rtc_alarm, alarm, sizeof alarm);
-    chip->rtc_control2 = control2 & (RCR2_START | RCR2_PES);
+    chip->rtc_control2 = control2 & (RCR2_START | RCR2_PES | RCR2_RTCEN);
     for (int i = 0; i < 3; i++) {
         chip->timer[i].constant = 0xFFFFFFFFu;
         chip->timer[i].count = 0xFFFFFFFFu;
@@ -238,11 +245,21 @@ static void start_adc(sh7709_t *chip) {
     chip->adc_done = chip->cpu->cycles + (uint64_t)channels * (chip->cpu_hz / ADC_CHANNEL_HZ);
 }
 
+static uint16_t port_value(const sh7709_t *chip, uint32_t index) {
+    return (uint16_t)((chip->ports[index] & ~chip->port_input_mask[index]) | (chip->port_input[index] & chip->port_input_mask[index]));
+}
+
+static uint16_t pint_pending(const sh7709_t *chip) {
+    uint16_t pins = (uint16_t)((port_value(chip, PORT_A_DATA) & 0xFFu) | (port_value(chip, PORT_B_DATA) & 0xFFu) << 8);
+    return (uint16_t)(chip->pinter & ~(pins ^ chip->icr2));
+}
+
 void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t value) {
     uint32_t offset = (pa & 0x1FFFFFFFu) - AREA1_BASE;
     if (offset < 0x100 || offset >= 0x140) return;
     chip->port_input_mask[(offset - 0x100) / 2] = mask;
     chip->port_input[(offset - 0x100) / 2] = value;
+    sh7709_update_interrupts(chip);
 }
 
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
@@ -341,6 +358,9 @@ void sh7709_update_interrupts(sh7709_t *chip) {
             uint32_t level = line < 4 ? (iprc >> (line * 4)) & 15 : (iprd >> ((line - 4) * 4)) & 15;
             consider_leveled(&best, level, 0x600 + (uint32_t)line * 0x20, (chip->irr0 >> line) & 1);
         }
+        uint16_t pint = pint_pending(chip);
+        consider_leveled(&best, (iprd >> 12) & 15, 0x700, (pint & 0x00FFu) != 0);
+        consider_leveled(&best, (iprd >> 8) & 15, 0x720, (pint & 0xFF00u) != 0);
         if (scif_pending(&chip->scif[0], &offset)) consider_leveled(&best, (ipre >> 8) & 15, 0x880 + offset, true);
         if (scif_pending(&chip->scif[1], &offset)) consider_leveled(&best, (ipre >> 4) & 15, 0x900 + offset, true);
         consider_leveled(&best, ipre & 15, 0x980, (chip->adc_control & ADCSR_ADF) && (chip->adc_control & ADCSR_ADIE));
@@ -584,8 +604,7 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     if (offset == 0x090) { *value = chip->adc_control; return true; }
     if (offset == 0x092) { *value = chip->adc_config; return true; }
     if (offset >= 0x100 && offset < 0x140) {
-        uint32_t index = (offset - 0x100) / 2;
-        *value = (chip->ports[index] & ~chip->port_input_mask[index]) | (chip->port_input[index] & chip->port_input_mask[index]);
+        *value = port_value(chip, (offset - 0x100) / 2);
         return true;
     }
     if (offset >= 0x140 && offset < 0x150) { *value = scif_read(&chip->scif[0], offset - 0x140); return true; }
@@ -616,7 +635,12 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
         return true;
     }
     if (offset == 0x092) { chip->adc_config = (uint8_t)value; return true; }
-    if (offset >= 0x100 && offset < 0x140) { chip->ports[(offset - 0x100) / 2] = (uint16_t)value; return true; }
+    if (offset >= 0x100 && offset < 0x140) {
+        chip->ports[(offset - 0x100) / 2] = (uint16_t)value;
+        if (chip->ports_written) chip->ports_written(chip->transmit_context);
+        sh7709_update_interrupts(chip);
+        return true;
+    }
     if (offset >= 0x140 && offset < 0x150) { scif_write(chip, 0, offset - 0x140, value); return true; }
     if (offset >= 0x150 && offset < 0x160) { scif_write(chip, 1, offset - 0x150, value); return true; }
     return true;

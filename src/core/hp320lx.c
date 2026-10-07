@@ -15,6 +15,32 @@
 #define LINK_NO_HOST       0x08u
 #define LINK_CONTROL       0x02000056u
 #define LINK_STROBE        0x40u
+#define KEY_HOLD_SCANS     8u
+#define ALL_ROWS           0xFFu
+
+typedef struct {
+    uint8_t control, data, bit;
+} hp320lx_row_t;
+
+typedef struct {
+    uint8_t scancode, row, column;
+} hp320lx_keymap_t;
+
+static const hp320lx_row_t key_rows[HP320LX_KEY_ROWS] = {
+    { 0x01, 0x11, 3 }, { 0x01, 0x11, 4 }, { 0x01, 0x11, 5 }, { 0x01, 0x11, 6 },
+    { 0x01, 0x11, 7 }, { 0x08, 0x18, 4 }, { 0x0B, 0x1B, 3 }, { 0x03, 0x13, 7 },
+};
+
+static const hp320lx_keymap_t key_map[] = {
+    { 0x12, 0, 0 }, { 0x2E, 0, 5 }, { 0x36, 0, 6 }, { 0x3E, 0, 7 }, { 0x46, 0, 8 }, { 0x4E, 0, 9 }, { 0x66, 0, 10 },
+    { 0x0E, 1, 0 }, { 0x76, 1, 1 }, { 0x15, 1, 2 }, { 0x1E, 1, 3 }, { 0x26, 1, 4 }, { 0x25, 1, 5 }, { 0x2C, 1, 6 }, { 0x3D, 1, 7 }, { 0x45, 1, 8 }, { 0x5B, 1, 9 }, { 0x5D, 1, 10 },
+    { 0x1C, 2, 0 }, { 0x0D, 2, 1 }, { 0x16, 2, 2 }, { 0x1D, 2, 3 }, { 0x24, 2, 4 }, { 0x2D, 2, 5 }, { 0x35, 2, 6 }, { 0x3C, 2, 7 }, { 0x4D, 2, 8 }, { 0x54, 2, 9 }, { 0x5A, 2, 10 },
+    { 0x2B, 3, 5 }, { 0x34, 3, 6 }, { 0x43, 3, 7 }, { 0x44, 3, 8 }, { 0xF4, 3, 9 }, { 0x59, 3, 10 },
+    { 0x14, 4, 1 }, { 0x1B, 4, 4 }, { 0x23, 4, 5 }, { 0x33, 4, 6 }, { 0x3B, 4, 7 }, { 0x42, 4, 8 }, { 0x52, 4, 9 }, { 0x55, 4, 10 },
+    { 0x9F, 5, 2 }, { 0x1A, 5, 4 }, { 0x2A, 5, 5 }, { 0x3A, 5, 6 }, { 0x41, 5, 7 }, { 0x4B, 5, 8 }, { 0x4C, 5, 9 },
+    { 0x11, 6, 3 }, { 0x21, 6, 4 }, { 0x32, 6, 5 }, { 0x31, 6, 6 }, { 0x49, 6, 7 }, { 0x4A, 6, 8 }, { 0xF5, 6, 9 },
+    { 0x29, 7, 1 }, { 0x22, 7, 3 }, { 0x01, 7, 4 }, { 0x09, 7, 6 }, { 0xF1, 7, 7 }, { 0xEB, 7, 8 }, { 0xF2, 7, 9 },
+};
 
 static const char signature[] = "hplib.dll";
 
@@ -28,6 +54,7 @@ bool hp320lx_detect(const uint8_t *image, size_t size) {
 
 void hp320lx_reset(hp320lx_t *board) {
     memset(board, 0, sizeof *board);
+    board->key_changed_scan = UINT32_MAX;
 }
 
 static uint32_t *register_slot(hp320lx_t *board, uint32_t address, bool create) {
@@ -81,6 +108,56 @@ bool hp320lx_write(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, in
     if (slot) *slot = value & mask;
     if (host->trace) host->trace(host->context, true, pa, size, value);
     return true;
+}
+
+static void apply_key_events(hp320lx_t *board) {
+    if (!board->key_event_count) return;
+    bool idle = board->rows_driven == ALL_ROWS && board->scans != board->key_changed_scan;
+    if (!idle && board->scans - board->key_changed_scan < KEY_HOLD_SCANS) return;
+    const hp320lx_key_event_t *event = &board->key_events[board->key_event_head];
+    uint16_t bit = (uint16_t)(1u << event->column);
+    if (event->up) board->keys_down[event->row] &= (uint16_t)~bit;
+    else board->keys_down[event->row] |= bit;
+    board->key_event_head = (board->key_event_head + 1) % HP320LX_KEY_EVENTS;
+    board->key_event_count--;
+    board->key_changed_scan = board->scans;
+}
+
+bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up) {
+    for (size_t i = 0; i < sizeof key_map / sizeof key_map[0]; i++) {
+        const hp320lx_keymap_t *key = &key_map[i];
+        if (key->scancode != scancode) continue;
+        if (board->key_event_count == HP320LX_KEY_EVENTS) return false;
+        uint32_t tail = (board->key_event_head + board->key_event_count) % HP320LX_KEY_EVENTS;
+        board->key_events[tail] = (hp320lx_key_event_t){ key->row, key->column, up };
+        board->key_event_count++;
+        apply_key_events(board);
+        return true;
+    }
+    return false;
+}
+
+static bool row_driven_low(const hp320lx_row_t *row, const uint16_t *ports) {
+    uint32_t mode = (ports[row->control] >> (row->bit * 2)) & 3;
+    return mode == 1 && !(ports[row->data] & (1u << row->bit));
+}
+
+uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports) {
+    uint8_t driven = 0;
+    for (uint32_t row = 0; row < HP320LX_KEY_ROWS; row++) {
+        if (row_driven_low(&key_rows[row], ports)) driven |= (uint8_t)(1u << row);
+    }
+    if (driven == 1 && board->rows_driven != 1) {
+        board->scans++;
+        apply_key_events(board);
+    }
+    board->rows_driven = driven;
+    if (driven == ALL_ROWS) apply_key_events(board);
+    uint16_t low = 0;
+    for (uint32_t row = 0; row < HP320LX_KEY_ROWS; row++) {
+        if (driven & (1u << row)) low |= board->keys_down[row];
+    }
+    return (uint16_t)(~low & ((1u << HP320LX_KEY_COLUMNS) - 1));
 }
 
 void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels) {

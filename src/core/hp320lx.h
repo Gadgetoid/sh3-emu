@@ -10,6 +10,11 @@
 #define HP320LX_ADC_HEALTHY   0x3A0u
 #define HP320LX_MODEL_PORT    0xA4000134u
 #define HP320LX_MODEL_LUKE    0x0010u
+#define HP320LX_KEY_COLUMNS_LOW  0xA4000120u
+#define HP320LX_KEY_COLUMNS_HIGH 0xA4000122u
+#define HP320LX_KEY_ROWS      8
+#define HP320LX_KEY_COLUMNS   11
+#define HP320LX_KEY_EVENTS    64
 
 typedef void (*hp320lx_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*hp320lx_line_fn)(void *context, const char *line);
@@ -21,15 +26,27 @@ typedef struct {
 } hp320lx_host_t;
 
 typedef struct {
+    uint8_t row, column;
+    bool    up;
+} hp320lx_key_event_t;
+
+typedef struct {
     uint32_t address[HP320LX_REGISTERS];
     uint32_t value[HP320LX_REGISTERS];
     uint32_t count;
     char     line[256];
     int      line_length;
+    uint16_t keys_down[HP320LX_KEY_ROWS];
+    hp320lx_key_event_t key_events[HP320LX_KEY_EVENTS];
+    uint32_t key_event_head, key_event_count;
+    uint32_t scans, key_changed_scan;
+    uint8_t  rows_driven;
 } hp320lx_t;
 
 bool hp320lx_detect(const uint8_t *image, size_t size);
 void hp320lx_reset(hp320lx_t *board);
 bool hp320lx_read(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t *value);
 bool hp320lx_write(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t value);
+bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up);
+uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports);
 void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels);
