@@ -39,6 +39,9 @@
 #define AUDIO_RING         65536u
 #define AUDIO_GAP_CYCLES   (MACHINE_CLOCK_HZ / 20)
 #define AUDIO_CHANNEL      1
+#define TICK_COUNTER_PA    0xFFFFFE98u
+#define SPIN_READS         16u
+#define SPIN_WINDOW        (MACHINE_CLOCK_HZ / 1000)
 #define DICTIONARY_MAX     (8u << 20)
 #define SERIAL_TICKS_PER_SECOND 1000u
 #define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / SERIAL_TICKS_PER_SECOND)
@@ -96,6 +99,9 @@ struct machine {
     uint8_t   serial_rx[SERIAL_FIFO], serial_tx[SERIAL_FIFO];
     uint32_t  serial_rx_head, serial_rx_count, serial_tx_count;
     uint64_t  serial_tick_at;
+    uint64_t  run_target;
+    uint64_t  spin_window;
+    uint32_t  spin_reads;
 
     mailbox_t mailbox;
     uint32_t  mailbox_fault_va;
@@ -219,9 +225,28 @@ static void serial_tick_event(machine_t *m) {
     onchip_serial_receive(m);
 }
 
+static uint64_t next_event(machine_t *m);
+
+static void stall_tick_spin(machine_t *m) {
+    uint64_t window = m->cpu.cycles / SPIN_WINDOW;
+    if (window != m->spin_window) {
+        m->spin_window = window;
+        m->spin_reads = 0;
+        return;
+    }
+    if (++m->spin_reads < SPIN_READS) return;
+    m->spin_reads = 0;
+    uint64_t when = (window + 1) * SPIN_WINDOW;
+    uint64_t limit = next_event(m);
+    if (limit < when) when = limit;
+    if (m->run_target < when) when = m->run_target;
+    if (when > m->cpu.cycles) m->cpu.cycles = when;
+}
+
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
+        if (pa == TICK_COUNTER_PA) stall_tick_spin(m);
         if (sh7709_read(&m->chip, pa, size, value)) return true;
         if (m->casio && casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         if (m->casio && pa < P4_ROUTINES_END) {
@@ -596,8 +621,20 @@ void machine_set_log(machine_t *m, machine_log_fn log) { m->log = log; }
 
 static void pending_card_event(machine_t *m);
 
+static uint64_t next_event(machine_t *m) {
+    uint64_t next = sh7709_next_event(&m->chip);
+    if (m->casio) {
+        uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
+        if (board_next < next) next = board_next;
+    }
+    if (m->serial_rx_count && m->serial_tick_at < next) next = m->serial_tick_at;
+    if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
+    return next;
+}
+
 void machine_run(machine_t *m, uint64_t cycles) {
     uint64_t target = m->cpu.cycles + cycles;
+    m->run_target = target;
     while (m->cpu.cycles < target) {
         sh7709_advance(&m->chip);
         pending_card_event(m);
@@ -606,13 +643,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
             casio_update(&m->casio_board, &m->casio_host);
             casio_power_key(m);
         }
-        uint64_t next = sh7709_next_event(&m->chip);
-        if (m->casio) {
-            uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
-            if (board_next < next) next = board_next;
-        }
-        if (m->serial_rx_count && m->serial_tick_at < next) next = m->serial_tick_at;
-        if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
+        uint64_t next = next_event(m);
         uint64_t until = next < target ? next : target;
         if (until <= m->cpu.cycles) until = m->cpu.cycles + 1;
         sh3_run(&m->cpu, until);
