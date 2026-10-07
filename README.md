@@ -10,7 +10,7 @@ An emulator for Windows CE machines built on the Hitachi SH-3. It runs Microsoft
 ## Install
 
 - **macOS (Apple silicon):** `SH3Emu.app`, from a release or `make app`. It isn't notarised: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine SH3Emu.app`.
-- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu` and `sh3emu-headless`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
+- **Debian 12 or later and Ubuntu 24.04 or later:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu` and `sh3emu-headless`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
 - **From source:** see Building.
 
 ## Supported ROMs
@@ -200,7 +200,7 @@ Machine > New Machine lists the ROMs in the roms folder by board: Odo SH3, Clari
 
 ## Building
 
-macOS: `brew install sdl3 libslirp`, then `make`. Debian or Ubuntu: `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev`, then `make`.
+macOS: `brew install sdl3 libslirp`, then `make`. Debian or Ubuntu: `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev`, then `make`. Without `libsdl3-dev` (Debian 12, Ubuntu 24.04), install `cmake curl libglib2.0-dev` and the X11 and Wayland development packages listed in `.github/workflows/build.yml`, then `sh tools/sdl3-static.sh` and `PKG_CONFIG_PATH=build/sdl3/lib/pkgconfig make SDL_STATIC=1`.
 
 ## Licence
 
