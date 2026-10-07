@@ -43,7 +43,10 @@ typedef struct {
     uint8_t  keys_releasing[CASIO_KEY_ROWS];
     uint32_t key_pressed_scan[CASIO_KEY_ROWS][8];
     uint32_t scans;
-    bool     boot_ctrl_held;
+    bool     powered_on;
+    bool     pen_down;
+    uint16_t pen_x, pen_y;
+    uint16_t latched_requests;
 } casio_t;
 
 void casio_reset(casio_t *board);
@@ -52,4 +55,5 @@ bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size
 void casio_update(casio_t *board, const casio_host_t *host);
 uint64_t casio_next_event(const casio_t *board, const casio_host_t *host);
 void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool up);
+void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int y);
 void casio_screen(const casio_t *board, uint8_t *levels);

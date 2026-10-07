@@ -23,6 +23,7 @@
 #define FLASH_SIZE         (16u << 20)
 #define RESET_VECTOR       0xA0000000u
 #define P4_ROUTINES_END    0xE0010000u
+#define STBCR_STANDBY      0x80u
 #define CASIO_TIMER_HZ     (MACHINE_PERIPHERAL_HZ / 16)
 #define OP_RTS             0x000Bu
 #define OP_NOP             0x0009u
@@ -737,6 +738,12 @@ static void casio_transmit(void *context, int port, uint8_t byte) {
     debug_character(m, &m->sci_line, byte);
 }
 
+static void casio_power_key(machine_t *m) {
+    if (m->casio_board.powered_on || !m->cpu.sleeping || !(m->chip.stbcr & STBCR_STANDBY)) return;
+    m->casio_board.powered_on = true;
+    m->cpu.sleeping = false;
+}
+
 static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfirst) {
     for (size_t offset = 0; offset + ROM_HEADER_SIZE <= size; offset += 4) {
         uint32_t first = read_le32(image + offset + 8), last = read_le32(image + offset + 12);
@@ -992,7 +999,10 @@ void machine_run(machine_t *m, uint64_t cycles) {
         pen_timer_event(m);
         pending_card_event(m);
         serial_tick_event(m);
-        if (m->casio) casio_update(&m->casio_board, &m->casio_host);
+        if (m->casio) {
+            casio_update(&m->casio_board, &m->casio_host);
+            casio_power_key(m);
+        }
         uint64_t next = sh7709_next_event(&m->chip);
         if (m->casio) {
             uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
@@ -1100,6 +1110,10 @@ static uint16_t touch_raw(int pixel) {
 }
 
 void machine_touch(machine_t *m, bool down, int x, int y) {
+    if (m->casio) {
+        casio_touch(&m->casio_board, &m->casio_host, down, x, y);
+        return;
+    }
     m->adc_x = touch_raw(x);
     m->adc_y = touch_raw(y);
     if (down && !m->pen_down) m->adc_str |= ADC_UCB_INTR;

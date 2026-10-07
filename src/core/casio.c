@@ -11,18 +11,25 @@
 #define LOCK_LOW_KEY    0x5467u
 #define LOCK_HIGH_KEY   0x6946u
 #define LOCK_OPEN       0x0006u
-#define POWER_STATUS    0x016u
-#define POWER_ON        0x1000u
 #define INT_STATUS      0x028u
+#define INT_CLEAR       0x02Au
 #define INT_MASK        0x02Cu
 #define INT_VECTOR      0x02Eu
 #define KEY_ROWS        0x0E4u
 #define KEY_COLUMNS     0x0E6u
 #define KEY_INTERRUPT   0x0004u
 #define KEY_VECTOR      2u
+#define TOUCH_INTERRUPT 0x0008u
+#define TOUCH_VECTOR    6u
+#define TOUCH_CHANNEL   0x08Cu
+#define TOUCH_PEN_UP    0x08Au
+#define TOUCH_RESULT_FIRST 0x098u
+#define TOUCH_RESULT_LAST  0x09Cu
+#define TOUCH_CHANNEL_X 2u
+#define TOUCH_CHANNEL_Y 3u
+#define TOUCH_RAW_MIN   64u
+#define TOUCH_RAW_SPAN  896u
 #define HIGH_ROW        8u
-#define BOOT_CTRL_ROW   8u
-#define BOOT_CTRL_COLUMN 0u
 #define ASIC_IRL_LEVEL  4u
 #define FIRST_ROW       0x0001u
 #define KEY_HOLD_SCANS  4u
@@ -73,7 +80,6 @@ static const casio_key_t key_map[] = {
 
 void casio_reset(casio_t *board) {
     memset(board, 0, sizeof *board);
-    board->boot_ctrl_held = true;
 }
 
 static bool unlocked(const casio_t *board) {
@@ -82,7 +88,8 @@ static bool unlocked(const casio_t *board) {
 
 static bool asic_modelled(uint32_t offset) {
     switch (offset) {
-        case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case POWER_STATUS: case INT_STATUS: case INT_MASK: case INT_VECTOR:
+        case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
+        case TOUCH_PEN_UP: case 0x098u: case 0x09Au: case 0x09Cu:
         case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: return true;
         default: return false;
     }
@@ -93,32 +100,43 @@ static uint16_t key_columns(const casio_t *board) {
     for (uint32_t row = 0; row < CASIO_KEY_ROWS; row++) {
         if (!(rows & (1u << row))) continue;
         uint16_t columns = board->keys_down[row];
-        if (row == BOOT_CTRL_ROW && board->boot_ctrl_held) columns |= 1u << BOOT_CTRL_COLUMN;
         down |= row == HIGH_ROW ? (uint16_t)(columns << 8) : columns;
     }
     return down;
 }
 
 static uint16_t asic_requests(const casio_t *board) {
-    return key_columns(board) ? KEY_INTERRUPT : 0;
+    return (uint16_t)((key_columns(board) ? KEY_INTERRUPT : 0) | board->latched_requests);
 }
 
 static uint16_t asic_vector(const casio_t *board) {
     uint16_t active = asic_requests(board) & board->asic[INT_MASK / 2];
-    return (active & KEY_INTERRUPT) ? KEY_VECTOR : 0;
+    if (active & KEY_INTERRUPT) return KEY_VECTOR;
+    if (active & TOUCH_INTERRUPT) return TOUCH_VECTOR;
+    return 0;
+}
+
+static uint16_t touch_result(const casio_t *board) {
+    switch (board->asic[TOUCH_CHANNEL / 2]) {
+        case TOUCH_CHANNEL_X: return (uint16_t)(TOUCH_RAW_MIN + board->pen_x * TOUCH_RAW_SPAN / CASIO_SCREEN_WIDTH);
+        case TOUCH_CHANNEL_Y: return (uint16_t)(TOUCH_RAW_MIN + board->pen_y * TOUCH_RAW_SPAN / CASIO_SCREEN_HEIGHT);
+        default: return 0;
+    }
 }
 
 static uint16_t asic_read(casio_t *board, uint32_t offset) {
     uint16_t stored = board->asic[offset / 2];
     if (offset - PINS_FIRST <= PINS_LAST - PINS_FIRST) return stored & (uint16_t)~PIN_INPUT;
+    if (offset - TOUCH_RESULT_FIRST <= TOUCH_RESULT_LAST - TOUCH_RESULT_FIRST) return touch_result(board);
     switch (offset) {
         case INT_STATUS: return asic_requests(board);
+        case INT_CLEAR: return 0;
+        case TOUCH_PEN_UP: return board->pen_down ? 0 : 1;
         case INT_VECTOR: return asic_vector(board);
         case KEY_COLUMNS: return (uint16_t)~key_columns(board);
         case LOCK_STATUS: return unlocked(board) ? LOCK_OPEN : 0;
         case LOCK_LOW: return board->lock_low;
         case LOCK_HIGH: return board->lock_high;
-        case POWER_STATUS: return stored | POWER_ON;
         case SLOT0_STATUS: return stored | SLOT0_EMPTY;
         case SLOT1_STATUS: return stored | SLOT1_EMPTY;
         default: return stored;
@@ -148,9 +166,8 @@ static void asic_write(casio_t *board, uint32_t offset, uint16_t value) {
             break;
         case LOCK_LOW: board->lock_low = value; break;
         case LOCK_HIGH: board->lock_high = value; break;
-        case INT_MASK:
-            board->boot_ctrl_held = false;
-            board->asic[offset / 2] = value;
+        case INT_CLEAR:
+            board->latched_requests &= (uint16_t)~value;
             break;
         default: board->asic[offset / 2] = value; break;
     }
@@ -259,7 +276,7 @@ bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size
     asic_write(board, offset, (uint16_t)value);
     if (size == 4) asic_write(board, offset + 2, (uint16_t)(value >> 16));
     if (!asic_modelled(offset) && host->trace) host->trace(host->context, true, pa, size, value);
-    if (offset == INT_MASK || offset == KEY_ROWS) casio_update(board, host);
+    if (offset == INT_MASK || offset == INT_CLEAR || offset == KEY_ROWS) casio_update(board, host);
     return true;
 }
 
@@ -318,4 +335,12 @@ void casio_screen(const casio_t *board, uint8_t *levels) {
             levels[y * CASIO_SCREEN_WIDTH + x] = (uint8_t)((3 - pixel) * LEVEL_STEP);
         }
     }
+}
+
+void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int y) {
+    board->pen_x = (uint16_t)(x < 0 ? 0 : x >= CASIO_SCREEN_WIDTH ? CASIO_SCREEN_WIDTH - 1 : x);
+    board->pen_y = (uint16_t)(y < 0 ? 0 : y >= CASIO_SCREEN_HEIGHT ? CASIO_SCREEN_HEIGHT - 1 : y);
+    if (down && !board->pen_down) board->latched_requests |= TOUCH_INTERRUPT;
+    board->pen_down = down;
+    casio_update(board, host);
 }

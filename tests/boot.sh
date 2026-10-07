@@ -95,6 +95,7 @@ fi
 CASIO_ROM=${CASIO_ROM:-rom/nk-a51-ce1.01.bin}
 CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
+CASIO_TOUCH_HASH=b9d9af15381627fda04f3f0d681c8e64ba945dacc573b7400a4ab5d6c3099d9f
 if [ -f "$CASIO_ROM" ]; then
     ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
     actual=$(shasum -a 256 "$OUT/casio.pgm" | cut -d' ' -f1)
@@ -102,6 +103,10 @@ if [ -f "$CASIO_ROM" ]; then
     ./headless "$CASIO_ROM" --seconds=24 --key=20:5A --pgm="$OUT/casio_enter.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_enter.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_ENTER_HASH" ]; then echo "ok   casio_enter"; else echo "FAIL casio_enter $actual"; exit 1; fi
+    ./headless "$CASIO_ROM" --seconds=47 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 --tap=31:48:192:1.5 \
+        --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --pgm="$OUT/casio_touch.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/casio_touch.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$CASIO_TOUCH_HASH" ]; then echo "ok   casio_touch"; else echo "FAIL casio_touch $actual"; exit 1; fi
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
 fi
