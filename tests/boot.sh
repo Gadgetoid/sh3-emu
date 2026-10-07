@@ -40,7 +40,7 @@ if [ -f "$CASIO_ROM" ]; then
         echo "skip casio_net: headless built without libslirp"
     else
         ./headless "$CASIO_ROM" --seconds=50 --net=22 > "$OUT/casio_net.log" 2>&1
-        if grep -q "^ppp: IPCP up" "$OUT/casio_net.log"; then echo "ok   casio_net"; else echo "FAIL casio_net"; exit 1; fi
+        if grep -q "^ppp: IPCP up" "$OUT/casio_net.log" && grep -q "^desktop: connection from the device" "$OUT/casio_net.log"; then echo "ok   casio_net"; else echo "FAIL casio_net"; exit 1; fi
     fi
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
@@ -69,8 +69,8 @@ if [ -f "$HP_ROM" ]; then
     if ./headless "$HP_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
         echo "skip hp_net: headless built without libslirp"
     else
-        ./headless "$HP_ROM" --seconds=40 --net=20 > "$OUT/hp_net.log" 2>&1
-        if grep -q "^ppp: IPCP up" "$OUT/hp_net.log"; then echo "ok   hp_net"; else echo "FAIL hp_net"; exit 1; fi
+        ./headless "$HP_ROM" --seconds=50 --net=20 > "$OUT/hp_net.log" 2>&1
+        if grep -q "^ppp: IPCP up" "$OUT/hp_net.log" && grep -q "^desktop: Handheld_PC, Windows CE 2" "$OUT/hp_net.log"; then echo "ok   hp_net"; else echo "FAIL hp_net"; exit 1; fi
     fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"

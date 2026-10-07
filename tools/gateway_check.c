@@ -19,7 +19,7 @@ int main(void) {
         printf("skip gateway: built without libslirp\n");
         return 0;
     }
-    net_gateway_t *gateway = net_gateway_create(NULL);
+    net_gateway_t *gateway = net_gateway_create(NULL, NULL);
     if (!gateway) return 1;
     char noise[4096];
     for (size_t i = 0; i < sizeof noise; i++) noise[i] = "Serial debug text, CLIEN\r\n"[i % 26];

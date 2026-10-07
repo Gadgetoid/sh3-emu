@@ -13,6 +13,7 @@
 void serial_link_init(serial_link_t *link, net_gateway_log_fn log) {
     memset(link, 0, sizeof *link);
     link->log = log;
+    link->options = (net_gateway_options_t){ NET_GATEWAY_DEFAULT_USER_AGENT, NULL, 0 };
     link->fd = -1;
     link->pty_slave = -1;
 }
@@ -73,7 +74,7 @@ const char *serial_link_open(serial_link_t *link, serial_mode_t mode, const char
     serial_link_close(link);
     const char *failure = NULL;
     if (mode == SERIAL_NETWORK) {
-        link->gateway = net_gateway_create(link->log);
+        link->gateway = net_gateway_create(link->log, &link->options);
         if (!link->gateway) failure = net_gateway_available() ? "cannot start the network" : "this build has no network (libslirp)";
     } else if (mode == SERIAL_PTY) {
         failure = open_pty(link);
@@ -123,7 +124,7 @@ static void pump_network(serial_link_t *link, machine_t *machine) {
     if (dtr && !link->dtr) net_gateway_reset(link->gateway);
     link->dtr = dtr;
     while ((count = machine_serial_take(machine, buffer, sizeof buffer)) > 0) net_gateway_from_guest(link->gateway, buffer, count);
-    net_gateway_poll(link->gateway);
+    net_gateway_poll(link->gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
     size_t space = machine_serial_space(machine);
     count = net_gateway_to_guest(link->gateway, buffer, space < sizeof buffer ? space : sizeof buffer);
     machine_serial_send(machine, buffer, count);

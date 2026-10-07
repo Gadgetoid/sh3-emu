@@ -50,7 +50,7 @@ The card has a CompactFlash CIS, a configuration option register, and ATA IDENTI
 
 COM1 is the SCIF on both machines. `--net`, or Devices > Serial Port > Network (PPP) in `sh3emu`, plugs it into a PPP server on a libslirp user-mode network, as velo-emu does: CE gets 10.0.2.15, the host is 10.0.2.2 (the host's loopback), and DNS is 10.0.2.3, which forwards to the host's resolver and answers `host` itself with 10.0.2.2. Connections are outgoing only. Without libslirp the emulator builds without the network.
 
-The Casio A-51 (DSR on the board ASIC) and the HP 320LX (PH2 low, IRQ2) notice the cable going in and start their own desktop connection: CE sends `CLIENT`, the gateway answers `CLIENTSERVER`, and PPP comes up. There's no desktop at the other end yet, so CE then reports that it can't start communications with the desktop computer. The gateway looks for `CLIENT` anywhere in what CE sends first, so stray text on the port doesn't stop it.
+The Casio A-51 (DSR on the board ASIC) and the HP 320LX (PH2 low, IRQ2) notice the cable going in and start their own desktop connection: CE sends `CLIENT`, the gateway answers `CLIENTSERVER`, and PPP comes up. CE then connects to the desktop at 10.0.2.2 port 5679, as it did with Handheld PC Explorer, and the emulator accepts the connection, sending the ping CE 2.0 requires every second. The gateway looks for `CLIENT` anywhere in what CE sends first, so stray text on the port doesn't stop it.
 
 ```
 ./headless rom/nk-hp320lx.bin --net=20 --seconds=40

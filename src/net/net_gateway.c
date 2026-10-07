@@ -1,15 +1,19 @@
 #include "net/net_gateway.h"
+#include "net/web_proxy.h"
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include <libslirp.h>
 
@@ -48,10 +52,15 @@
 #define ETH_ARP    0x0806
 #define ETH_IPV4   0x0800
 
-#define IP_UDP      17
-#define DNS_PORT    53
-#define DNS_TTL     60
-#define HANDSHAKE   "CLIENT"
+#define PROXY_PORT 8080
+#define DESKTOP_PORT 5679
+#define DESKTOP_CLIENTS 4
+#define RAPI_RELAYS     4
+#define RELAY_BUFFER    16384
+#define DCCM_PING 0x12345678u
+#define DCCM_PACKET_MAX 512
+#define DCCM_PING_MS 1000
+#define RAPI_PORT 990
 
 static const uint8_t guest_ip[4] = { 10, 0, 2, 15 };
 #if !SLIRP_CHECK_VERSION(4, 9, 0)
@@ -62,12 +71,27 @@ typedef ssize_t slirp_ssize_t;
 #endif
 
 static const uint8_t gateway_ip[4] = { 10, 0, 2, 2 };
+static const uint8_t desktop_alias_ip[4] = { 10, 0, 2, 5 };
 
+static void retarget_desktop(uint8_t *ip, size_t length, bool outbound);
 static void reset_negotiation(net_gateway_t *gateway);
 static const uint8_t dns_ip[4] = { 10, 0, 2, 3 };
-static const char host_name[] = "host";
+static const char proxy_address[] = "10.0.2.4";
 static const uint8_t guest_mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
 static const uint8_t gateway_mac[6] = { 0x52, 0x55, 0x0A, 0x00, 0x02, 0x02 };
+
+typedef struct {
+    int      fd;
+    uint8_t  buffer[DCCM_PACKET_MAX + 4];
+    size_t   length;
+    int64_t  next_ping_ms;
+} desktop_client_t;
+
+typedef struct {
+    int      client, upstream;
+    uint8_t  to_upstream[RELAY_BUFFER], to_client[RELAY_BUFFER];
+    size_t   upstream_length, client_length;
+} rapi_relay_t;
 
 typedef struct {
     bool     used;
@@ -79,8 +103,18 @@ typedef struct {
 struct net_gateway {
     net_gateway_log_fn log;
     Slirp   *slirp;
+    web_proxy_t *proxy;
+    int      desktop_listener;
+    bool     desktop_aliased;
+    desktop_client_t desktop_clients[DESKTOP_CLIENTS];
+    struct sockaddr_un desktop_address;
+    bool     desktop_connected;
+    char     rapi_socket[sizeof ((struct sockaddr_un *)0)->sun_path];
+    int      rapi_listener;
+    rapi_relay_t rapi_relays[RAPI_RELAYS];
     bool     ppp;
-    char     handshake[sizeof HANDSHAKE];
+    char     handshake[64];
+    size_t   handshake_length;
 
     uint8_t  frame[FRAME_MAX];
     size_t   frame_length;
@@ -224,6 +258,18 @@ static void maybe_open_ipcp(net_gateway_t *gateway) {
     send_arp(gateway, gateway_mac, 1, no_mac, guest_ip);
 }
 
+static void restart_ipcp(net_gateway_t *gateway) {
+    gateway->ipcp_open = gateway->ipcp_peer_acked = gateway->ipcp_we_acked = false;
+    gateway->ipcp_request_id = 0;
+}
+
+static void restart_lcp(net_gateway_t *gateway) {
+    gateway->lcp_open = gateway->lcp_peer_acked = gateway->lcp_we_acked = false;
+    gateway->lcp_request_id = 0;
+    gateway->tx_accm = gateway->negotiated_accm = 0xFFFFFFFFu;
+    restart_ipcp(gateway);
+}
+
 static void lcp_request(net_gateway_t *gateway, uint8_t id, const uint8_t *options, size_t length) {
     uint8_t reject[FRAME_MAX];
     size_t rejected = 0;
@@ -297,6 +343,13 @@ static void control_packet(net_gateway_t *gateway, uint16_t protocol, const uint
     bool lcp = protocol == PROTO_LCP;
     switch (code) {
         case CONF_REQ:
+            if (lcp && gateway->lcp_open) {
+                restart_lcp(gateway);
+                gateway_log(gateway, "ppp: LCP restarted by guest\n");
+            } else if (!lcp && gateway->ipcp_open) {
+                restart_ipcp(gateway);
+                gateway_log(gateway, "ppp: IPCP restarted by guest\n");
+            }
             if (lcp) {
                 lcp_request(gateway, id, data, data_length);
                 if (!gateway->lcp_request_id) send_lcp_request(gateway);
@@ -336,70 +389,6 @@ static void control_packet(net_gateway_t *gateway, uint16_t protocol, const uint
     }
 }
 
-static uint16_t ip_checksum(const uint8_t *data, size_t length) {
-    uint32_t sum = 0;
-    for (size_t i = 0; i + 1 < length; i += 2) sum += (uint32_t)(data[i] << 8 | data[i + 1]);
-    if (length & 1) sum += (uint32_t)data[length - 1] << 8;
-    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
-    return (uint16_t)~sum;
-}
-
-static bool answer_local_name(net_gateway_t *gateway, const uint8_t *ip, size_t length) {
-    if (length < 28 || (ip[0] >> 4) != 4 || ip[9] != IP_UDP || memcmp(ip + 16, dns_ip, 4)) return false;
-    size_t header = (size_t)(ip[0] & 15) * 4;
-    if (length < header + 8 + 12) return false;
-    const uint8_t *udp = ip + header;
-    if ((udp[2] << 8 | udp[3]) != DNS_PORT) return false;
-    const uint8_t *dns = udp + 8;
-    size_t dns_length = length - header - 8;
-    if ((dns[4] << 8 | dns[5]) != 1) return false;
-    char name[64];
-    size_t name_length = 0, cursor = 12;
-    while (cursor < dns_length && dns[cursor]) {
-        size_t label = dns[cursor++];
-        if (label > 63 || cursor + label > dns_length || name_length + label + 1 >= sizeof name) return false;
-        if (name_length) name[name_length++] = '.';
-        memcpy(name + name_length, dns + cursor, label);
-        name_length += label;
-        cursor += label;
-    }
-    name[name_length] = 0;
-    if (cursor + 5 > dns_length || strcasecmp(name, host_name)) return false;
-    size_t question_end = cursor + 5;
-    uint16_t type = (uint16_t)(dns[cursor + 1] << 8 | dns[cursor + 2]);
-    uint8_t reply[FRAME_MAX];
-    size_t answer = question_end, total = answer + (type == 1 ? 16 : 0);
-    if (20 + 8 + total > sizeof reply) return false;
-    uint8_t *reply_ip = reply, *reply_udp = reply + 20, *reply_dns = reply + 28;
-    memcpy(reply_dns, dns, question_end);
-    reply_dns[2] = (uint8_t)(0x84 | (dns[2] & 1));
-    reply_dns[3] = 0x80;
-    reply_dns[6] = 0;
-    reply_dns[7] = type == 1 ? 1 : 0;
-    memset(reply_dns + 8, 0, 4);
-    if (type == 1) {
-        uint8_t record[16] = { 0xC0, 0x0C, 0, 1, 0, 1, 0, 0, 0, DNS_TTL, 0, 4 };
-        memcpy(record + 12, gateway_ip, 4);
-        memcpy(reply_dns + answer, record, sizeof record);
-    }
-    size_t udp_length = 8 + total;
-    memset(reply_ip, 0, 20);
-    reply_ip[0] = 0x45;
-    put16(reply_ip + 2, (uint16_t)(20 + udp_length));
-    reply_ip[8] = 64;
-    reply_ip[9] = IP_UDP;
-    memcpy(reply_ip + 12, dns_ip, 4);
-    memcpy(reply_ip + 16, ip + 12, 4);
-    put16(reply_ip + 10, ip_checksum(reply_ip, 20));
-    put16(reply_udp, DNS_PORT);
-    memcpy(reply_udp + 2, udp, 2);
-    put16(reply_udp + 4, (uint16_t)udp_length);
-    put16(reply_udp + 6, 0);
-    send_ppp(gateway, PROTO_IP, reply, 20 + udp_length);
-    gateway_log(gateway, "dns: %s is 10.0.2.2\n", name);
-    return true;
-}
-
 static void ppp_frame(net_gateway_t *gateway, const uint8_t *frame, size_t length) {
     if (length < 3 || fcs16(0xFFFF, frame, length) != 0xF0B8) return;
     length -= 2;
@@ -417,12 +406,12 @@ static void ppp_frame(net_gateway_t *gateway, const uint8_t *frame, size_t lengt
         control_packet(gateway, protocol, frame, length);
     } else if (protocol == PROTO_IP) {
         if (!gateway->ipcp_open || length == 0 || length + ETH_HEADER > FRAME_MAX) return;
-        if (answer_local_name(gateway, frame, length)) return;
         uint8_t ethernet[FRAME_MAX];
         memcpy(ethernet, gateway_mac, 6);
         memcpy(ethernet + 6, guest_mac, 6);
         put16(ethernet + 12, ETH_IPV4);
         memcpy(ethernet + ETH_HEADER, frame, length);
+        if (gateway->desktop_aliased) retarget_desktop(ethernet + ETH_HEADER, length, true);
         slirp_input(gateway->slirp, ethernet, (int)(length + ETH_HEADER));
     } else if (gateway->lcp_open) {
         uint8_t reject[FRAME_MAX];
@@ -432,6 +421,31 @@ static void ppp_frame(net_gateway_t *gateway, const uint8_t *frame, size_t lengt
         memcpy(reject + 2, frame, length);
         send_control(gateway, PROTO_LCP, PROTO_REJ, gateway->next_id++, reject, length + 2);
     }
+}
+
+static void adjust_checksum(uint8_t *checksum, const uint8_t *old_address, const uint8_t *new_address) {
+    uint32_t sum = (uint16_t)~(checksum[0] << 8 | checksum[1]);
+    for (int i = 0; i < 4; i += 2) {
+        sum += (uint16_t)~(old_address[i] << 8 | old_address[i + 1]);
+        sum += (uint16_t)(new_address[i] << 8 | new_address[i + 1]);
+    }
+    while (sum >> 16) sum = (sum & 0xFFFF) + (sum >> 16);
+    sum = ~sum & 0xFFFF;
+    checksum[0] = (uint8_t)(sum >> 8);
+    checksum[1] = (uint8_t)sum;
+}
+
+static void retarget_desktop(uint8_t *ip, size_t length, bool outbound) {
+    if (length < 20 || (ip[0] >> 4) != 4 || ip[9] != 6) return;
+    size_t header = (size_t)(ip[0] & 15) * 4;
+    if (length < header + 18) return;
+    uint8_t *address = ip + (outbound ? 16 : 12);
+    const uint8_t *port = ip + header + (outbound ? 2 : 0);
+    const uint8_t *from = outbound ? gateway_ip : desktop_alias_ip, *to = outbound ? desktop_alias_ip : gateway_ip;
+    if (memcmp(address, from, 4) || ((port[0] << 8) | port[1]) != DESKTOP_PORT) return;
+    adjust_checksum(ip + 10, address, to);
+    adjust_checksum(ip + header + 16, address, to);
+    memcpy(address, to, 4);
 }
 
 static slirp_ssize_t slirp_send_packet(const void *buffer, size_t length, void *opaque) {
@@ -446,6 +460,11 @@ static slirp_ssize_t slirp_send_packet(const void *buffer, size_t length, void *
             memcpy(gateway->arp_ip, arp + 14, 4);
             gateway->arp_pending = true;
         }
+    } else if (type == ETH_IPV4 && gateway->ipcp_open && gateway->desktop_aliased && length <= FRAME_MAX) {
+        uint8_t packet[FRAME_MAX];
+        memcpy(packet, ethernet + ETH_HEADER, length - ETH_HEADER);
+        retarget_desktop(packet, length - ETH_HEADER, false);
+        send_ppp(gateway, PROTO_IP, packet, length - ETH_HEADER);
     } else if (type == ETH_IPV4 && gateway->ipcp_open) {
         send_ppp(gateway, PROTO_IP, ethernet + ETH_HEADER, length - ETH_HEADER);
     }
@@ -505,9 +524,266 @@ static const SlirpCb callbacks = {
 #endif
 };
 
+static void start_proxy(net_gateway_t *gateway, const char *user_agent) {
+#if SLIRP_CHECK_VERSION(4, 7, 0)
+    gateway->proxy = web_proxy_start(gateway->log, user_agent);
+    if (!gateway->proxy) return;
+    struct in_addr address;
+    inet_pton(AF_INET, proxy_address, &address);
+    if (slirp_add_unix(gateway->slirp, web_proxy_socket_path(gateway->proxy), &address, PROXY_PORT) < 0) {
+        gateway_log(gateway, "proxy: could not forward port %d\n", PROXY_PORT);
+        web_proxy_stop(gateway->proxy);
+        gateway->proxy = NULL;
+        return;
+    }
+    gateway_log(gateway, "proxy: web proxy at %s:%d\n", proxy_address, PROXY_PORT);
+#else
+    (void)gateway;
+    (void)user_agent;
+#endif
+}
+
 bool net_gateway_available(void) { return true; }
 
-net_gateway_t *net_gateway_create(net_gateway_log_fn log) {
+bool net_gateway_socket_path(char *path, size_t size, const char *name) {
+    const char *directory = getenv("TMPDIR");
+    if (!directory || !*directory) directory = "/tmp";
+    const char *separator = directory[strlen(directory) - 1] == '/' ? "" : "/";
+    int length = snprintf(path, size, "%s%s%s-%d.sock", directory, separator, name, (int)getpid());
+    if (length >= 0 && (size_t)length < size) return true;
+    length = snprintf(path, size, "/tmp/%s-%d.sock", name, (int)getpid());
+    return length >= 0 && (size_t)length < size;
+}
+
+static void start_desktop(net_gateway_t *gateway) {
+    gateway->desktop_listener = -1;
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) gateway->desktop_clients[i].fd = -1;
+#if SLIRP_CHECK_VERSION(4, 7, 0)
+    struct sockaddr_un *address = &gateway->desktop_address;
+    address->sun_family = AF_UNIX;
+    if (!net_gateway_socket_path(address->sun_path, sizeof address->sun_path, "sh3emu-desktop")) {
+        gateway_log(gateway, "desktop: no usable socket path\n");
+        return;
+    }
+    unlink(address->sun_path);
+    int listener = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (listener < 0 || bind(listener, (struct sockaddr *)address, sizeof *address) != 0 || listen(listener, DESKTOP_CLIENTS) != 0) {
+        gateway_log(gateway, "desktop: could not listen on %s: %s\n", address->sun_path, strerror(errno));
+        if (listener >= 0) close(listener);
+        return;
+    }
+    fcntl(listener, F_SETFL, fcntl(listener, F_GETFL) | O_NONBLOCK);
+    struct in_addr host;
+    memcpy(&host, gateway_ip, sizeof host);
+    if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
+        memcpy(&host, desktop_alias_ip, sizeof host);
+        if (slirp_add_unix(gateway->slirp, address->sun_path, &host, DESKTOP_PORT) < 0) {
+            gateway_log(gateway, "desktop: could not forward port %d\n", DESKTOP_PORT);
+            close(listener);
+            unlink(address->sun_path);
+            return;
+        }
+        gateway->desktop_aliased = true;
+    }
+    gateway->desktop_listener = listener;
+#endif
+}
+
+static void stop_desktop(net_gateway_t *gateway) {
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) {
+        if (gateway->desktop_clients[i].fd >= 0) close(gateway->desktop_clients[i].fd);
+    }
+    if (gateway->desktop_listener < 0) return;
+    close(gateway->desktop_listener);
+    unlink(gateway->desktop_address.sun_path);
+}
+
+static uint32_t read_u32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static void send_ping(desktop_client_t *client) {
+    uint8_t ping[4] = { 0x78, 0x56, 0x34, 0x12 };
+    ssize_t sent = send(client->fd, ping, sizeof ping, 0);
+    (void)sent;
+}
+
+static void log_device(net_gateway_t *gateway, const uint8_t *packet, uint32_t length) {
+    char name[64] = "";
+    uint32_t offset = length >= 0x1C ? read_u32(packet + 0x18) : 0;
+    for (size_t i = 0; offset + i * 2 + 1 < length && i + 1 < sizeof name; i++) {
+        uint16_t unit = (uint16_t)(packet[offset + i * 2] | packet[offset + i * 2 + 1] << 8);
+        if (!unit) break;
+        name[i] = unit < 0x80 ? (char)unit : '?';
+        name[i + 1] = 0;
+    }
+    gateway_log(gateway, "desktop: %s, Windows CE %u.x\n", name, length >= 8 ? (unsigned)(packet[4] | packet[5] << 8) : 0);
+}
+
+static void handle_packets(net_gateway_t *gateway, desktop_client_t *client, int64_t now_ms) {
+    while (client->length >= 4) {
+        uint32_t header = read_u32(client->buffer);
+        size_t used = 4;
+        if (header != 0 && header != DCCM_PING) {
+            if (header >= DCCM_PACKET_MAX) {
+                gateway_log(gateway, "desktop: the device asked for a password, which isn't supported\n");
+            } else {
+                if (client->length < 4 + header) return;
+                log_device(gateway, client->buffer + 4, header);
+                send_ping(client);
+                client->next_ping_ms = now_ms + DCCM_PING_MS;
+                used += header;
+            }
+        }
+        memmove(client->buffer, client->buffer + used, client->length - used);
+        client->length -= used;
+    }
+}
+
+static void poll_desktop(net_gateway_t *gateway, int64_t now_ms) {
+    if (gateway->desktop_listener < 0) return;
+    int fd;
+    while ((fd = accept(gateway->desktop_listener, NULL, NULL)) >= 0) {
+        fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+        int slot = 0;
+        while (slot < DESKTOP_CLIENTS && gateway->desktop_clients[slot].fd >= 0) slot++;
+        if (slot == DESKTOP_CLIENTS) {
+            close(fd);
+            continue;
+        }
+        gateway->desktop_clients[slot] = (desktop_client_t){ .fd = fd };
+        gateway->desktop_connected = true;
+        gateway_log(gateway, "desktop: connection from the device\n");
+    }
+    for (int i = 0; i < DESKTOP_CLIENTS; i++) {
+        desktop_client_t *client = &gateway->desktop_clients[i];
+        if (client->fd < 0) continue;
+        ssize_t got;
+        while ((got = read(client->fd, client->buffer + client->length, sizeof client->buffer - client->length)) > 0) {
+            client->length += (size_t)got;
+            handle_packets(gateway, client, now_ms);
+            if (client->length == sizeof client->buffer) client->length = 0;
+        }
+        if (got == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            close(client->fd);
+            client->fd = -1;
+            continue;
+        }
+        if (client->next_ping_ms && now_ms >= client->next_ping_ms) {
+            send_ping(client);
+            client->next_ping_ms = now_ms + DCCM_PING_MS;
+        }
+    }
+}
+
+static void start_rapi(net_gateway_t *gateway, const char *path) {
+#if SLIRP_CHECK_VERSION(4, 7, 0)
+    if (!path || !*path) return;
+    struct sockaddr_un host = { .sun_family = AF_UNIX };
+    if (strlen(path) >= sizeof host.sun_path) {
+        gateway_log(gateway, "rapi: socket path too long: %s\n", path);
+        return;
+    }
+    snprintf(host.sun_path, sizeof host.sun_path, "%s", path);
+    struct sockaddr_in guest = { .sin_family = AF_INET, .sin_port = htons(RAPI_PORT) };
+    memcpy(&guest.sin_addr, guest_ip, sizeof guest.sin_addr);
+    unlink(path);
+    if (slirp_add_hostxfwd(gateway->slirp, (struct sockaddr *)&host, sizeof host, (struct sockaddr *)&guest, sizeof guest, 0) < 0) {
+        gateway_log(gateway, "rapi: could not listen on %s\n", path);
+        return;
+    }
+    snprintf(gateway->rapi_socket, sizeof gateway->rapi_socket, "%s", path);
+    gateway_log(gateway, "rapi: %s\n", path);
+#else
+    (void)gateway;
+    (void)path;
+#endif
+}
+
+static void start_rapi_port(net_gateway_t *gateway, int port) {
+    gateway->rapi_listener = -1;
+    for (int i = 0; i < RAPI_RELAYS; i++) gateway->rapi_relays[i].client = gateway->rapi_relays[i].upstream = -1;
+    if (port <= 0) return;
+    if (!gateway->rapi_socket[0]) {
+        char path[sizeof gateway->rapi_socket];
+        if (net_gateway_socket_path(path, sizeof path, "sh3emu-rapi-relay")) start_rapi(gateway, path);
+    }
+    if (!gateway->rapi_socket[0]) return;
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    int on = 1;
+    if (listener >= 0) setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &on, sizeof on);
+    struct sockaddr_in address = { .sin_family = AF_INET, .sin_port = htons((uint16_t)port), .sin_addr.s_addr = htonl(INADDR_ANY) };
+    if (listener < 0 || bind(listener, (struct sockaddr *)&address, sizeof address) != 0 || listen(listener, RAPI_RELAYS) != 0) {
+        if (listener >= 0) close(listener);
+        gateway_log(gateway, "rapi: could not listen on port %d: %s\n", port, strerror(errno));
+        return;
+    }
+    fcntl(listener, F_SETFL, fcntl(listener, F_GETFL) | O_NONBLOCK);
+    gateway->rapi_listener = listener;
+    gateway_log(gateway, "rapi: listening on all interfaces, port %d\n", port);
+}
+
+static void close_relay(rapi_relay_t *relay) {
+    if (relay->client >= 0) close(relay->client);
+    if (relay->upstream >= 0) close(relay->upstream);
+    relay->client = relay->upstream = -1;
+    relay->upstream_length = relay->client_length = 0;
+}
+
+static bool relay_pump(int from, int to, uint8_t *buffer, size_t *length) {
+    if (*length < RELAY_BUFFER) {
+        ssize_t got = recv(from, buffer + *length, RELAY_BUFFER - *length, MSG_DONTWAIT);
+        if (got == 0) return false;
+        if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return false;
+        if (got > 0) *length += (size_t)got;
+    }
+    if (*length) {
+        ssize_t sent = send(to, buffer, *length, MSG_DONTWAIT);
+        if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) return false;
+        if (sent > 0) {
+            memmove(buffer, buffer + sent, *length - (size_t)sent);
+            *length -= (size_t)sent;
+        }
+    }
+    return true;
+}
+
+static void poll_rapi_relays(net_gateway_t *gateway) {
+    if (gateway->rapi_listener < 0) return;
+    int client;
+    while ((client = accept(gateway->rapi_listener, NULL, NULL)) >= 0) {
+        rapi_relay_t *relay = NULL;
+        for (int i = 0; i < RAPI_RELAYS && !relay; i++) {
+            if (gateway->rapi_relays[i].client < 0) relay = &gateway->rapi_relays[i];
+        }
+        struct sockaddr_un address = { .sun_family = AF_UNIX };
+        snprintf(address.sun_path, sizeof address.sun_path, "%s", gateway->rapi_socket);
+        int upstream = relay ? socket(AF_UNIX, SOCK_STREAM, 0) : -1;
+        if (upstream < 0 || connect(upstream, (struct sockaddr *)&address, sizeof address) != 0) {
+            if (upstream >= 0) close(upstream);
+            close(client);
+            continue;
+        }
+        fcntl(client, F_SETFL, fcntl(client, F_GETFL) | O_NONBLOCK);
+        fcntl(upstream, F_SETFL, fcntl(upstream, F_GETFL) | O_NONBLOCK);
+        relay->client = client;
+        relay->upstream = upstream;
+    }
+    for (int i = 0; i < RAPI_RELAYS; i++) {
+        rapi_relay_t *relay = &gateway->rapi_relays[i];
+        if (relay->client < 0) continue;
+        if (!relay_pump(relay->client, relay->upstream, relay->to_upstream, &relay->upstream_length) ||
+            !relay_pump(relay->upstream, relay->client, relay->to_client, &relay->client_length)) close_relay(relay);
+    }
+}
+
+static void stop_rapi_relays(net_gateway_t *gateway) {
+    if (gateway->rapi_listener >= 0) close(gateway->rapi_listener);
+    gateway->rapi_listener = -1;
+    for (int i = 0; i < RAPI_RELAYS; i++) close_relay(&gateway->rapi_relays[i]);
+}
+
+net_gateway_t *net_gateway_create(net_gateway_log_fn log, const net_gateway_options_t *options) {
     signal(SIGPIPE, SIG_IGN);
     net_gateway_t *gateway = calloc(1, sizeof *gateway);
     gateway->log = log;
@@ -527,6 +803,10 @@ net_gateway_t *net_gateway_create(net_gateway_log_fn log) {
         free(gateway);
         return NULL;
     }
+    start_proxy(gateway, options ? options->user_agent : NULL);
+    start_desktop(gateway);
+    start_rapi(gateway, options ? options->rapi_socket : NULL);
+    start_rapi_port(gateway, options ? options->rapi_port : 0);
     net_gateway_reset(gateway);
     return gateway;
 }
@@ -534,12 +814,16 @@ net_gateway_t *net_gateway_create(net_gateway_log_fn log) {
 void net_gateway_destroy(net_gateway_t *gateway) {
     if (!gateway) return;
     slirp_cleanup(gateway->slirp);
+    web_proxy_stop(gateway->proxy);
+    stop_desktop(gateway);
+    stop_rapi_relays(gateway);
+    if (gateway->rapi_socket[0]) unlink(gateway->rapi_socket);
     free(gateway);
 }
 
 static void reset_negotiation(net_gateway_t *gateway) {
     gateway->ppp = false;
-    memset(gateway->handshake, 0, sizeof gateway->handshake);
+    gateway->handshake_length = 0;
     gateway->frame_length = 0;
     gateway->in_frame = gateway->escaped = false;
     gateway->tx_accm = 0xFFFFFFFFu;
@@ -555,21 +839,29 @@ void net_gateway_reset(net_gateway_t *gateway) {
     gateway->out_head = gateway->out_count = 0;
 }
 
+#define HANDSHAKE        "CLIENT"
+#define HANDSHAKE_LENGTH 6
+
+static void handshake_reply(net_gateway_t *gateway) {
+    static const char reply[] = "CLIENTSERVER";
+    for (size_t i = 0; i < sizeof reply - 1; i++) out_byte(gateway, (uint8_t)reply[i]);
+    gateway_log(gateway, "ppp: direct connection handshake\n");
+    gateway->handshake_length = 0;
+    gateway->ppp = true;
+}
+
 static void handshake_byte(net_gateway_t *gateway, uint8_t byte) {
     if (byte == HDLC_FLAG) {
         gateway->ppp = true;
         return;
     }
-    size_t last = sizeof gateway->handshake - 2;
-    memmove(gateway->handshake, gateway->handshake + 1, last);
-    gateway->handshake[last] = (char)byte;
-    if (!memcmp(gateway->handshake, HANDSHAKE, last + 1)) {
-        static const char reply[] = "CLIENTSERVER";
-        for (size_t i = 0; i < sizeof reply - 1; i++) out_byte(gateway, (uint8_t)reply[i]);
-        gateway_log(gateway, "ppp: direct connection handshake\n");
-        memset(gateway->handshake, 0, sizeof gateway->handshake);
-        gateway->ppp = true;
+    if (gateway->handshake_length == sizeof gateway->handshake - 1) {
+        memmove(gateway->handshake, gateway->handshake + 1, gateway->handshake_length - 1);
+        gateway->handshake_length--;
     }
+    gateway->handshake[gateway->handshake_length++] = (char)byte;
+    gateway->handshake[gateway->handshake_length] = 0;
+    if (strstr(gateway->handshake, HANDSHAKE)) handshake_reply(gateway);
 }
 
 void net_gateway_from_guest(net_gateway_t *gateway, const uint8_t *data, size_t length) {
@@ -595,6 +887,10 @@ void net_gateway_from_guest(net_gateway_t *gateway, const uint8_t *data, size_t 
         if (byte == HDLC_ESCAPE) { gateway->escaped = true; continue; }
         if (gateway->escaped) { byte ^= 0x20; gateway->escaped = false; }
         if (gateway->frame_length < FRAME_MAX) gateway->frame[gateway->frame_length++] = byte;
+        if (gateway->frame_length == HANDSHAKE_LENGTH && !memcmp(gateway->frame, HANDSHAKE, HANDSHAKE_LENGTH)) {
+            reset_negotiation(gateway);
+            handshake_reply(gateway);
+        }
     }
 }
 
@@ -632,11 +928,14 @@ static int get_revents(int index, void *opaque) {
     return events;
 }
 
-void net_gateway_poll(net_gateway_t *gateway) {
+void net_gateway_poll(net_gateway_t *gateway, uint64_t guest_ms) {
     if (gateway->arp_pending) {
         gateway->arp_pending = false;
         send_arp(gateway, gateway->arp_mac, 2, gateway->arp_mac, gateway->arp_ip);
     }
+    web_proxy_poll(gateway->proxy);
+    poll_desktop(gateway, (int64_t)guest_ms);
+    poll_rapi_relays(gateway);
     int64_t now_ms = slirp_clock_ns(gateway) / 1000000;
     for (int i = 0; i < MAX_TIMERS; i++) {
         net_gateway_timer_t *timer = &gateway->timers[i];
@@ -658,4 +957,10 @@ void net_gateway_poll(net_gateway_t *gateway) {
 
 bool net_gateway_online(const net_gateway_t *gateway) {
     return gateway->ipcp_open;
+}
+
+bool net_gateway_take_desktop_connected(net_gateway_t *gateway) {
+    bool connected = gateway->desktop_connected;
+    gateway->desktop_connected = false;
+    return connected;
 }

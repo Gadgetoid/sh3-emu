@@ -15,6 +15,7 @@ typedef struct {
     serial_mode_t  mode;
     net_gateway_t *gateway;
     net_gateway_log_fn log;
+    net_gateway_options_t options;
     bool           dtr;
     int            fd;
     int            pty_slave;
