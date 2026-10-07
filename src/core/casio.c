@@ -54,6 +54,8 @@
 #define SLOT0_EMPTY     0x0006u
 #define SLOT1_STATUS    0x282u
 #define SLOT1_EMPTY     0x0007u
+#define BACKLIGHT       0x008u
+#define BACKLIGHT_LIT   0x0080u
 #define SERIAL_EDGES    0x052u
 #define SERIAL_RISE_ENABLE 0x0002u
 #define SERIAL_FALL_ENABLE 0x0001u
@@ -100,7 +102,7 @@ typedef struct {
 
 static const casio_key_t key_map[] = {
     { 0x76, 0, 0 }, { 0x0D, 0, 1 }, { 0x16, 0, 2 }, { 0x1E, 0, 3 }, { 0x26, 0, 4 }, { 0x25, 0, 5 }, { 0x2E, 0, 6 }, { 0x58, 0, 7 },
-    { 0x36, 1, 0 }, { 0x3D, 1, 1 }, { 0x3E, 1, 2 }, { 0x46, 1, 3 }, { 0x45, 1, 4 }, { 0x4E, 1, 5 }, { 0x55, 1, 6 },
+    { 0x36, 1, 0 }, { 0x3D, 1, 1 }, { 0x3E, 1, 2 }, { 0x46, 1, 3 }, { 0x45, 1, 4 }, { 0x4E, 1, 5 }, { 0x55, 1, 6 }, { 0x5E, 1, 7 },
     { 0x15, 2, 0 }, { 0x1D, 2, 1 }, { 0x24, 2, 2 }, { 0x2D, 2, 3 }, { 0x2C, 2, 4 }, { 0x35, 2, 5 }, { 0x3C, 2, 6 }, { 0x43, 2, 7 },
     { 0x1C, 3, 0 }, { 0x1B, 3, 1 }, { 0x23, 3, 2 }, { 0x2B, 3, 3 }, { 0x34, 3, 4 }, { 0x33, 3, 5 }, { 0x44, 3, 6 }, { 0x4D, 3, 7 },
     { 0x1A, 4, 0 }, { 0x22, 4, 1 }, { 0x21, 4, 2 }, { 0x2A, 4, 3 }, { 0x32, 4, 4 }, { 0x31, 4, 5 }, { 0x3B, 4, 6 }, { 0x42, 4, 7 },
@@ -459,4 +461,8 @@ uint32_t casio_scif_priority(const casio_t *board) {
 void casio_card_changed(casio_t *board, const casio_host_t *host) {
     board->latched_requests |= CARD_CHANGE_INTERRUPT;
     casio_update(board, host);
+}
+
+bool casio_backlight(const casio_t *board) {
+    return (board->asic[BACKLIGHT / 2] & BACKLIGHT_LIT) != 0;
 }

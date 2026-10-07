@@ -44,6 +44,7 @@ typedef struct {
     uint8_t  irr0, irr1, irr2;
     uint32_t irl_level;
     uint32_t irq_lines;
+    uint32_t irq_active_high;
     uint32_t extra_level, extra_code;
     bool     nmi;
 
@@ -92,6 +93,7 @@ uint64_t sh7709_next_event(sh7709_t *chip);
 void sh7709_update_interrupts(sh7709_t *chip);
 void sh7709_set_irl(sh7709_t *chip, uint32_t level);
 void sh7709_set_irq(sh7709_t *chip, int line, bool asserted);
+void sh7709_set_irq_active_high(sh7709_t *chip, uint32_t lines);
 void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code);
 void sh7709_receive(sh7709_t *chip, int port, uint8_t byte);
 void sh7709_set_scif_alias(sh7709_t *chip, uint32_t pa, uint32_t priority);

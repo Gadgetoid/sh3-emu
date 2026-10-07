@@ -2,11 +2,11 @@
 #include "app/menu.h"
 
 #ifdef __APPLE__
-#define MENU_SCREENSHOT_PLACE "Desktop"
 #define MENU_HOST             "Mac"
+#define MENU_SCREENSHOT_PLACE "Desktop"
 #else
-#define MENU_SCREENSHOT_PLACE "Pictures"
 #define MENU_HOST             "Computer"
+#define MENU_SCREENSHOT_PLACE "Pictures"
 #endif
 
 typedef enum {
@@ -37,6 +37,8 @@ typedef struct {
 static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_MENU, 0, "Machine", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_POWER, "Power Button", 'p', MENU_KEY_PRIMARY | MENU_KEY_SHIFT },
+    { MENU_ENTRY_ITEM, MENU_BACKLIGHT, "Backlight", 'b', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SOFT_RESET, "Soft Reset", 'r', MENU_KEY_PRIMARY },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_HEADING, 0, "Machines", 0, 0 },

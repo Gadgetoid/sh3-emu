@@ -8,7 +8,9 @@
 #define INTC_BASE   0xFFFFFEE0u
 #define ICR0_NMIL   0x8000u
 #define STBCR_STBY  0x80u
-#define ICR1_LEVEL  2u
+#define ICR1_FALLING 0u
+#define ICR1_RISING  1u
+#define ICR1_LEVEL   2u
 #define PCC_NO_CARD 0x0Cu
 #define BSC_BASE    0xFFFFFF60u
 #define CPG_BASE    0xFFFFFF80u
@@ -90,6 +92,7 @@ void sh7709_reset(sh7709_t *chip) {
     void *transmit_context = chip->transmit_context;
     sh7709_ports_fn ports_written = chip->ports_written;
     uint16_t adc_input[4], port_input_mask[64], port_input[64];
+    uint32_t irq_active_high = chip->irq_active_high;
     memcpy(adc_input, chip->adc_input, sizeof adc_input);
     memcpy(port_input_mask, chip->port_input_mask, sizeof port_input_mask);
     memcpy(port_input, chip->port_input, sizeof port_input);
@@ -97,6 +100,7 @@ void sh7709_reset(sh7709_t *chip) {
     memcpy(chip->adc_input, adc_input, sizeof adc_input);
     memcpy(chip->port_input_mask, port_input_mask, sizeof port_input_mask);
     memcpy(chip->port_input, port_input, sizeof port_input);
+    chip->irq_active_high = irq_active_high;
     chip->cpu = cpu;
     chip->variant = variant;
     chip->cpu_hz = cpu_hz;
@@ -392,15 +396,22 @@ void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code) {
 void sh7709_set_irq(sh7709_t *chip, int line, bool asserted) {
     if (line < 0 || line > 5) return;
     uint32_t bit = 1u << line;
-    if (asserted) {
-        chip->irq_lines |= bit;
+    uint32_t sense = (chip->icr1 >> (line * 2)) & 3;
+    bool changed = ((chip->irq_lines & bit) != 0) != asserted;
+    bool pin_low = asserted != ((chip->irq_active_high & bit) != 0);
+    if (asserted) chip->irq_lines |= bit;
+    else chip->irq_lines &= ~bit;
+    if (sense == ICR1_LEVEL) {
+        if (pin_low) chip->irr0 |= (uint8_t)bit;
+        else chip->irr0 &= (uint8_t)~bit;
+    } else if (changed && pin_low == (sense == ICR1_FALLING)) {
         chip->irr0 |= (uint8_t)bit;
-    } else {
-        chip->irq_lines &= ~bit;
-        uint32_t sense = (chip->icr1 >> (line * 2)) & 3;
-        if (sense == 2) chip->irr0 &= (uint8_t)~bit;
     }
     sh7709_update_interrupts(chip);
+}
+
+void sh7709_set_irq_active_high(sh7709_t *chip, uint32_t lines) {
+    chip->irq_active_high = lines;
 }
 
 static void serial_push(sh7709_serial_t *serial, uint8_t byte) {
@@ -665,7 +676,7 @@ static uint32_t level_sensed(const sh7709_t *chip) {
 
 static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     switch (offset) {
-        case 0x004: chip->irr0 &= (uint8_t)(value | (chip->irq_lines & level_sensed(chip))); return true;
+        case 0x004: chip->irr0 &= (uint8_t)(value | ((chip->irq_lines ^ chip->irq_active_high) & level_sensed(chip))); return true;
         case 0x006: chip->irr1 &= (uint8_t)value; return true;
         case 0x008: chip->irr2 &= (uint8_t)value; return true;
         case 0x010: chip->icr1 = (uint16_t)value; return true;

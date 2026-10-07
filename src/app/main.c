@@ -37,6 +37,7 @@
 #define IDLE_FRAME_NS    (SDL_NS_PER_SECOND / 60)
 #define CABLE_REPLUG_SECONDS 2
 #define CABLE_BOOT_SECONDS   20
+#define CABLE_RESET_SECONDS  30
 #define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
@@ -47,6 +48,7 @@
 #define NOTICE_SECONDS   2
 #define WINDOW_TITLE     "SH3Emu"
 #define POWER_PRESS_SECONDS 0.2
+#define BACKLIGHT_PRESS_SECONDS 0.1
 #define SERIAL_PORT_MAX  16
 #define PORT_SCAN_MS     2000
 
@@ -1150,7 +1152,7 @@ int main(int argc, char **argv) {
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
     }
-    uint64_t serial_plug_at = 0, power_release_at = 0, port_scan_at = 0;
+    uint64_t serial_plug_at = 0, power_release_at = 0, backlight_release_at = 0, port_scan_at = 0;
     static char ports[SERIAL_PORT_MAX][SERIAL_LINK_PORT_NAME];
     int port_count = 0;
     serial_link_init(&serial, NULL);
@@ -1267,11 +1269,15 @@ int main(int argc, char **argv) {
                 machine_power_button(machine, true);
                 power_release_at = machine_cycles(machine) + (uint64_t)(POWER_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
+            case MENU_BACKLIGHT:
+                machine_backlight_button(machine, true);
+                backlight_release_at = machine_cycles(machine) + (uint64_t)(BACKLIGHT_PRESS_SECONDS * MACHINE_CLOCK_HZ);
+                break;
             case MENU_PAUSE: paused = !paused; break;
             case MENU_SOFT_RESET:
                 machine_soft_reset(machine);
                 set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
-                if (serial_plug_at) serial_plug_at = machine_cycles(machine) + CABLE_BOOT_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
+                if (serial_plug_at) serial_plug_at = machine_cycles(machine) + CABLE_RESET_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
                 break;
             case MENU_NEW_MACHINE: {
                 static dialog_rom_t rom_list[32];
@@ -1499,6 +1505,7 @@ int main(int argc, char **argv) {
                     snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
                     settings_save(&settings);
                     set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
+                    power_release_at = backlight_release_at = 0;
                     since_backup = 0;
                     runner.machine = machine;
                     runner.restart = true;
@@ -1564,6 +1571,8 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_SYNC_NOW, desktop_free && settings.shared_folder[0]);
         menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
+        menu_set_enabled(MENU_BACKLIGHT, machine_has_backlight_button(machine));
+        menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_enabled(MENU_SERIAL_NETWORK, net_gateway_available());
         menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);
@@ -1580,6 +1589,10 @@ int main(int argc, char **argv) {
             menu_set_title(port_item, port_count ? ports[i] + 5 : "No serial ports found");
             menu_set_enabled(port_item, port_count > 0);
             menu_set_checked(port_item, port_count && serial.mode == SERIAL_DEVICE && !strcmp(serial.name, ports[i]));
+        }
+        if (backlight_release_at && machine_cycles(machine) >= backlight_release_at) {
+            backlight_release_at = 0;
+            machine_backlight_button(machine, false);
         }
         if (power_release_at && machine_cycles(machine) >= power_release_at) {
             power_release_at = 0;

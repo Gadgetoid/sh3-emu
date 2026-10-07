@@ -21,6 +21,7 @@
 #define RESET_VECTOR       0xA0000000u
 #define P4_ROUTINES_END    0xE0010000u
 #define STBCR_STANDBY      0x80u
+#define SCANCODE_BACKLIGHT 0x5E
 #define CASIO_TIMER_HZ     (MACHINE_PERIPHERAL_HZ / 16)
 #define OP_RTS             0x000Bu
 #define OP_NOP             0x0009u
@@ -306,10 +307,6 @@ static void hp_ports_written(void *context) {
     if (touch.pen_interrupt != (((m->chip.irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(&m->chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
 }
 
-static bool hp_suspended(machine_t *m) {
-    return m->cpu.sleeping && (m->chip.stbcr & STBCR_STANDBY);
-}
-
 static void casio_power_key(machine_t *m) {
     if (m->casio_board.powered_on || !m->cpu.sleeping || !(m->chip.stbcr & STBCR_STANDBY)) return;
     m->casio_board.powered_on = true;
@@ -468,21 +465,28 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
     sh3_reset(&m->cpu);
+    if (keep_ram) m->cpu.expevt = SH3_EXP_MANUAL_RESET;
     mailbox_clear(&m->mailbox);
     m->mailbox_pc = 0;
     m->mailbox_page_count = 0;
     m->cpu.pc = m->entry;
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
-    sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
+    if (keep_ram) {
+        sh7709_reset(&m->chip);
+    } else {
+        sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
+        sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
+        if (m->host_clock) apply_host_time(m);
+    }
     if (m->casio) sh7709_set_scif_alias(&m->chip, CASIO_SCIF_PA, 0);
-    sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
-    if (m->host_clock) apply_host_time(m);
     casio_reset(&m->casio_board);
     hp320lx_reset(&m->hp_board);
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
         sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_LUKE, HP320LX_MODEL_LUKE);
+        sh7709_set_port_input(&m->chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
+        sh7709_set_irq_active_high(&m->chip, 1u << HP320LX_PEN_IRQ);
     }
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
@@ -578,8 +582,17 @@ bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
 uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 
-bool machine_lcd_enabled(machine_t *m) { (void)m; return true; }
-bool machine_backlight(machine_t *m) { return machine_lcd_enabled(m); }
+bool machine_lcd_enabled(machine_t *m) { return !machine_suspended(m); }
+bool machine_backlight(machine_t *m) {
+    if (m->casio) return machine_lcd_enabled(m) && casio_backlight(&m->casio_board);
+    return machine_lcd_enabled(m);
+}
+
+bool machine_has_backlight_button(machine_t *m) { return m->casio; }
+
+void machine_backlight_button(machine_t *m, bool down) {
+    if (m->casio) machine_key(m, SCANCODE_BACKLIGHT, !down);
+}
 
 screen_size_t machine_screen_size(machine_t *m) {
     if (m->casio) return (screen_size_t){ CASIO_SCREEN_WIDTH, CASIO_SCREEN_HEIGHT };
@@ -618,7 +631,7 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
         return;
     }
     if (m->hp) {
-        if (!up && hp_suspended(m)) m->hp_on_key = true;
+        if (!up && machine_suspended(m)) m->hp_on_key = true;
         if (m->hp_on_key) {
             sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, !up);
             if (up) m->hp_on_key = false;
@@ -638,7 +651,9 @@ void machine_touch(machine_t *m, bool down, int x, int y) {
         hp_ports_written(m);
     }
 }
-bool machine_suspended(machine_t *m) { (void)m; return false; }
+bool machine_suspended(machine_t *m) {
+    return m->cpu.sleeping && (m->chip.stbcr & STBCR_STANDBY);
+}
 
 static bool insert_card_now(machine_t *m, const char *path) {
     FILE *image = fopen(path, "r+b");

@@ -30,6 +30,8 @@ uint32_t   machine_pc(machine_t *machine);
 
 bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
+bool machine_has_backlight_button(machine_t *machine);
+void machine_backlight_button(machine_t *machine, bool down);
 bool machine_screen(machine_t *machine, uint8_t *levels);
 int  machine_screen_palette(machine_t *machine, uint32_t *palette);
 screen_size_t machine_screen_size(machine_t *machine);

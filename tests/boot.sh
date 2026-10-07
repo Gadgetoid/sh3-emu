@@ -27,6 +27,11 @@ rapi_check() {
     rm -f "$socket"
     if cmp -s "$OUT/$name.txt" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
 }
+reconnect_check() {
+    name=$1; rom=$2; shift 2
+    ./headless "$rom" "$@" > "$OUT/$name.log" 2>&1
+    if [ "$(grep -c "^desktop: connection from the device" "$OUT/$name.log")" = 2 ]; then echo "ok   $name"; else echo "FAIL $name"; exit 1; fi
+}
 CASIO_ROM=${CASIO_ROM:-rom/nk-a51-ce1.01.bin}
 CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
@@ -51,12 +56,15 @@ if [ -f "$CASIO_ROM" ]; then
         --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --tap=64:334:68:0.08 --tap=64.2:334:68:0.08 --pgm="$OUT/casio_card.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_card.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_CARD_HASH" ]; then echo "ok   casio_card"; else echo "FAIL casio_card $actual"; exit 1; fi
+    if ./headless "$CASIO_ROM" --seconds=22 --backlight=20 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   casio_backlight"; else echo "FAIL casio_backlight"; exit 1; fi
     gdb_check casio_gdb "$CASIO_ROM"
     if ./headless "$CASIO_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
         echo "skip casio_net: headless built without libslirp"
     else
         ./headless "$CASIO_ROM" --seconds=50 --net=22 > "$OUT/casio_net.log" 2>&1
         if grep -q "^ppp: IPCP up" "$OUT/casio_net.log" && grep -q "^desktop: connection from the device" "$OUT/casio_net.log"; then echo "ok   casio_net"; else echo "FAIL casio_net"; exit 1; fi
+        reconnect_check casio_replug "$CASIO_ROM" --seconds=60 --net=22 --replug=37
+        reconnect_check casio_soft_reset "$CASIO_ROM" --seconds=90 --net=22 --soft-reset=37 --replug=65
         rapi_check casio_rapi "$CASIO_ROM" 22
     fi
 else
@@ -65,8 +73,8 @@ fi
 
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
 HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
-HP_TYPE_HASH=4dc31d2529542b201f74f36dac630329503df9a4869ce0b53b3c09c6dcc1be52
-HP_WAKE_HASH=6a96588d83f19f802ddb17991f4d592b57e94ddc346b7820acc5ca37bda92fcc
+HP_TYPE_HASH=37c02b7f1e23b43d53f487ddd41e3875b17b3579e80aab4da362c8523ea4a2b7
+HP_WAKE_HASH=b3da19949fc080dd447567a1efb7622c7ceefb283fdc08a7b48a7adac4145881
 HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
 if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
@@ -79,15 +87,17 @@ if [ -f "$HP_ROM" ]; then
         --tap=33:512:192:1.5 --tap=36:512:48:1.5 --key=38:5A --tap=42:216:47:0.2 --pgm="$OUT/hp_touch.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/hp_touch.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_TOUCH_HASH" ]; then echo "ok   hp_touch"; else echo "FAIL hp_touch $actual"; exit 1; fi
-    ./headless "$HP_ROM" --seconds=240 --key=230:5A --key=233:9F --pgm="$OUT/hp_wake.pgm" > /dev/null 2>&1
+    ./headless "$HP_ROM" --seconds=32 --key=20:9F --key=21:3C --key=25:5A --key=28:9F --trace-pc --pgm="$OUT/hp_wake.pgm" > "$OUT/hp_wake.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp_wake.pgm" | cut -d' ' -f1)
-    if [ "$actual" = "$HP_WAKE_HASH" ]; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi
+    if [ "$actual" = "$HP_WAKE_HASH" ] && grep -q "^t=2[2-4].* lcd=0" "$OUT/hp_wake.log"; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi
     gdb_check hp_gdb "$HP_ROM"
     if ./headless "$HP_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
         echo "skip hp_net: headless built without libslirp"
     else
         ./headless "$HP_ROM" --seconds=50 --net=20 > "$OUT/hp_net.log" 2>&1
         if grep -q "^ppp: IPCP up" "$OUT/hp_net.log" && grep -q "^desktop: Handheld_PC, Windows CE 2" "$OUT/hp_net.log"; then echo "ok   hp_net"; else echo "FAIL hp_net"; exit 1; fi
+        reconnect_check hp_replug "$HP_ROM" --seconds=60 --net=20 --replug=35
+        reconnect_check hp_soft_reset "$HP_ROM" --seconds=90 --net=20 --soft-reset=35 --replug=63
         rapi_check hp_rapi "$HP_ROM" 20
     fi
 else

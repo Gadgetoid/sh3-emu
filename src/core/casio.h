@@ -64,6 +64,7 @@ uint64_t casio_next_event(const casio_t *board, const casio_host_t *host);
 void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool up);
 void casio_serial_line(casio_t *board, const casio_host_t *host, bool dsr);
 uint32_t casio_serial_baud(const casio_t *board);
+bool casio_backlight(const casio_t *board);
 uint32_t casio_scif_priority(const casio_t *board);
 void casio_card_changed(casio_t *board, const casio_host_t *host);
 void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int y);

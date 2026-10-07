@@ -127,7 +127,9 @@ typedef struct {
     int      type_count;
     double   power_times[8];
     int      power_count;
-    double   soft_reset_at, realtime, net_at;
+    double   backlight_times[8];
+    int      backlight_count;
+    double   soft_reset_at, realtime, net_at, replug_at;
     bool     net, pty;
     const char *rapi_socket;
     int      rapi_port;
@@ -137,8 +139,8 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_NET, OPT_PTY, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
-    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_SOFT_RESET,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_NET, OPT_PTY, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
 };
@@ -153,6 +155,7 @@ static const option_t OPTIONS[] = {
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the device's RAPI port on a Unix socket, for sh3emu-rapi --socket", 0 },
     [OPT_RAPI_PORT] = { "rapi-port", "PORT", "expose the device's RAPI port on this TCP port on all interfaces, for sh3emu-rapi --connect", 0 },
     [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 20 s, or 2 s after --load)", 0 },
+    [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, with a new gateway", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for agent clients", 0 },
@@ -162,6 +165,7 @@ static const option_t OPTIONS[] = {
     [OPT_KEY] = { "key", "SECONDS:SCANCODE[+SCANCODE]", "press PS/2 set 2 scancodes (hex) for 50 ms, several joined by + as a chord; 80 and up are E0-prefixed", 32 },
     [OPT_TYPE] = { "type", "SECONDS:TEXT", "type text, with \\n for Enter", 16 },
     [OPT_POWER] = { "power", "SECONDS", "press the power button for 200 ms", 8 },
+    [OPT_BACKLIGHT] = { "backlight", "SECONDS", "press the Casio's backlight key for 100 ms", 8 },
     [OPT_SOFT_RESET] = { "soft-reset", "SECONDS", "restart CE, keeping RAM", 0 },
     [OPT_HEADING_OUTPUT] = { NULL, NULL, "Output", 0 },
     [OPT_PGM] = { "pgm", "FILE", "save the raw greyscale screen at the end", 0 },
@@ -265,6 +269,13 @@ static bool parse_option(void *context, int option, const char *value, char *err
         run->power_times[run->power_count++] = number;
         return true;
     }
+    case OPT_BACKLIGHT: {
+        double number;
+        if (!option_number(value, &number) || number < 0) return false;
+        run->backlight_times[run->backlight_count++] = number;
+        return true;
+    }
+    case OPT_REPLUG: return option_number(value, &run->replug_at) && run->replug_at >= 0;
     case OPT_SOFT_RESET: return option_number(value, &run->soft_reset_at) && run->soft_reset_at >= 0;
     case OPT_PGM: run->pgm = value; return true;
     case OPT_PNG: run->png = value; return true;
@@ -308,7 +319,7 @@ static bool due(double at, uint64_t done, uint64_t slice) {
 
 int main(int argc, char **argv) {
     static run_t run;
-    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1 };
+    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .replug_at = -1 };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&SPEC, argc, argv, parse_option, &run, positional, 1, &positional_count);
@@ -325,6 +336,8 @@ int main(int argc, char **argv) {
     for (int t = 0; t < run.tap_count; t++) if (run.tap_times[t] > latest) latest = run.tap_times[t];
     for (int k = 0; k < run.type_count; k++) if (run.type_times[k] > latest) latest = run.type_times[k];
     for (int b = 0; b < run.power_count; b++) if (run.power_times[b] > latest) latest = run.power_times[b];
+    for (int b = 0; b < run.backlight_count; b++) if (run.backlight_times[b] > latest) latest = run.backlight_times[b];
+    if (run.replug_at >= 0 && run.replug_at + 2 > latest) latest = run.replug_at + 2;
     if (latest >= run.seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, run.seconds);
     if (run.agent_socket && !(agent = agent_create(run.agent_socket, log_stderr))) {
         fprintf(stderr, "cannot listen on agent socket %s\n", run.agent_socket);
@@ -410,11 +423,22 @@ int main(int argc, char **argv) {
             advance(machine, MACHINE_CLOCK_HZ / 5);
             machine_power_button(machine, false);
         }
+        for (int b = 0; b < run.backlight_count; b++) {
+            if (!due(run.backlight_times[b], done, slice)) continue;
+            machine_backlight_button(machine, true);
+            advance(machine, MACHINE_CLOCK_HZ / 10);
+            machine_backlight_button(machine, false);
+        }
         if (due(run.soft_reset_at, done, slice)) machine_soft_reset(machine);
         if ((run.net || run.pty) && due(run.net_at, done, slice)) machine_serial_connect(machine, true);
+        if (run.net && due(run.replug_at, done, slice)) {
+            machine_serial_connect(machine, false);
+            serial_link_open(&serial, SERIAL_NETWORK, NULL);
+            run.net_at = run.replug_at + 2;
+        }
         advance(machine, slice);
         pace(machine, run.realtime, wall_start, cycles_start);
-        if (run.trace_pc) fprintf(stderr, "t=%.1fs pc=%08X lcd=%d\n", (double)machine_cycles(machine) / MACHINE_CLOCK_HZ, machine_pc(machine), machine_lcd_enabled(machine));
+        if (run.trace_pc) fprintf(stderr, "t=%.1fs pc=%08X lcd=%d backlight=%d\n", (double)machine_cycles(machine) / MACHINE_CLOCK_HZ, machine_pc(machine), machine_lcd_enabled(machine), machine_backlight(machine));
     }
     machine_dump_state(machine);
     if (run.save && !machine_save(machine, run.save, 0)) { fprintf(stderr, "cannot save state %s\n", run.save); return 1; }
