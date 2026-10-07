@@ -542,7 +542,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     hp320lx_reset(&m->hp_board);
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
-        sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_LUKE, HP320LX_MODEL_LUKE);
+        sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, HP320LX_MODEL_PINS);
         sh7709_set_port_input(&m->chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
         sh7709_set_irq_active_high(&m->chip, 1u << HP320LX_PEN_IRQ);
     }

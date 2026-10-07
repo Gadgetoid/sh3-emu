@@ -95,9 +95,9 @@ fi
 
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
 HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
-HP_TYPE_HASH=c8fc4b822f02af409978961afb093fc7ec416da04a730dd3ebe40341057f9dc5
+HP_TYPE_HASH=471755752e81af0bfb35466b7b263f62133d45399eb2b6b1cd0eff2ec2706f12
 HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
-HP_TOUCH_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
+HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
 if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
