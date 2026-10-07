@@ -29,7 +29,9 @@ uint32_t   machine_pc(machine_t *machine);
 
 bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
+size_t machine_audio(machine_t *machine, int16_t *samples, size_t max, uint32_t *rate);
 bool machine_has_backlight_button(machine_t *machine);
+uint32_t machine_backlight_colour(machine_t *machine);
 void machine_backlight_button(machine_t *machine, bool down);
 bool machine_has_dictionary_slot(machine_t *machine);
 bool machine_mount_dictionary(machine_t *machine, const char *path);

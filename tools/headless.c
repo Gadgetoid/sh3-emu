@@ -85,6 +85,7 @@ static bool write_panel_png(const char *path, machine_t *machine, int cell, int 
     lcd_set_size(size.width, size.height);
     lcd_compose_setup(cell);
     lcd_set_power(machine_lcd_enabled(machine));
+    lcd_set_backlight_colour(machine_backlight_colour(machine));
     lcd_set_backlight(backlight < 0 ? machine_backlight(machine) : backlight != 0);
     uint32_t palette[LCD_PALETTE_MAX];
     lcd_set_palette(palette, machine_screen_palette(machine, palette));
@@ -111,7 +112,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double   seconds;
-    const char *png, *pgm, *load, *save, *card, *agent_socket, *gdb_process;
+    const char *png, *pgm, *load, *save, *wav, *card, *agent_socket, *gdb_process;
     int      png_cell, png_backlight, gdb_port;
     bool     trace_pc, host_time, trace_exceptions, debug_output, seconds_given;
     double   key_times[32];
@@ -142,7 +143,7 @@ typedef struct {
 enum {
     OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
-    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
+    OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
 };
 
@@ -174,6 +175,7 @@ static const option_t OPTIONS[] = {
     [OPT_PNG] = { "png", "FILE", "save the screen through the simulated LCD at the end", 0 },
     [OPT_PNG_CELL] = { "png-cell", "N", "device pixels per LCD pixel for --png (default 4)", 0 },
     [OPT_PNG_BACKLIGHT] = { "png-backlight", "on|off", "draw --png lit or unlit", 0 },
+    [OPT_WAV] = { "wav", "FILE", "write the sound output, with silences removed", 0 },
     [OPT_TRACE_PC] = { "trace-pc", NULL, "print the program counter every 0.1 emulated seconds", 0 },
     [OPT_WATCH_PC] = { "watch-pc", "VA", "log registers each time the CPU reaches an address", MACHINE_WATCH_MAX },
     [OPT_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug serial port output to stderr", 0 },
@@ -282,6 +284,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_SOFT_RESET: return option_number(value, &run->soft_reset_at) && run->soft_reset_at >= 0;
     case OPT_PGM: run->pgm = value; return true;
     case OPT_PNG: run->png = value; return true;
+    case OPT_WAV: run->wav = value; return true;
     case OPT_PNG_CELL:
         if (!option_integer(value, 10, &integer) || integer < 2 || integer > 16) return false;
         run->png_cell = (int)integer;
@@ -363,6 +366,12 @@ int main(int argc, char **argv) {
     if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
+    FILE *wav_file = run.wav ? fopen(run.wav, "wb") : NULL;
+    if (run.wav && !wav_file) { fprintf(stderr, "cannot write %s\n", run.wav); return 1; }
+    uint32_t wav_rate = 0;
+    size_t wav_samples = 0;
+    static int16_t audio[65536];
+    if (wav_file) fseek(wav_file, 44, SEEK_SET);
     serial_link_init(&serial, log_stderr);
     serial.options.rapi_socket = run.rapi_socket;
     serial.options.rapi_port = run.rapi_port;
@@ -442,9 +451,27 @@ int main(int argc, char **argv) {
         }
         advance(machine, slice);
         pace(machine, run.realtime, wall_start, cycles_start);
+        if (wav_file) {
+            uint32_t rate;
+            size_t count = machine_audio(machine, audio, sizeof audio / sizeof audio[0], &rate);
+            if (count && !wav_rate) wav_rate = rate;
+            fwrite(audio, sizeof audio[0], count, wav_file);
+            wav_samples += count;
+        }
         if (run.trace_pc) fprintf(stderr, "t=%.1fs pc=%08X lcd=%d backlight=%d\n", (double)machine_cycles(machine) / MACHINE_CLOCK_HZ, machine_pc(machine), machine_lcd_enabled(machine), machine_backlight(machine));
     }
     machine_dump_state(machine);
+    if (wav_file) {
+        uint32_t rate = wav_rate ? wav_rate : 22050, data = (uint32_t)(wav_samples * 2), riff = data + 36, fmt = 16, byte_rate = rate * 2;
+        uint16_t pcm = 1, channels = 1, align = 2, bits = 16;
+        fseek(wav_file, 0, SEEK_SET);
+        fwrite("RIFF", 1, 4, wav_file); fwrite(&riff, 4, 1, wav_file); fwrite("WAVEfmt ", 1, 8, wav_file);
+        fwrite(&fmt, 4, 1, wav_file); fwrite(&pcm, 2, 1, wav_file); fwrite(&channels, 2, 1, wav_file);
+        fwrite(&rate, 4, 1, wav_file); fwrite(&byte_rate, 4, 1, wav_file); fwrite(&align, 2, 1, wav_file);
+        fwrite(&bits, 2, 1, wav_file); fwrite("data", 1, 4, wav_file); fwrite(&data, 4, 1, wav_file);
+        fclose(wav_file);
+        fprintf(stderr, "wav: %zu samples at %u Hz\n", wav_samples, rate);
+    }
     if (run.save && !machine_save(machine, run.save, 0)) { fprintf(stderr, "cannot save state %s\n", run.save); return 1; }
     if (run.pgm) {
         static uint8_t levels[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];

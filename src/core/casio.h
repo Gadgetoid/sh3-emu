@@ -14,6 +14,7 @@
 #define CASIO_SCIF_PA       0xFFFFFE70u
 #define CASIO_SCIF_PORT     2
 #define CASIO_PERIPHERAL_HZ 10000000u
+#define CASIO_BACKLIGHT_COLOUR 0x38B697u
 
 typedef void (*casio_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef uint64_t (*casio_cycles_fn)(void *context);

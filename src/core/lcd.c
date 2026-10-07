@@ -25,7 +25,7 @@ typedef struct {
     float bloom;
 } panel_t;
 
-static const panel_t panel_lit = {
+static panel_t panel_lit = {
     .glass = { 56, 182, 151 },
     .ink = { 10, 42, 40 },
     .contrast = 0.92f,
@@ -116,6 +116,13 @@ void lcd_set_contrast(int level) {
 }
 
 int lcd_get_contrast(void) { return contrast_level; }
+
+void lcd_set_backlight_colour(uint32_t rgb) {
+    colour_t glass = { (float)((rgb >> 16) & 0xFF), (float)((rgb >> 8) & 0xFF), (float)(rgb & 0xFF) };
+    if (glass.r == panel_lit.glass.r && glass.g == panel_lit.glass.g && glass.b == panel_lit.glass.b) return;
+    panel_lit.glass = glass;
+    lcd_invalidate();
+}
 
 void lcd_set_backlight(bool on) {
     if (on == backlight) return;

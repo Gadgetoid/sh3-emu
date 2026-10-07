@@ -27,6 +27,7 @@ uint32_t *lcd_compose_pixels(void);
 int       lcd_compose_width(void);
 int       lcd_compose_height(void);
 void      lcd_set_backlight(bool on);
+void      lcd_set_backlight_colour(uint32_t rgb);
 bool      lcd_get_backlight(void);
 void      lcd_set_power(bool on);
 void      lcd_set_response(float scale);

@@ -12,6 +12,37 @@
 #define ICR1_RISING  1u
 #define ICR1_LEVEL   2u
 #define PCC_NO_CARD 0x0Cu
+#define DMA_BASE    0x020u
+#define DMA_STRIDE  0x010u
+#define DMA_END     0x060u
+#define DMAOR       0x060u
+#define DMAOR_DME   0x0001u
+#define DMAOR_NMIF  0x0002u
+#define DMAOR_AE    0x0004u
+#define CHCR_DE     0x00000001u
+#define CHCR_TE     0x00000002u
+#define CHCR_IE     0x00000004u
+#define CHCR_TS     0x00000018u
+#define CHCR_TS_SHIFT 3
+#define CHCR_RS     0x00000F00u
+#define CHCR_RS_CMT 0x00000F00u
+#define CHCR_SM_SHIFT 12
+#define CHCR_DM_SHIFT 14
+#define ADDRESS_FIXED     0u
+#define ADDRESS_INCREMENT 1u
+#define ADDRESS_DECREMENT 2u
+#define DMA_COUNT_MASK 0x00FFFFFFu
+#define CMSTR       0x070u
+#define CMCSR       0x072u
+#define CMCNT       0x074u
+#define CMCOR       0x076u
+#define CMSTR_STR   0x0001u
+#define CMCSR_CMF   0x0080u
+#define CMCSR_CKS   0x0003u
+#define DADR0       0x0A0u
+#define DADR1       0x0A2u
+#define DACR        0x0A4u
+#define DEI_CODE    0x800u
 #define BSC_BASE    0xFFFFFF60u
 #define CPG_BASE    0xFFFFFF80u
 #define CCR_ADDRESS 0xFFFFFFECu
@@ -91,6 +122,7 @@ void sh7709_reset(sh7709_t *chip) {
     sh7709_transmit_fn transmit = chip->transmit;
     void *transmit_context = chip->transmit_context;
     sh7709_ports_fn ports_written = chip->ports_written;
+    sh7709_dac_fn dac_written = chip->dac_written;
     uint16_t adc_input[4], port_input_mask[64], port_input[64];
     uint32_t irq_active_high = chip->irq_active_high;
     memcpy(adc_input, chip->adc_input, sizeof adc_input);
@@ -108,6 +140,7 @@ void sh7709_reset(sh7709_t *chip) {
     chip->transmit = transmit;
     chip->transmit_context = transmit_context;
     chip->ports_written = ports_written;
+    chip->dac_written = dac_written;
     memcpy(chip->rtc_counter, counter, sizeof counter);
     memcpy(chip->rtc_alarm, alarm, sizeof alarm);
     chip->rtc_control2 = control2 & (RCR2_START | RCR2_PES | RCR2_RTCEN);
@@ -278,12 +311,86 @@ void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
     chip->adc_input[channel] = value & 0x3FFu;
 }
 
+static uint32_t cmt_hz(const sh7709_t *chip) {
+    static const uint32_t dividers[] = { 4, 8, 16, 64 };
+    return chip->peripheral_hz / dividers[chip->cmt_control & CMCSR_CKS];
+}
+
+static bool dma_on_cmt(const sh7709_t *chip, int channel) {
+    uint32_t control = chip->dma_control[channel];
+    bool running = (chip->dma_operation & (DMAOR_DME | DMAOR_NMIF | DMAOR_AE)) == DMAOR_DME;
+    return running && (control & (CHCR_DE | CHCR_TE)) == CHCR_DE && (control & CHCR_RS) == CHCR_RS_CMT;
+}
+
+static int cmt_channel(const sh7709_t *chip) {
+    for (int channel = 0; channel < SH7709_DMA_CHANNELS; channel++) {
+        if (dma_on_cmt(chip, channel)) return channel;
+    }
+    return -1;
+}
+
+static uint32_t step_address(uint32_t address, uint32_t mode, uint32_t size) {
+    if (mode == ADDRESS_INCREMENT) return address + size;
+    if (mode == ADDRESS_DECREMENT) return address - size;
+    return address;
+}
+
+static void dma_transfer(sh7709_t *chip, int channel, uint64_t cycle) {
+    uint32_t control = chip->dma_control[channel];
+    uint32_t size = 1u << ((control & CHCR_TS) >> CHCR_TS_SHIFT);
+    if (size > 4) size = 4;
+    const sh3_bus_t *bus = &chip->cpu->bus;
+    uint32_t value = 0;
+    bus->read(bus->context, chip->dma_source[channel], (int)size, &value);
+    chip->transfer_cycle = cycle;
+    bus->write(bus->context, chip->dma_dest[channel], (int)size, value);
+    chip->transfer_cycle = 0;
+    chip->dma_source[channel] = step_address(chip->dma_source[channel], (control >> CHCR_SM_SHIFT) & 3, size);
+    chip->dma_dest[channel] = step_address(chip->dma_dest[channel], (control >> CHCR_DM_SHIFT) & 3, size);
+    chip->dma_count[channel] = (chip->dma_count[channel] - 1) & DMA_COUNT_MASK;
+    if (!chip->dma_count[channel]) chip->dma_control[channel] |= CHCR_TE;
+}
+
+static void advance_cmt(sh7709_t *chip, uint64_t elapsed) {
+    if (!(chip->cmt_start & CMSTR_STR)) return;
+    uint32_t hz = cmt_hz(chip);
+    if (!hz) return;
+    uint64_t base = chip->last_cycle, before = chip->cmt_remainder;
+    chip->cmt_remainder += elapsed * hz;
+    uint64_t ticks = chip->cmt_remainder / chip->cpu_hz;
+    chip->cmt_remainder %= chip->cpu_hz;
+    uint64_t period = (uint64_t)chip->cmt_constant + 1;
+    uint64_t to_match = chip->cmt_count < chip->cmt_constant ? (uint64_t)(chip->cmt_constant - chip->cmt_count) + 1 : 1;
+    uint64_t tick = to_match;
+    while (tick <= ticks) {
+        chip->cmt_control |= CMCSR_CMF;
+        int channel = cmt_channel(chip);
+        if (channel >= 0) dma_transfer(chip, channel, base + (tick * chip->cpu_hz - before + hz - 1) / hz);
+        tick += period;
+    }
+    uint64_t past = ticks >= to_match ? (ticks - to_match) % period : 0;
+    chip->cmt_count = ticks >= to_match ? (uint16_t)past : (uint16_t)(chip->cmt_count + ticks);
+}
+
+static uint64_t cmt_next_event(const sh7709_t *chip) {
+    if (!(chip->cmt_start & CMSTR_STR)) return UINT64_MAX;
+    int channel = cmt_channel(chip);
+    uint32_t hz = cmt_hz(chip);
+    if (channel < 0 || !hz || !(chip->dma_control[channel] & CHCR_IE)) return UINT64_MAX;
+    uint64_t period = (uint64_t)chip->cmt_constant + 1;
+    uint64_t to_match = chip->cmt_count < chip->cmt_constant ? (uint64_t)(chip->cmt_constant - chip->cmt_count) + 1 : 1;
+    uint64_t count = chip->dma_count[channel] ? chip->dma_count[channel] : DMA_COUNT_MASK + 1ull;
+    uint64_t ticks = to_match + (count - 1) * period;
+    return chip->last_cycle + (ticks * chip->cpu_hz - chip->cmt_remainder + hz - 1) / hz;
+}
+
 void sh7709_advance(sh7709_t *chip) {
     uint64_t now = chip->cpu->cycles;
     if (now > chip->last_cycle) {
         uint64_t elapsed = now - chip->last_cycle;
         for (int i = 0; i < 3; i++) advance_timer(chip, i, elapsed);
         advance_rtc(chip, elapsed);
+        advance_cmt(chip, elapsed);
     }
     advance_adc(chip, now);
     chip->last_cycle = now;
@@ -307,6 +414,8 @@ uint64_t sh7709_next_event(sh7709_t *chip) {
         if (at < next) next = at;
     }
     if ((chip->adc_control & ADCSR_ADST) && chip->adc_done < next) next = chip->adc_done;
+    uint64_t cmt = cmt_next_event(chip);
+    if (cmt < next) next = cmt;
     return next;
 }
 
@@ -375,6 +484,10 @@ void sh7709_update_interrupts(sh7709_t *chip) {
         consider_leveled(&best, (iprd >> 8) & 15, 0x720, (pint & 0xFF00u) != 0);
         if (scif_pending(&chip->scif[0], &offset)) consider_leveled(&best, (ipre >> 8) & 15, 0x880 + offset, true);
         if (scif_pending(&chip->scif[1], &offset)) consider_leveled(&best, (ipre >> 4) & 15, 0x900 + offset, true);
+        for (int channel = 0; channel < SH7709_DMA_CHANNELS; channel++) {
+            uint32_t control = chip->dma_control[channel];
+            consider_leveled(&best, (ipre >> 12) & 15, DEI_CODE + (uint32_t)channel * 0x20, (control & (CHCR_TE | CHCR_IE)) == (CHCR_TE | CHCR_IE));
+        }
         consider_leveled(&best, ipre & 15, 0x980, (chip->adc_control & ADCSR_ADF) && (chip->adc_control & ADCSR_ADIE));
     }
     sh3_set_interrupt(chip->cpu, best.level, best.code);
@@ -655,6 +768,24 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
         return true;
     }
     if (offset == 0x092) { *value = chip->adc_config; return true; }
+    if (offset >= DMA_BASE && offset < DMA_END) {
+        sh7709_advance(chip);
+        int channel = (int)((offset - DMA_BASE) / DMA_STRIDE);
+        uint32_t fields[] = { chip->dma_source[channel], chip->dma_dest[channel], chip->dma_count[channel], chip->dma_control[channel] };
+        *value = fields[(offset & 0xC) / 4];
+        return true;
+    }
+    switch (offset) {
+        case DMAOR: *value = chip->dma_operation; return true;
+        case CMSTR: *value = chip->cmt_start; return true;
+        case CMCSR: sh7709_advance(chip); *value = chip->cmt_control; return true;
+        case CMCNT: sh7709_advance(chip); *value = chip->cmt_count; return true;
+        case CMCOR: *value = chip->cmt_constant; return true;
+        case DADR0: *value = chip->dac[0]; return true;
+        case DADR1: *value = chip->dac[1]; return true;
+        case DACR: *value = chip->dac_control; return true;
+        default: break;
+    }
     if (offset >= 0x0E0 && offset < 0x100) { *value = chip->pcc[(offset - 0x0E0) / 2]; return true; }
     if (offset >= 0x100 && offset < 0x140) {
         *value = port_value(chip, (offset - 0x100) / 2);
@@ -696,6 +827,51 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
         return true;
     }
     if (offset == 0x092) { chip->adc_config = (uint8_t)value; return true; }
+    if (offset >= DMA_BASE && offset < DMA_END) {
+        sh7709_advance(chip);
+        int channel = (int)((offset - DMA_BASE) / DMA_STRIDE);
+        switch (offset & 0xC) {
+            case 0x0: chip->dma_source[channel] = value; break;
+            case 0x4: chip->dma_dest[channel] = value; break;
+            case 0x8: chip->dma_count[channel] = value & DMA_COUNT_MASK; break;
+            default: {
+                uint32_t done = chip->dma_control[channel] & value & CHCR_TE;
+                chip->dma_control[channel] = (value & ~CHCR_TE) | done;
+                break;
+            }
+        }
+        sh7709_update_interrupts(chip);
+        return true;
+    }
+    switch (offset) {
+        case DMAOR: {
+            sh7709_advance(chip);
+            uint16_t flags = chip->dma_operation & (uint16_t)value & (DMAOR_NMIF | DMAOR_AE);
+            chip->dma_operation = (uint16_t)((value & ~(uint32_t)(DMAOR_NMIF | DMAOR_AE)) | flags);
+            return true;
+        }
+        case CMSTR:
+            sh7709_advance(chip);
+            chip->cmt_start = (uint16_t)value;
+            return true;
+        case CMCSR: {
+            sh7709_advance(chip);
+            uint16_t flag = chip->cmt_control & (uint16_t)value & CMCSR_CMF;
+            chip->cmt_control = (uint16_t)((value & ~(uint32_t)CMCSR_CMF) | flag);
+            return true;
+        }
+        case CMCNT: sh7709_advance(chip); chip->cmt_count = (uint16_t)value; return true;
+        case CMCOR: sh7709_advance(chip); chip->cmt_constant = (uint16_t)value; return true;
+        case DADR0:
+        case DADR1: {
+            int channel = offset == DADR1;
+            chip->dac[channel] = (uint8_t)value;
+            if (chip->dac_written) chip->dac_written(chip->transmit_context, channel, (uint8_t)value, chip->transfer_cycle ? chip->transfer_cycle : chip->cpu->cycles);
+            return true;
+        }
+        case DACR: chip->dac_control = (uint8_t)value; return true;
+        default: break;
+    }
     if (offset >= 0x0E0 && offset < 0x100) { chip->pcc[(offset - 0x0E0) / 2] = (uint8_t)value; return true; }
     if (offset >= 0x100 && offset < 0x140) {
         chip->ports[(offset - 0x100) / 2] = (uint16_t)value;

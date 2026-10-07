@@ -103,6 +103,7 @@ struct gdb {
     bool         no_ack;
     bool         halted;
     bool         killed;
+    bool         hung_up;
     bool         catch_faults;
     bool         forward_output;
     bool         elf_libraries;
@@ -228,6 +229,7 @@ static void close_client(gdb_t *gdb) {
     if (gdb->client >= 0) close(gdb->client);
     gdb->client = -1;
     gdb->input_length = 0;
+    gdb->hung_up = false;
 }
 
 static bool send_all(gdb_t *gdb, const char *data, size_t length) {
@@ -1376,15 +1378,14 @@ static void handle_packet(gdb_t *gdb, const char *packet) {
 }
 
 static bool receive(gdb_t *gdb, bool wait) {
-    if (gdb->client < 0) return false;
+    if (gdb->client < 0 || gdb->hung_up) return false;
     struct pollfd poll_fd = { .fd = gdb->client, .events = POLLIN };
     int ready = poll(&poll_fd, 1, wait ? -1 : 0);
     if (ready <= 0) return ready == 0 || errno == EINTR;
     if (gdb->input_length == sizeof gdb->input) gdb->input_length = 0;
     ssize_t received = recv(gdb->client, gdb->input + gdb->input_length, sizeof gdb->input - gdb->input_length, 0);
     if (received <= 0) {
-        logf_gdb(gdb, "gdb: client disconnected\n");
-        close_client(gdb);
+        gdb->hung_up = true;
         return false;
     }
     gdb->input_length += (size_t)received;
@@ -1548,6 +1549,10 @@ void gdb_service(gdb_t *gdb) {
         }
         if (!got) break;
         handle_packet(gdb, packet);
+    }
+    if (gdb->client >= 0 && gdb->hung_up) {
+        logf_gdb(gdb, "gdb: client disconnected\n");
+        close_client(gdb);
     }
     if (gdb->client < 0) detach_debugger(gdb);
 }

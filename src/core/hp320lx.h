@@ -8,6 +8,7 @@
 #define HP320LX_REGISTERS     4096
 #define HP320LX_FRAMEBUFFER   0x0C005000u
 #define HP320LX_ADC_HEALTHY   0x3A0u
+#define HP320LX_BACKLIGHT_COLOUR 0x41B432u
 #define HP320LX_PERIPHERAL_HZ 11059200u
 #define HP320LX_MODEL_PORT    0xA4000134u
 #define HP320LX_MODEL_LUKE    0x0010u
@@ -65,6 +66,7 @@ bool hp320lx_detect(const uint8_t *image, size_t size);
 void hp320lx_reset(hp320lx_t *board);
 bool hp320lx_read(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t *value);
 bool hp320lx_write(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t value);
+void hp320lx_woken(hp320lx_t *board);
 bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up);
 uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports);
 void hp320lx_touch(hp320lx_t *board, bool down, int x, int y);

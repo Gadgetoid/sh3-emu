@@ -55,6 +55,7 @@
 #define WINDOW_TITLE     "SH3Emu"
 #define POWER_PRESS_SECONDS 0.2
 #define BACKLIGHT_PRESS_SECONDS 0.1
+#define AUDIO_CHUNK 8192
 #define SERIAL_PORT_MAX  16
 #define PORT_SCAN_MS     2000
 
@@ -1142,7 +1143,7 @@ int main(int argc, char **argv) {
     lcd_set_size(screen.width, screen.height);
 
     SDL_SetAppMetadata("SH3Emu", options_version(), "sh3-emu");
-    if (!SDL_Init(SDL_INIT_VIDEO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
     pick_event_type = SDL_RegisterEvents(1);
     int window_width, window_height;
     window_size((view_display_t)settings.display, settings.scale, &window_width, &window_height);
@@ -1157,6 +1158,13 @@ int main(int argc, char **argv) {
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
 
     menu_install(window);
+
+    SDL_AudioSpec audio_spec = { SDL_AUDIO_S16, 1, 22050 };
+    SDL_AudioStream *audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audio_spec, NULL, NULL);
+    if (audio) SDL_ResumeAudioStreamDevice(audio);
+    else fprintf(stderr, "audio: %s\n", SDL_GetError());
+    bool sound = true;
+    static int16_t samples[AUDIO_CHUNK];
 
     bool running = true, pen_down = false, paused = false;
     bool held[256] = { false };
@@ -1308,6 +1316,7 @@ int main(int argc, char **argv) {
                 backlight_release_at = machine_cycles(machine) + (uint64_t)(BACKLIGHT_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_PAUSE: paused = !paused; break;
+            case MENU_SOUND: sound = !sound; break;
             case MENU_SOFT_RESET:
                 machine_soft_reset(machine);
                 set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
@@ -1707,6 +1716,7 @@ int main(int argc, char **argv) {
         }
         reap_reveal_children();
         menu_set_checked(MENU_PAUSE, paused);
+        menu_set_checked(MENU_SOUND, sound);
         for (int i = 0; i < PROFILES_MAX; i++) {
             int machine_item = MENU_MACHINE_FIRST + i;
             menu_set_hidden(machine_item, i >= profiles.count);
@@ -1756,7 +1766,17 @@ int main(int argc, char **argv) {
             if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN)) fit_window(window, view, settings.scale);
         }
         lcd_set_power(machine_lcd_enabled(machine));
+        lcd_set_backlight_colour(machine_backlight_colour(machine));
         lcd_set_backlight(machine_backlight(machine));
+        uint32_t rate;
+        for (size_t count; (count = machine_audio(machine, samples, AUDIO_CHUNK, &rate)) > 0;) {
+            if (!audio || !sound) continue;
+            if ((int)rate != audio_spec.freq) {
+                audio_spec.freq = (int)rate;
+                SDL_SetAudioStreamFormat(audio, &audio_spec, NULL);
+            }
+            SDL_PutAudioStreamData(audio, samples, (int)(count * sizeof samples[0]));
+        }
         uint32_t palette[LCD_PALETTE_MAX];
         lcd_set_palette(palette, machine_screen_palette(machine, palette));
         machine_screen(machine, lcd_framebuffer);

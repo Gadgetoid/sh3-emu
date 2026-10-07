@@ -31,6 +31,9 @@ typedef struct {
 
 typedef void (*sh7709_transmit_fn)(void *context, int port, uint8_t byte);
 typedef void (*sh7709_ports_fn)(void *context);
+typedef void (*sh7709_dac_fn)(void *context, int channel, uint8_t value, uint64_t cycle);
+
+#define SH7709_DMA_CHANNELS 4
 
 typedef struct {
     sh3_cpu_t *cpu;
@@ -64,6 +67,15 @@ typedef struct {
     sh7709_transmit_fn transmit;
     void    *transmit_context;
     sh7709_ports_fn ports_written;
+    sh7709_dac_fn dac_written;
+
+    uint32_t dma_source[SH7709_DMA_CHANNELS], dma_dest[SH7709_DMA_CHANNELS];
+    uint32_t dma_count[SH7709_DMA_CHANNELS], dma_control[SH7709_DMA_CHANNELS];
+    uint16_t dma_operation;
+    uint16_t cmt_start, cmt_control, cmt_count, cmt_constant;
+    uint64_t cmt_remainder;
+    uint64_t transfer_cycle;
+    uint8_t  dac[2], dac_control;
 
     uint16_t bsc[16];
     uint16_t refresh_count;

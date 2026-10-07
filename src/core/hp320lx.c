@@ -131,6 +131,10 @@ static void apply_key_events(hp320lx_t *board) {
     board->key_changed_scan = board->scans;
 }
 
+void hp320lx_woken(hp320lx_t *board) {
+    board->key_changed_scan = UINT32_MAX;
+}
+
 bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up) {
     for (size_t i = 0; i < sizeof key_map / sizeof key_map[0]; i++) {
         const hp320lx_keymap_t *key = &key_map[i];

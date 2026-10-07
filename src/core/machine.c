@@ -35,6 +35,10 @@
 #define SERIAL_FIFO        16384
 #define CARD_PATH_MAX      1024
 #define DICTIONARY_PA      0x04000000u
+#define AUDIO_RATE         22050u
+#define AUDIO_RING         65536u
+#define AUDIO_GAP_CYCLES   (MACHINE_CLOCK_HZ / 20)
+#define AUDIO_CHANNEL      1
 #define DICTIONARY_MAX     (8u << 20)
 #define SERIAL_TICKS_PER_SECOND 1000u
 #define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / SERIAL_TICKS_PER_SECOND)
@@ -81,6 +85,10 @@ struct machine {
     cfcard_slot_t card_slot;
     char      card_path[CARD_PATH_MAX];
     uint8_t  *dictionary;
+    int16_t   audio[AUDIO_RING];
+    uint32_t  audio_head, audio_count;
+    uint64_t  audio_clock, audio_last;
+    int16_t   audio_level;
     size_t    dictionary_size;
     char      pending_card[CARD_PATH_MAX];
     uint64_t  pending_card_at;
@@ -321,6 +329,38 @@ static void hp_ports_written(void *context) {
     if (touch.pen_interrupt != (((m->chip.irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(&m->chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
 }
 
+static void audio_push(machine_t *m, int16_t sample) {
+    if (m->audio_count == AUDIO_RING) {
+        m->audio_head = (m->audio_head + 1) % AUDIO_RING;
+        m->audio_count--;
+    }
+    m->audio[(m->audio_head + m->audio_count) % AUDIO_RING] = sample;
+    m->audio_count++;
+}
+
+static void hp_dac_written(void *context, int channel, uint8_t value, uint64_t cycle) {
+    machine_t *m = context;
+    if (channel != AUDIO_CHANNEL) return;
+    uint64_t scaled = cycle * AUDIO_RATE;
+    bool resumed = !m->audio_last || cycle - m->audio_last > AUDIO_GAP_CYCLES || scaled < m->audio_clock;
+    if (resumed) m->audio_clock = scaled;
+    while (m->audio_clock < scaled) {
+        audio_push(m, m->audio_level);
+        m->audio_clock += MACHINE_CLOCK_HZ;
+    }
+    m->audio_level = (int16_t)(((int)value - 128) * 256);
+    m->audio_last = cycle;
+}
+
+size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate) {
+    size_t count = m->audio_count < max ? m->audio_count : max;
+    for (size_t i = 0; i < count; i++) samples[i] = m->audio[(m->audio_head + i) % AUDIO_RING];
+    m->audio_head = (uint32_t)((m->audio_head + count) % AUDIO_RING);
+    m->audio_count -= (uint32_t)count;
+    *rate = AUDIO_RATE;
+    return count;
+}
+
 static void casio_power_key(machine_t *m) {
     if (m->casio_board.powered_on || !m->cpu.sleeping || !(m->chip.stbcr & STBCR_STANDBY)) return;
     m->casio_board.powered_on = true;
@@ -504,7 +544,10 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     }
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
+    m->audio_count = 0;
+    m->audio_last = 0;
     if (m->hp) {
+        m->chip.dac_written = hp_dac_written;
         m->chip.ports_written = hp_ports_written;
         hp_ports_written(m);
     }
@@ -605,6 +648,8 @@ bool machine_backlight(machine_t *m) {
 
 bool machine_has_backlight_button(machine_t *m) { return m->casio; }
 
+uint32_t machine_backlight_colour(machine_t *m) { return m->hp ? HP320LX_BACKLIGHT_COLOUR : CASIO_BACKLIGHT_COLOUR; }
+
 void machine_backlight_button(machine_t *m, bool down) {
     if (m->casio) machine_key(m, SCANCODE_BACKLIGHT, !down);
 }
@@ -646,7 +691,10 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
         return;
     }
     if (m->hp) {
-        if (!up && machine_suspended(m)) m->hp_on_key = true;
+        if (!up && machine_suspended(m)) {
+            m->hp_on_key = true;
+            hp320lx_woken(&m->hp_board);
+        }
         if (m->hp_on_key) {
             sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, !up);
             if (up) m->hp_on_key = false;
@@ -792,6 +840,7 @@ void machine_set_speed(machine_t *m, uint32_t multiplier) { m->cpu.speed = multi
 uint32_t machine_speed(machine_t *m) { return m->cpu.speed ? m->cpu.speed : 1; }
 uint64_t machine_rom_hash(machine_t *m) { return m->rom_hash; }
 void machine_power_button(machine_t *m, bool down) {
+    if (m->hp && down && machine_suspended(m)) hp320lx_woken(&m->hp_board);
     if (m->hp) sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
     if (m->casio && down) casio_power_key(m);
 }
@@ -975,6 +1024,9 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
     m->chip.ports_written = m->hp ? hp_ports_written : NULL;
+    m->chip.dac_written = m->hp ? hp_dac_written : NULL;
+    m->audio_count = 0;
+    m->audio_last = 0;
     sh3_flush_translations(&m->cpu);
     return true;
 }

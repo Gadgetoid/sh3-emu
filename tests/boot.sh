@@ -95,9 +95,9 @@ fi
 
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
 HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
-HP_TYPE_HASH=471755752e81af0bfb35466b7b263f62133d45399eb2b6b1cd0eff2ec2706f12
+HP_TYPE_HASH=c8fc4b822f02af409978961afb093fc7ec416da04a730dd3ebe40341057f9dc5
 HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
-HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
+HP_TOUCH_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
 if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
@@ -112,6 +112,9 @@ if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --seconds=32 --key=20:9F --key=21:3C --key=25:5A --key=28:9F --trace-pc --pgm="$OUT/hp_wake.pgm" > "$OUT/hp_wake.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp_wake.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_WAKE_HASH" ] && grep -q "^t=2[2-4].* lcd=0" "$OUT/hp_wake.log"; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi
+    ./headless "$HP_ROM" --seconds=24 --wav="$OUT/hp_sound.wav" > /dev/null 2>&1
+    SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 2.4 < len(a) / 22050 < 2.6 and max(map(abs, a)) > 2000 else 1)'
+    if python3 -c "$SOUND" "$OUT/hp_sound.wav"; then echo "ok   hp_sound"; else echo "FAIL hp_sound"; exit 1; fi
     gdb_check hp_gdb "$HP_ROM"
     if ./headless "$HP_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
         echo "skip hp_net: headless built without libslirp"
