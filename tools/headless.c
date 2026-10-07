@@ -132,6 +132,7 @@ typedef struct {
     double   soft_reset_at, realtime, net_at, replug_at;
     bool     net, pty;
     const char *rapi_socket;
+    const char *dictionary;
     int      rapi_port;
     uint32_t watches[MACHINE_WATCH_MAX];
     int      watch_count;
@@ -139,7 +140,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_NET, OPT_PTY, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -151,6 +152,7 @@ static const option_t OPTIONS[] = {
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
+    [OPT_DICTIONARY] = { "dictionary", "IMAGE", "map the Casio A-51's dictionary ROM image at physical 0x04000000", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the device's RAPI port on a Unix socket, for sh3emu-rapi --socket", 0 },
     [OPT_RAPI_PORT] = { "rapi-port", "PORT", "expose the device's RAPI port on this TCP port on all interfaces, for sh3emu-rapi --connect", 0 },
@@ -201,6 +203,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
+    case OPT_DICTIONARY: run->dictionary = value; return true;
     case OPT_RAPI: run->rapi_socket = value; return true;
     case OPT_RAPI_PORT: {
         double port;
@@ -357,6 +360,7 @@ int main(int argc, char **argv) {
     if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.trace_exceptions) machine_trace_exceptions(machine, true);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
+    if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     serial_link_init(&serial, log_stderr);

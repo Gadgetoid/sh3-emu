@@ -12,6 +12,7 @@
 #include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/sh7709.h"
+#include "util/file.h"
 
 #define DRAM_PA            0x0C000000u
 #define DRAM_DEFAULT_SIZE  (16u << 20)
@@ -33,6 +34,8 @@
 
 #define SERIAL_FIFO        16384
 #define CARD_PATH_MAX      1024
+#define DICTIONARY_PA      0x04000000u
+#define DICTIONARY_MAX     (8u << 20)
 #define SERIAL_TICKS_PER_SECOND 1000u
 #define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / SERIAL_TICKS_PER_SECOND)
 #define SERIAL_BITS_PER_BYTE 10u
@@ -77,6 +80,8 @@ struct machine {
     cfcard_t  card;
     cfcard_slot_t card_slot;
     char      card_path[CARD_PATH_MAX];
+    uint8_t  *dictionary;
+    size_t    dictionary_size;
     char      pending_card[CARD_PATH_MAX];
     uint64_t  pending_card_at;
     bool      serial_connected;
@@ -224,6 +229,11 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_read(&m->hp_board, &m->hp_host, pa, size, value);
     }
+    if (m->casio && m->dictionary && pa - DICTIONARY_PA < m->dictionary_size) {
+        const uint8_t *base = m->dictionary + (pa - DICTIONARY_PA);
+        *value = size == 4 ? read_le32(base) : size == 2 ? (uint32_t)(base[0] | base[1] << 8) : base[0];
+        return true;
+    }
     if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         if (casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         note_unknown(m, "read ", pa, size, 0);
@@ -260,6 +270,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     if (sh7709_write(&m->chip, pa, size, value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_write(&m->hp_board, &m->hp_host, pa, size, value);
+    }
+    if (m->casio && m->dictionary && pa - DICTIONARY_PA < m->dictionary_size) {
+        note_unknown(m, "write dictionary", pa, size, value);
+        return true;
     }
     if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         if (!casio_write(&m->casio_board, &m->casio_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
@@ -525,6 +539,7 @@ void machine_destroy(machine_t *m) {
     mailbox_clear(&m->mailbox);
     cfcard_eject(&m->card_slot);
     free(m->dram);
+    free(m->dictionary);
     free(m->flash);
     free(m->image);
     free(m);
@@ -730,6 +745,30 @@ size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) {
 }
 
 void machine_reset(machine_t *m) { reset_machine(m, false); }
+
+bool machine_has_dictionary_slot(machine_t *m) { return m->casio; }
+
+bool machine_mount_dictionary(machine_t *m, const char *path) {
+    if (!m->casio) return false;
+    size_t size;
+    uint8_t *image = file_read(path, &size);
+    if (!image || !size || size > DICTIONARY_MAX) {
+        free(image);
+        return false;
+    }
+    free(m->dictionary);
+    m->dictionary = image;
+    m->dictionary_size = size;
+    return true;
+}
+
+void machine_unmount_dictionary(machine_t *m) {
+    free(m->dictionary);
+    m->dictionary = NULL;
+    m->dictionary_size = 0;
+}
+
+bool machine_dictionary_mounted(machine_t *m) { return m->dictionary != NULL; }
 
 void machine_soft_reset(machine_t *m) { reset_machine(m, true); }
 

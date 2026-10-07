@@ -32,7 +32,28 @@ reconnect_check() {
     ./headless "$rom" "$@" > "$OUT/$name.log" 2>&1
     if [ "$(grep -c "^desktop: connection from the device" "$OUT/$name.log")" = 2 ]; then echo "ok   $name"; else echo "FAIL $name"; exit 1; fi
 }
+dictionary_check() {
+    name=$1; rom=$2; dictionary=$3
+    socket=/tmp/sh3emu-dic-$$.sock
+    rm -f "$socket"
+    ./headless "$rom" --dictionary="$dictionary" --seconds=60 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 \
+        --tap=31:48:192:1.5 --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --tap=46:447:227:0.2 \
+        --tap=48:447:227:0.2 --tap=50:447:227:0.2 --tap=52:447:227:0.2 --tap=54:447:227:0.2 --tap=56:447:227:0.2 --tap=58:447:227:0.2 \
+        --save="$OUT/$name.state" > /dev/null 2>&1
+    ./headless "$rom" --dictionary="$dictionary" --load="$OUT/$name.state" --seconds=40 --net=2 --rapi="$socket" --realtime=4 \
+        --save="$OUT/$name.running.state" > "$OUT/$name.log" 2>&1 &
+    EMULATOR=$!
+    for attempt in $(seq 1 120); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
+    ./sh3emu-rapi --socket="$socket" run '\Windows\dic.exe' > /dev/null 2>&1 || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$socket"
+    ./headless "$rom" --dictionary="$dictionary" --load="$OUT/$name.running.state" --seconds=3 --pgm="$OUT/$name.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/$name.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$CASIO_DICTIONARY_HASH" ]; then echo "ok   $name"; else echo "FAIL $name $actual"; exit 1; fi
+}
 CASIO_ROM=${CASIO_ROM:-rom/nk-a51-ce1.01.bin}
+CASIO_DICTIONARY=${CASIO_DICTIONARY:-rom/a51-dictionary.bin}
+CASIO_DICTIONARY_HASH=9ad67910268497c4982d6fcc8cffc85e91142a2f6cae14228ac49adf0b5e71e0
 CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
 CASIO_TOUCH_HASH=b9d9af15381627fda04f3f0d681c8e64ba945dacc573b7400a4ab5d6c3099d9f
@@ -66,6 +87,7 @@ if [ -f "$CASIO_ROM" ]; then
         reconnect_check casio_replug "$CASIO_ROM" --seconds=60 --net=22 --replug=37
         reconnect_check casio_soft_reset "$CASIO_ROM" --seconds=90 --net=22 --soft-reset=37 --replug=65
         rapi_check casio_rapi "$CASIO_ROM" 22
+        if [ -f "$CASIO_DICTIONARY" ]; then dictionary_check casio_dictionary "$CASIO_ROM" "$CASIO_DICTIONARY"; else echo "skip casio_dictionary: no $CASIO_DICTIONARY"; fi
     fi
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"

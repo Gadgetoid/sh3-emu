@@ -280,7 +280,7 @@ static void release_keys(input_queue_t *input, machine_t *machine, bool *held, i
     }
 }
 
-typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_SEND, PICK_FETCH, PICK_SHARED } pick_kind_t;
+typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_SEND, PICK_FETCH, PICK_SHARED, PICK_DICTIONARY } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -533,6 +533,7 @@ typedef struct {
     uint32_t serial;
     char     serial_device[SERIAL_LINK_PORT_NAME];
     char     shared_folder[1024];
+    char     dictionary[1024];
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -590,6 +591,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "serial=%u", &value) == 1 && value <= SERIAL_DEVICE) settings.serial = value;
         else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
         else if (!strncmp(line, "shared_folder=", 14)) copy_setting(settings.shared_folder, sizeof settings.shared_folder, line + 14);
+        else if (!strncmp(line, "dictionary=", 11)) copy_setting(settings.dictionary, sizeof settings.dictionary, line + 11);
     }
     fclose(file);
     return settings;
@@ -600,10 +602,15 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device, settings->shared_folder);
+            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary);
     fclose(file);
+}
+
+static const char *mount_dictionary(machine_t *machine, const settings_t *settings) {
+    if (!settings->dictionary[0] || !machine_has_dictionary_slot(machine)) return NULL;
+    return machine_mount_dictionary(machine, settings->dictionary) ? NULL : "could not open the dictionary image";
 }
 
 static const char *serial_choice(machine_t *machine, settings_t *settings, serial_mode_t mode, const char *device, uint64_t *plug_at) {
@@ -1100,6 +1107,8 @@ int main(int argc, char **argv) {
     const char *startup_notice = NULL;
     machine_t *machine = start_machine(&current, settings.speed, state_file, fresh, state, sizeof state, &startup_notice);
     if (!machine) { fprintf(stderr, "%s\n", startup_notice); return 1; }
+    const char *dictionary_failure = mount_dictionary(machine, &settings);
+    if (dictionary_failure && !startup_notice) startup_notice = dictionary_failure;
     if (current_index >= 0) {
         snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
         settings_save(&settings);
@@ -1460,6 +1469,18 @@ int main(int argc, char **argv) {
                 notice = "card ejected";
                 notice_left = NOTICE_SECONDS;
                 break;
+            case MENU_MOUNT_DICTIONARY: {
+                static const SDL_DialogFileFilter filters[] = { { "Dictionary images", "bin;rom" }, { "All files", "*" } };
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_DICTIONARY, window, filters, 2, settings.dictionary[0] ? settings.dictionary : NULL, false);
+                break;
+            }
+            case MENU_UNMOUNT_DICTIONARY:
+                machine_unmount_dictionary(machine);
+                settings.dictionary[0] = 0;
+                settings_save(&settings);
+                notice = "dictionary unmounted";
+                notice_left = NOTICE_SECONDS;
+                break;
             case MENU_SEND_FILES:
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
                 break;
@@ -1506,6 +1527,8 @@ int main(int argc, char **argv) {
                     settings_save(&settings);
                     set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                     power_release_at = backlight_release_at = 0;
+                    const char *dictionary_notice = mount_dictionary(machine, &settings);
+                    if (dictionary_notice) switch_notice = dictionary_notice;
                     since_backup = 0;
                     runner.machine = machine;
                     runner.restart = true;
@@ -1521,6 +1544,15 @@ int main(int argc, char **argv) {
             if (picked->kind == PICK_CARD) {
                 notice = machine_insert_card(machine, picked->paths[0]) ? "card inserted" : "could not open card image";
                 notice_left = NOTICE_SECONDS;
+            } else if (picked->kind == PICK_DICTIONARY) {
+                if (machine_mount_dictionary(machine, picked->paths[0])) {
+                    snprintf(settings.dictionary, sizeof settings.dictionary, "%s", picked->paths[0]);
+                    settings_save(&settings);
+                    notice = "dictionary mounted; restart the dictionary app to use it";
+                } else {
+                    notice = "could not open the dictionary image (up to 8 MB)";
+                }
+                notice_left = NOTICE_SECONDS * 2;
             } else if (picked->kind == PICK_SAVE_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 char path[1100];
@@ -1572,6 +1604,8 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_enabled(MENU_BACKLIGHT, machine_has_backlight_button(machine));
+        menu_set_enabled(MENU_MOUNT_DICTIONARY, machine_has_dictionary_slot(machine));
+        menu_set_enabled(MENU_UNMOUNT_DICTIONARY, machine_dictionary_mounted(machine));
         menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
         menu_set_enabled(MENU_SERIAL_NETWORK, net_gateway_available());
         menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
