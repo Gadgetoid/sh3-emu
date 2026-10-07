@@ -25,8 +25,12 @@
 #include "util/options.h"
 #include "util/png.h"
 
+#include <arpa/inet.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <netinet/in.h>
 #include <strings.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -38,6 +42,8 @@
 #define CABLE_REPLUG_SECONDS 2
 #define CABLE_BOOT_SECONDS   20
 #define CABLE_RESET_SECONDS  30
+#define SPEED_SETTLE_SECONDS 10
+#define RAPI_DEFAULT_PORT    9990
 #define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
@@ -534,6 +540,7 @@ typedef struct {
     char     serial_device[SERIAL_LINK_PORT_NAME];
     char     shared_folder[1024];
     char     dictionary[1024];
+    uint32_t network_rapi, rapi_port;
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -567,7 +574,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED };
+    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -591,6 +598,8 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "serial=%u", &value) == 1 && value <= SERIAL_DEVICE) settings.serial = value;
         else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
         else if (!strncmp(line, "shared_folder=", 14)) copy_setting(settings.shared_folder, sizeof settings.shared_folder, line + 14);
+        else if (sscanf(line, "network_rapi=%u", &value) == 1) settings.network_rapi = value != 0;
+        else if (sscanf(line, "rapi_port=%u", &value) == 1 && value > 0 && value < 65536) settings.rapi_port = value;
         else if (!strncmp(line, "dictionary=", 11)) copy_setting(settings.dictionary, sizeof settings.dictionary, line + 11);
     }
     fclose(file);
@@ -602,10 +611,25 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary);
+            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port);
     fclose(file);
+}
+
+static void local_address(char *address, size_t size) {
+    snprintf(address, size, "this computer");
+    struct ifaddrs *interfaces;
+    if (getifaddrs(&interfaces) != 0) return;
+    int best = 0;
+    for (struct ifaddrs *at = interfaces; at; at = at->ifa_next) {
+        if (!at->ifa_addr || at->ifa_addr->sa_family != AF_INET || (at->ifa_flags & IFF_LOOPBACK) || !(at->ifa_flags & IFF_UP)) continue;
+        int score = !strncmp(at->ifa_name, "wlan", 4) || !strcmp(at->ifa_name, "en0") ? 2 : 1;
+        if (score <= best) continue;
+        best = score;
+        inet_ntop(AF_INET, &((struct sockaddr_in *)at->ifa_addr)->sin_addr, address, (socklen_t)size);
+    }
+    freeifaddrs(interfaces);
 }
 
 static const char *mount_dictionary(machine_t *machine, const settings_t *settings) {
@@ -1161,13 +1185,14 @@ int main(int argc, char **argv) {
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
     }
-    uint64_t serial_plug_at = 0, power_release_at = 0, backlight_release_at = 0, port_scan_at = 0;
+    uint64_t serial_plug_at = 0, serial_unplug_at = 0, power_release_at = 0, backlight_release_at = 0, port_scan_at = 0;
     static char ports[SERIAL_PORT_MAX][SERIAL_LINK_PORT_NAME];
     int port_count = 0;
     serial_link_init(&serial, NULL);
     static char rapi_socket[1024], sync_manifest[1024];
     char desktop_notice[256], shared_notice[1200];
     if (rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket)) serial.options.rapi_socket = rapi_socket;
+    serial.options.rapi_port = settings.network_rapi ? (int)settings.rapi_port : 0;
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
     desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
     const char *serial_failure = set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
@@ -1493,6 +1518,32 @@ int main(int argc, char **argv) {
             case MENU_SYNC_NOW:
                 desktop_sync(desktop, settings.shared_folder);
                 break;
+            case MENU_SET_PROXY:
+                desktop_set_proxy(desktop);
+                break;
+            case MENU_BAUD_19200:
+            case MENU_BAUD_38400:
+            case MENU_BAUD_57600:
+            case MENU_BAUD_115200:
+                desktop_set_baud(desktop, item == MENU_BAUD_19200 ? 19200 : item == MENU_BAUD_38400 ? 38400 : item == MENU_BAUD_57600 ? 57600 : 115200);
+                break;
+            case MENU_NETWORK_RAPI: {
+                static char rapi_notice[160];
+                settings.network_rapi = !settings.network_rapi;
+                settings_save(&settings);
+                serial.options.rapi_port = settings.network_rapi ? (int)settings.rapi_port : 0;
+                char address[64];
+                local_address(address, sizeof address);
+                if (settings.network_rapi) snprintf(rapi_notice, sizeof rapi_notice, "RAPI at %s:%u", address, settings.rapi_port);
+                else snprintf(rapi_notice, sizeof rapi_notice, "RAPI over the network off");
+                if (serial.mode == SERIAL_NETWORK) {
+                    serial_link_close(&serial);
+                    set_serial(machine, SERIAL_NETWORK, NULL, &serial_plug_at);
+                }
+                notice = rapi_notice;
+                notice_left = NOTICE_SECONDS * 3;
+                break;
+            }
             case MENU_STOP_SHARING:
                 snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", file_leaf_name(settings.shared_folder));
                 settings.shared_folder[0] = 0;
@@ -1526,7 +1577,7 @@ int main(int argc, char **argv) {
                     snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
                     settings_save(&settings);
                     set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
-                    power_release_at = backlight_release_at = 0;
+                    power_release_at = backlight_release_at = serial_unplug_at = 0;
                     const char *dictionary_notice = mount_dictionary(machine, &settings);
                     if (dictionary_notice) switch_notice = dictionary_notice;
                     since_backup = 0;
@@ -1592,6 +1643,14 @@ int main(int argc, char **argv) {
         }
         bool device_online = serial.gateway && net_gateway_online(serial.gateway);
         if (serial.gateway && net_gateway_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) desktop_sync(desktop, settings.shared_folder);
+        if (desktop_take_reconnect(desktop) && serial.mode == SERIAL_NETWORK) serial_unplug_at = machine_cycles(machine) + SPEED_SETTLE_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
+        if (serial_unplug_at && machine_cycles(machine) >= serial_unplug_at) {
+            serial_unplug_at = 0;
+            if (serial.mode == SERIAL_NETWORK) {
+                serial_link_close(&serial);
+                set_serial(machine, SERIAL_NETWORK, NULL, &serial_plug_at);
+            }
+        }
         if (desktop_take_status(desktop, desktop_notice, sizeof desktop_notice)) {
             notice = desktop_notice;
             notice_left = NOTICE_SECONDS * 2;
@@ -1602,6 +1661,16 @@ int main(int argc, char **argv) {
         menu_set_enabled(MENU_FETCH_DOCUMENTS, desktop_free);
         menu_set_enabled(MENU_SYNC_NOW, desktop_free && settings.shared_folder[0]);
         menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
+        menu_set_enabled(MENU_SET_PROXY, desktop_free);
+        static const uint32_t LINK_SPEEDS[] = { 19200, 38400, 57600, 115200 };
+        bool speed_settable = desktop_free && machine_rom_system(machine) == MACHINE_BOARD_HP;
+        uint32_t link_baud = device_online ? machine_serial_baud(machine) : 0;
+        for (int baud_item = MENU_BAUD_19200; baud_item <= MENU_BAUD_115200; baud_item++) {
+            uint32_t speed = LINK_SPEEDS[baud_item - MENU_BAUD_19200];
+            menu_set_enabled(baud_item, speed_settable);
+            menu_set_checked(baud_item, link_baud && link_baud * 20 > speed * 19 && link_baud * 20 < speed * 21);
+        }
+        menu_set_checked(MENU_NETWORK_RAPI, settings.network_rapi != 0);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_enabled(MENU_BACKLIGHT, machine_has_backlight_button(machine));
         menu_set_enabled(MENU_MOUNT_DICTIONARY, machine_has_dictionary_slot(machine));

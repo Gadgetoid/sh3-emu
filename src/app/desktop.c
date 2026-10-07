@@ -151,7 +151,7 @@ static void run_load(desktop_t *desktop, rapi_t *rapi) {
 static void run_proxy(desktop_t *desktop, rapi_t *rapi) {
     rapi_version_t version = { 0 };
     if (!rapi_setup_proxy(rapi, true)) set_status(desktop, "%s", rapi_error(rapi));
-    else if (rapi_version(rapi, &version) && version.major >= 2) set_status(desktop, "Pocket IE uses the web proxy after a soft reset");
+    else if (rapi_version(rapi, &version) && version.major >= 2) set_status(desktop, "Pocket IE uses the web proxy the next time it starts");
     else set_status(desktop, "Pocket IE uses the web proxy from its next start");
 }
 

@@ -3,6 +3,7 @@ HEADLESS  = headless
 SH3RUN    = sh3-run
 RAPI_TOOL = sh3emu-rapi
 GATEWAYCHECK = $(BUILD)/gateway-check
+PROXYCHECK = proxycheck
 APP       = SH3Emu.app
 BUILD     = build
 ROM      ?= rom/nk-hp320lx.bin
@@ -35,9 +36,16 @@ SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
 endif
 
 ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
-SRC_NET   = src/net/net_gateway.c src/net/web_proxy_none.c src/net/serial_link.c
+SRC_NET   = src/net/net_gateway.c src/net/serial_link.c
 CFLAGS   += $(shell pkg-config --cflags slirp)
 NET_LIBS  = $(shell pkg-config --libs slirp)
+ifeq ($(shell pkg-config --exists libcurl && echo yes),yes)
+SRC_NET  += src/net/web_proxy.c src/net/web_image.c src/vendor/image.c src/vendor/svg.c
+CFLAGS   += $(shell pkg-config --cflags libcurl)
+NET_LIBS += $(shell pkg-config --libs libcurl)
+else
+SRC_NET  += src/net/web_proxy_none.c
+endif
 else
 SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_link.c
 endif
@@ -58,7 +66,10 @@ $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS) $(NET_LIBS)
 
 $(GATEWAYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
-	$(CC) -o $@ $^ $(NET_LIBS)
+	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
+
+$(PROXYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/proxy_check.o
+	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
 	$(CC) -o $@ $^
@@ -103,13 +114,13 @@ app: $(PROG) $(RAPI_TOOL) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh $(APP)
 
 clean:
-	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL) $(APP)
+	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL) $(PROXYCHECK) $(APP)
 
 .PHONY: all run clean test check app icons sh3-fuzz FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/sh3emu_rapi.d
 
-check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK)
+check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK) $(PROXYCHECK)
 	sh tests/check.sh
 	$(GATEWAYCHECK)
 

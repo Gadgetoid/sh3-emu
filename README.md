@@ -71,6 +71,12 @@ sh3emu-rapi --help
 
 In `sh3emu`, the PC Link menu uses it: Send Files to Device copies files into `\My Documents`, and Copy My Documents to Mac (or Computer) copies `\My Documents`, with its folders, into a host folder. Shared Folder pairs a host folder with `\My Documents` and syncs them each time the device connects, or with Sync Shared Folder Now: a file changed on one side is copied to the other, and a file deleted on one side and unchanged on the other since the last sync is deleted there too. Dropping files on the window sends them, and dropping an H/PC Explorer `.load` script installs it. The RAPI socket is `rapi.sock` in the data folder, which `sh3emu-rapi` uses by default.
 
+PC Link > Device Settings changes the device over RAPI:
+
+- Set Up Pocket IE Proxy points Pocket IE at the emulator's web proxy, 10.0.2.4 port 8080, from the next time Pocket IE starts (`sh3emu-rapi proxy on` does the same). The proxy fetches pages on the host with libcurl, over HTTPS too, and turns pages and images into something Pocket IE 2.0 can show: it strips scripts and styles, and converts PNG, JPEG and SVG images to GIF. It's built when libcurl is there. Pocket IE won't send the device's own address, 127.0.0.1, to a proxy, so use a name or the host's address.
+- RAPI over the Network also offers RAPI on TCP port 9990 on all interfaces, for `sh3emu-rapi --connect=HOST:9990` from another computer, and says the address.
+- Connection Speed picks the HP 320LX's desktop connection, from 19200 to 115200 baud (`sh3emu-rapi baud`); the emulator then unplugs and replugs the cable so CE dials at the new speed. The Casio A-51's CE 1.01 ignores the speed in a new connection entry and stays at 19200, so it's only offered on the HP.
+
 `sh3emu-rapi` also copies folders, reads and writes the registry, starts programs, syncs a folder, and runs H/PC Explorer `.load` install scripts (taking the `.sh3` build where there is one). Paths are relative to `\My Documents` unless they start with `/` or `\`.
 
 Devices > Serial Port can instead connect COM1 to a pseudo-terminal (its name is in the notice and on stderr) or to a host serial port, for a real desktop or another program at the other end. A host port follows CE's baud rate. `headless --pty[=SECONDS]` does the pseudo-terminal, naming it on stderr.
