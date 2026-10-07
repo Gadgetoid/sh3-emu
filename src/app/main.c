@@ -809,12 +809,26 @@ static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
     return true;
 }
 
+static screen_size_t rom_screen(const char *path, screen_size_t preferred) {
+    struct stat info;
+    uint32_t screens = 0;
+    if (stat(path, &info) != 0 || !cached_rom_system(path, &info, &screens)) return preferred;
+    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
+        if (SCREEN_PRESETS[i].width == preferred.width && SCREEN_PRESETS[i].height == preferred.height && (screens & (1u << i))) return preferred;
+    }
+    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
+        if (screens & (1u << i)) return SCREEN_PRESETS[i];
+    }
+    return preferred;
+}
+
 static void migrate_profiles(profiles_t *profiles, const rom_set_t *roms, const settings_t *settings, const char *folder) {
     for (int system = MACHINE_BOARD_ODO; system < MACHINE_BOARD_COUNT; system++) {
         if (!roms->path[system][0]) continue;
         profile_t profile = { .memory = settings->memory, .screen = settings->screen, .host_time = settings->host_time != 0 };
         snprintf(profile.name, sizeof profile.name, "%s", machine_board_name(system));
         snprintf(profile.rom, sizeof profile.rom, "%s", roms->path[system]);
+        profile.screen = rom_screen(profile.rom, settings->screen);
         if (!legacy_state_path(profile.rom, profile.state, sizeof profile.state)) continue;
         profile_make_unique(profiles, &profile, folder);
         profile_save(&profile, folder);
