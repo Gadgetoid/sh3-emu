@@ -29,6 +29,10 @@
 #define OP_RTS             0x000Bu
 #define OP_NOP             0x0009u
 #define ROM_HEADER_SIZE    0x54u
+#define ROM_DUMP_MIN_SPAN  0x100000u
+#define ROM_DUMP_MAX_MODULES 1024u
+#define KSEG0_BASE         0x80000000u
+#define KSEG1_BASE         0xA0000000u
 
 #define HKEEP_PA           0x04000000u
 #define HKEEP_END          0x08000000u
@@ -775,11 +779,29 @@ static void casio_power_key(machine_t *m) {
     m->cpu.sleeping = false;
 }
 
-static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfirst) {
-    for (size_t offset = 0; offset + ROM_HEADER_SIZE <= size; offset += 4) {
-        uint32_t first = read_le32(image + offset + 8), last = read_le32(image + offset + 12);
-        if (last - first == size && !(first & 0xFFFu)) {
-            *physfirst = first;
+static bool kernel_address(uint32_t address) {
+    uint32_t segment = address & ~AREA_MASK;
+    return segment == KSEG0_BASE || segment == KSEG1_BASE;
+}
+
+static bool rom_header_at(const uint8_t *image, size_t offset, size_t size, bool exact) {
+    const uint8_t *header = image + offset;
+    uint32_t first = read_le32(header + 8), last = read_le32(header + 12);
+    if (exact && last - first != size) return false;
+    uint32_t dll_first = read_le32(header), dll_last = read_le32(header + 4), modules = read_le32(header + 16);
+    uint32_t ram_start = read_le32(header + 20), ram_free = read_le32(header + 24), ram_end = read_le32(header + 28);
+    uint32_t span = last - first;
+    return kernel_address(first) && !(first & AREA_MASK) && span >= ROM_DUMP_MIN_SPAN && span <= size && offset + ROM_HEADER_SIZE <= span &&
+           dll_first < dll_last && modules && modules <= ROM_DUMP_MAX_MODULES &&
+           kernel_address(ram_start) && ram_start <= ram_free && ram_free < ram_end;
+}
+
+static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfirst, size_t *span) {
+    for (int exact = 1; exact >= 0; exact--) {
+        for (size_t offset = 0; offset + ROM_HEADER_SIZE <= size; offset += 4) {
+            if (!rom_header_at(image, offset, size, exact)) continue;
+            *physfirst = read_le32(image + offset + 8);
+            *span = read_le32(image + offset + 12) - *physfirst;
             return true;
         }
     }
@@ -788,7 +810,8 @@ static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfir
 
 static bool load_flash(machine_t *m, char *error, size_t error_size) {
     uint32_t physfirst;
-    if (m->image_size > FLASH_SIZE || !find_rom_header(m->image, m->image_size, &physfirst) || (physfirst & AREA_MASK) + m->image_size > FLASH_SIZE) {
+    size_t span;
+    if (!find_rom_header(m->image, m->image_size, &physfirst, &span) || (physfirst & AREA_MASK) + span > FLASH_SIZE) {
         snprintf(error, error_size, "not a B000FF (nk.bin) image or a ROM image");
         return false;
     }
@@ -798,7 +821,7 @@ static bool load_flash(machine_t *m, char *error, size_t error_size) {
         return false;
     }
     memset(m->flash, 0xFF, FLASH_SIZE);
-    memcpy(m->flash + (physfirst & AREA_MASK), m->image, m->image_size);
+    memcpy(m->flash + (physfirst & AREA_MASK), m->image, span);
     m->entry = RESET_VECTOR;
     return true;
 }

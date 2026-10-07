@@ -1,12 +1,32 @@
 # sh3-emu
 
-An emulator for Windows CE on the Hitachi SH-3, for testing an SH3 port of a Windows CE toolchain. It's a hard fork of velo-emu, the Philips Velo 1 (MIPS) emulator, with the MIPS core replaced by an SH-3 core and the Velo board by Microsoft's Odo reference board with the SH3 CPU module.
+An emulator for Windows CE machines built on the Hitachi SH-3. It runs Microsoft's Odo reference board with Platform Builder images of CE 2.11 and 2.12, and the ROMs of three devices: the Clarion AutoPC, the Casio Cassiopeia A-51 and the HP 320LX. It has a simulated LCD, PC Card images, a PPP network, a host folder over PPFS and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
 
-It boots Windows CE 2.12 (beta) and 2.11 images built from Platform Builder for Odo SH3 to their shells, with the 480x240 2 bpp display, PS/2 keyboard and touch panel working. It runs as `headless` for tests and scripts, or in a window as `sh3emu`.
+![Odo SH3 desktop, CE 2.12](docs/screenshots/odo-desktop.png)
+![HP 320LX World Clock, CE 2.0](docs/screenshots/hp-320lx.png)
+![Casio Cassiopeia A-51 time zone, CE 1.01](docs/screenshots/casio-a51.png)
+![Clarion AutoPC faceplate](docs/screenshots/autopc-faceplate.png)
 
-## ROMs
+## Install
 
-No ROMs are included. The image to use is `odo-sh3-ce212.bin`, built by `tools/image/build.sh` from Platform Builder 2.12 beta for the Odo platform, SH3, MAXALL: the H/PC Explorer shell, Pocket Word, Pocket IE and Inbox, PPFS, the PC Card and CompactFlash drivers, serial and PPP with a dialer that keeps a connection up (see [Network](#network)), velo-toolchain's debugmgr as `\Windows\velo-debugmgr.exe`, a preset touch calibration (no calibration screen), and optionally some third-party SH3 apps under Start > Programs. Put it (or a symlink) at `rom/odo-sh3-ce212.bin`.
+- **macOS (Apple silicon):** `SH3Emu.app`, from a release or `make app`. It isn't notarised: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine SH3Emu.app`.
+- **Debian 13 and Ubuntu:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu` and `sh3emu-headless`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
+- **From source:** see Building.
+
+## Supported ROMs
+
+No ROMs are included. Put them in the `roms` folder of the data folder (see GUI) and make a machine with Machine > New Machine, or pass one on the command line. The board is picked from the ROM's contents. A raw flash dump can be the whole chip or end at the ROM header's `physlast`:
+
+| Machine | ROM | CE | Working |
+|---|---|---|---|
+| Odo SH3 | a Platform Builder `nk.bin` for Odo SH3 (see [Odo images](#odo-images)) | 2.11, 2.12 beta | desktop, keyboard, touch, PC Card, PPFS, PPP, GDB |
+| Clarion AutoPC | `BurnOS.bin`, the AutoPC's flash update OS | Auto PC (CE 2.0) | the update's prompts on the faceplate, Enter |
+| Casio Cassiopeia A-51 | a raw dump of its flash | 1.01 (Japanese) | desktop, keyboard, touch, PC Card |
+| HP 320LX | a raw dump of its flash | 2.0 | setup wizard, keyboard, touch, suspend and resume |
+
+## Odo images
+
+The Odo image to use is `odo-sh3-ce212.bin`, built by `tools/image/build.sh` from Platform Builder 2.12 beta for the Odo platform, SH3, MAXALL: the H/PC Explorer shell, Pocket Word, Pocket IE and Inbox, PPFS, the PC Card and CompactFlash drivers, serial and PPP with a dialer that keeps a connection up (see [Network](#network)), velo-toolchain's debugmgr as `\Windows\velo-debugmgr.exe`, a preset touch calibration (no calibration screen), and optionally some third-party SH3 apps under Start > Programs. Put it (or a symlink) at `rom/odo-sh3-ce212.bin`.
 
 ```
 VELO_TOOLCHAIN=velo-toolchain VELO_SH3_LLVM=llvm guest/build.sh
@@ -109,7 +129,7 @@ The faceplate keys are a 5x6 matrix the faceplate driver scans over the link. PS
 
 ## Casio Cassiopeia A-51
 
-A raw ROM image (not B000FF) without `hplib.dll` runs on a Casio Cassiopeia A-51 board: the Japanese Windows CE 1.01 H/PC. The image is mapped as flash at physical 0 and the CPU starts at the reset vector, as on the device. The one tested is `nk-a51-ce1.01.bin` (sha256 `d9fad038ec4f3349a0e3767244fb40122d9e2088c9269e2fdc838a11f5192d3b`), the device's 16 MB flash from 0 to the ROM header's `physlast`; `make test` uses it from `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard and on to the desktop, with the keyboard, the touch panel and the PC Card slot working: `--card` puts a CompactFlash card image in the slot, which CE mounts as `\Storage Card`. The AC adapter is reported as plugged in, so CE doesn't ask before using a card on battery. A cold boot waits in standby for the ON key, as the device does after its batteries go in; the emulator presses it.
+A raw ROM image (not B000FF) without `hplib.dll` runs on a Casio Cassiopeia A-51 board: the Japanese Windows CE 1.01 H/PC. The image is mapped as flash at physical 0 and the CPU starts at the reset vector, as on the device. The one tested is `nk-a51-ce1.01.bin` (sha256 `d9fad038ec4f3349a0e3767244fb40122d9e2088c9269e2fdc838a11f5192d3b`), the device's 16 MB flash from 0 to the ROM header's `physlast` (the whole 16 MB also runs); `make test` uses it from `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard and on to the desktop, with the keyboard, the touch panel and the PC Card slot working: `--card` puts a CompactFlash card image in the slot, which CE mounts as `\Storage Card`. The AC adapter is reported as plugged in, so CE doesn't ask before using a card on battery. A cold boot waits in standby for the ON key, as the device does after its batteries go in; the emulator presses it.
 
 ```
 ./headless rom/nk-a51-ce1.01.bin --seconds=20 --debug-output --png=wizard.png
@@ -126,7 +146,7 @@ The keyboard is a 9x8 matrix. PS/2 keys map to it by position, with the Japanese
 
 ## HP 320LX
 
-A raw ROM image containing `hplib.dll` runs on an HP 320LX board: the Windows CE 2.0 H/PC with an SH7709. The one tested is `nk-hp320lx.bin` (sha256 `d675014fcd73bd8a3842e97142b153a27b2eb71cce436d77ddb3b04c50f50016`), the first `physlast` bytes of a full dump; `make test` uses it from `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard, with the keyboard and the touch panel working. There's no PC Card yet.
+A raw ROM image containing `hplib.dll` runs on an HP 320LX board: the Windows CE 2.0 H/PC with an SH7709. The one tested is `nk-hp320lx.bin` (sha256 `d675014fcd73bd8a3842e97142b153a27b2eb71cce436d77ddb3b04c50f50016`), the first `physlast` bytes of a full 32 MB dump, which also runs as it is; `make test` uses it from `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard, with the keyboard and the touch panel working. There's no PC Card yet.
 
 ```
 ./headless rom/nk-hp320lx.bin --seconds=45 --key=20.5:5A --key=22:5A --tap=24:320:120:1.5 --tap=27:128:48:1.5 --tap=30:128:192:1.5 \
