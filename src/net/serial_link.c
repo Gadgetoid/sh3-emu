@@ -115,6 +115,11 @@ static void follow_baud(serial_link_t *link, machine_t *machine) {
     cfsetospeed(&settings, speed_for(baud));
     tcsetattr(link->fd, TCSANOW, &settings);
     link->baud = baud;
+    if (link->log) {
+        char message[320];
+        snprintf(message, sizeof message, "serial: %s at %u baud\n", link->name, baud);
+        link->log(message);
+    }
 }
 
 static void pump_network(serial_link_t *link, machine_t *machine) {
@@ -165,6 +170,11 @@ static int compare_names(const void *a, const void *b) {
 }
 
 int serial_link_ports(char ports[][SERIAL_LINK_PORT_NAME], int max) {
+#ifdef __ANDROID__
+    (void)ports;
+    (void)max;
+    return 0;
+#endif
     DIR *dev = opendir("/dev");
     if (!dev) return 0;
     int count = 0;

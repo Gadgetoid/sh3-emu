@@ -468,7 +468,7 @@ size_t sh7709_receive_room(const sh7709_t *chip, int port) {
 uint32_t sh7709_baud(const sh7709_t *chip, int port) {
     const sh7709_serial_t *serial = serial_port(chip, port);
     if (!serial) return 0;
-    uint32_t divider = 64u << (2 * (serial->mode & SMR_CKS));
+    uint32_t divider = (port == 0 ? 64u : 32u) << (2 * (serial->mode & SMR_CKS));
     return chip->peripheral_hz / (divider * ((uint32_t)serial->bit_rate + 1));
 }
 

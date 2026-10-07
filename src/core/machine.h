@@ -9,7 +9,6 @@
 #include "core/screen.h"
 
 #define MACHINE_CLOCK_HZ      58982400u
-#define MACHINE_PERIPHERAL_HZ 14745600u
 #define MACHINE_WATCH_MAX     4
 
 typedef struct machine machine_t;

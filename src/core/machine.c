@@ -23,7 +23,7 @@
 #define P4_ROUTINES_END    0xE0010000u
 #define STBCR_STANDBY      0x80u
 #define SCANCODE_BACKLIGHT 0x5E
-#define CASIO_TIMER_HZ     (MACHINE_PERIPHERAL_HZ / 16)
+#define CASIO_TIMER_HZ     (CASIO_PERIPHERAL_HZ / 16)
 #define OP_RTS             0x000Bu
 #define OP_NOP             0x0009u
 #define ROM_HEADER_SIZE    0x54u
@@ -489,7 +489,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     if (keep_ram) {
         sh7709_reset(&m->chip);
     } else {
-        sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
+        sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, m->hp ? HP320LX_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ);
         sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
         if (m->host_clock) apply_host_time(m);
     }
