@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "app/desktop.h"
 #include "app/dialog.h"
 #include "app/menu.h"
 #include "app/profiles.h"
@@ -19,6 +20,7 @@
 #include "core/lcd.h"
 #include "core/machine.h"
 #include "net/serial_link.h"
+#include "rapi/rapi.h"
 #include "util/file.h"
 #include "util/options.h"
 #include "util/png.h"
@@ -33,7 +35,8 @@
 
 #define WINDOW_SCALE     2
 #define IDLE_FRAME_NS    (SDL_NS_PER_SECOND / 60)
-#define NETWORK_REPLUG_MS 2000
+#define CABLE_REPLUG_SECONDS 2
+#define CABLE_BOOT_SECONDS   20
 #define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
@@ -183,6 +186,12 @@ static gdb_t *debugger;
 static agent_t *agent;
 static serial_link_t serial;
 
+static uint64_t cable_plug_time(machine_t *machine) {
+    uint64_t replug = machine_cycles(machine) + CABLE_REPLUG_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
+    uint64_t booted = CABLE_BOOT_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
+    return replug > booted ? replug : booted;
+}
+
 static const char *set_serial(machine_t *machine, serial_mode_t mode, const char *device, uint64_t *plug_at) {
     machine_serial_connect(machine, false);
     *plug_at = 0;
@@ -192,7 +201,7 @@ static const char *set_serial(machine_t *machine, serial_mode_t mode, const char
         if (failure) return failure;
         if (mode == SERIAL_PTY) fprintf(stderr, "serial: COM1 on %s\n", serial.name);
     }
-    if (mode != SERIAL_OFF) *plug_at = SDL_GetTicks() + NETWORK_REPLUG_MS;
+    if (mode != SERIAL_OFF) *plug_at = cable_plug_time(machine);
     return NULL;
 }
 
@@ -269,7 +278,7 @@ static void release_keys(input_queue_t *input, machine_t *machine, bool *held, i
     }
 }
 
-typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD } pick_kind_t;
+typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_SEND, PICK_FETCH, PICK_SHARED } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -314,19 +323,30 @@ static bool is_directory(const char *path) {
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
 }
 
-static const char *handle_drop(dropped_t *dropped, machine_t *machine) {
+static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t *desktop, bool online) {
     static char message[1200];
-    const char *card = NULL;
-    int files = 0;
+    int files = 0, scripts = -1, cards = -1;
+    const char *list[PICK_MAX + 1];
     for (int i = 0; i < dropped->count; i++) {
-        if (is_directory(dropped->paths[i])) continue;
-        files++;
-        if (!card && has_extension(dropped->paths[i], ".img")) card = dropped->paths[i];
+        const char *path = dropped->paths[i];
+        if (is_directory(path)) continue;
+        if (has_extension(path, ".img") && cards < 0) cards = i;
+        else if (has_extension(path, ".load") && scripts < 0) scripts = i;
+        list[files++] = path;
     }
+    list[files] = NULL;
     dropped->count = 0;
-    if (!card || files != 1) return "drop a card image (.img)";
-    snprintf(message, sizeof message, machine_insert_card(machine, card) ? "inserted %s" : "could not open %s", file_leaf_name(card));
-    return message;
+    if (cards >= 0 && files == 1) {
+        snprintf(message, sizeof message, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", file_leaf_name(list[0]));
+        return message;
+    }
+    if (!files) return "drop files, a .load script or a card image";
+    if (!online) return "connect Devices > Serial Port > Network (PPP) to send files to the device";
+    if (scripts >= 0) {
+        snprintf(message, sizeof message, "installing %s", file_leaf_name(dropped->paths[scripts]));
+        return desktop_load(desktop, dropped->paths[scripts]) ? message : "busy with the last transfer";
+    }
+    return desktop_send(desktop, list) ? "sending to \\My Documents" : "busy with the last transfer";
 }
 
 static void log_message(const char *message) {
@@ -510,6 +530,7 @@ typedef struct {
     uint32_t display;
     uint32_t serial;
     char     serial_device[SERIAL_LINK_PORT_NAME];
+    char     shared_folder[1024];
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -566,6 +587,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "network=%u", &value) == 1) settings.serial = value ? SERIAL_NETWORK : SERIAL_OFF;
         else if (sscanf(line, "serial=%u", &value) == 1 && value <= SERIAL_DEVICE) settings.serial = value;
         else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
+        else if (!strncmp(line, "shared_folder=", 14)) copy_setting(settings.shared_folder, sizeof settings.shared_folder, line + 14);
     }
     fclose(file);
     return settings;
@@ -576,9 +598,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device);
+            settings->serial, settings->serial_device, settings->shared_folder);
     fclose(file);
 }
 
@@ -1132,6 +1154,11 @@ int main(int argc, char **argv) {
     static char ports[SERIAL_PORT_MAX][SERIAL_LINK_PORT_NAME];
     int port_count = 0;
     serial_link_init(&serial, NULL);
+    static char rapi_socket[1024], sync_manifest[1024];
+    char desktop_notice[256], shared_notice[1200];
+    if (rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket)) serial.options.rapi_socket = rapi_socket;
+    rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
+    desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
     const char *serial_failure = set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
     if (serial_failure) {
         fprintf(stderr, "sh3emu: %s\n", serial_failure);
@@ -1188,7 +1215,7 @@ int main(int argc, char **argv) {
                 break;
             case SDL_EVENT_DROP_COMPLETE:
                 if (dropped.count) {
-                    notice = handle_drop(&dropped, machine);
+                    notice = handle_drop(&dropped, machine, desktop, serial.gateway && net_gateway_online(serial.gateway) && !desktop_busy(desktop));
                     notice_left = NOTICE_SECONDS * 2;
                 }
                 break;
@@ -1241,7 +1268,11 @@ int main(int argc, char **argv) {
                 power_release_at = machine_cycles(machine) + (uint64_t)(POWER_PRESS_SECONDS * MACHINE_CLOCK_HZ);
                 break;
             case MENU_PAUSE: paused = !paused; break;
-            case MENU_SOFT_RESET: machine_soft_reset(machine); break;
+            case MENU_SOFT_RESET:
+                machine_soft_reset(machine);
+                set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
+                if (serial_plug_at) serial_plug_at = machine_cycles(machine) + CABLE_BOOT_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
+                break;
             case MENU_NEW_MACHINE: {
                 static dialog_rom_t rom_list[32];
                 int rom_count = list_roms(rom_list, 32);
@@ -1423,6 +1454,25 @@ int main(int argc, char **argv) {
                 notice = "card ejected";
                 notice_left = NOTICE_SECONDS;
                 break;
+            case MENU_SEND_FILES:
+                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
+                break;
+            case MENU_FETCH_DOCUMENTS:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
+                break;
+            case MENU_SHARED_FOLDER:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
+                break;
+            case MENU_SYNC_NOW:
+                desktop_sync(desktop, settings.shared_folder);
+                break;
+            case MENU_STOP_SHARING:
+                snprintf(shared_notice, sizeof shared_notice, "stopped sharing %s", file_leaf_name(settings.shared_folder));
+                settings.shared_folder[0] = 0;
+                settings_save(&settings);
+                notice = shared_notice;
+                notice_left = NOTICE_SECONDS;
+                break;
             }
         }
         if (switch_to >= 0 && switch_to < profiles.count && switch_to != current_index) {
@@ -1472,6 +1522,20 @@ int main(int argc, char **argv) {
                 snprintf(snapshot_notice, sizeof snapshot_notice, saved ? "saved snapshot %s" : "could not save %s", file_leaf_name(path));
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
+            } else if (picked->kind == PICK_SEND) {
+                const char *files[PICK_MAX + 1];
+                for (int i = 0; i < picked->count; i++) files[i] = picked->paths[i];
+                files[picked->count] = NULL;
+                desktop_send(desktop, files);
+            } else if (picked->kind == PICK_FETCH) {
+                desktop_fetch(desktop, picked->paths[0]);
+            } else if (picked->kind == PICK_SHARED) {
+                snprintf(settings.shared_folder, sizeof settings.shared_folder, "%s", picked->paths[0]);
+                settings_save(&settings);
+                snprintf(shared_notice, sizeof shared_notice, "sharing %s with \\My Documents", file_leaf_name(settings.shared_folder));
+                notice = shared_notice;
+                notice_left = NOTICE_SECONDS * 2;
+                if (serial.gateway && net_gateway_online(serial.gateway)) desktop_sync(desktop, settings.shared_folder);
             } else if (picked->kind == PICK_LOAD_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 if (machine_state_matches(machine, picked->paths[0])) backup_machine(machine, state);
@@ -1487,7 +1551,18 @@ int main(int argc, char **argv) {
             free(picked);
             picked = NULL;
         }
+        bool device_online = serial.gateway && net_gateway_online(serial.gateway);
+        if (serial.gateway && net_gateway_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) desktop_sync(desktop, settings.shared_folder);
+        if (desktop_take_status(desktop, desktop_notice, sizeof desktop_notice)) {
+            notice = desktop_notice;
+            notice_left = NOTICE_SECONDS * 2;
+        }
+        bool desktop_free = device_online && !desktop_busy(desktop);
         menu_ensure();
+        menu_set_enabled(MENU_SEND_FILES, desktop_free);
+        menu_set_enabled(MENU_FETCH_DOCUMENTS, desktop_free);
+        menu_set_enabled(MENU_SYNC_NOW, desktop_free && settings.shared_folder[0]);
+        menu_set_enabled(MENU_STOP_SHARING, settings.shared_folder[0] != 0);
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
         menu_set_enabled(MENU_SERIAL_NETWORK, net_gateway_available());
         menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
@@ -1510,7 +1585,7 @@ int main(int argc, char **argv) {
             power_release_at = 0;
             machine_power_button(machine, false);
         }
-        if (serial_plug_at && SDL_GetTicks() >= serial_plug_at) {
+        if (serial_plug_at && machine_cycles(machine) >= serial_plug_at) {
             serial_plug_at = 0;
             machine_serial_connect(machine, true);
         }
@@ -1591,6 +1666,7 @@ int main(int argc, char **argv) {
     gdb_destroy(debugger);
     debugger = NULL;
     agent_destroy(agent);
+    desktop_destroy(desktop);
     serial_link_close(&serial);
     agent = NULL;
     SDL_DestroyMutex(runner.lock);

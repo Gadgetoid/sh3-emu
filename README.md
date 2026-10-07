@@ -56,7 +56,7 @@ The Casio A-51 (DSR on the board ASIC) and the HP 320LX (PH2 low, IRQ2) notice t
 ./headless rom/nk-hp320lx.bin --net=20 --seconds=40
 ```
 
-`--net=SECONDS` plugs the cable in at that time; after `--load`, the cable goes in 2 seconds after the start (and the GUI does the same on a state load or machine switch), so CE notices it was out and connects again rather than reusing a PPP session the new gateway doesn't have.
+CE only connects when it sees the cable go in once it's running, not when the cable is already in at boot. So `--net` plugs the cable in 20 seconds after a cold boot, and 2 seconds after `--load` (the GUI does the same, and after a soft reset, a state load or a machine switch), so CE notices it was out and connects again rather than reusing a PPP session the new gateway doesn't have. `--net=SECONDS` picks the time.
 
 The desktop then reaches the device with RAPI, CE's remote API, on its port 990. `headless --rapi=SOCKET` exposes it on a Unix socket (keep the path short), or `--rapi-port=PORT` on a TCP port on all interfaces, and `sh3emu-rapi` uses it, on both CE 1.01 and 2.0:
 
@@ -68,6 +68,8 @@ sh3emu-rapi --socket=/tmp/a51.sock ls
 sh3emu-rapi --socket=/tmp/a51.sock get notes.txt
 sh3emu-rapi --help
 ```
+
+In `sh3emu`, the PC Link menu uses it: Send Files to Device copies files into `\My Documents`, and Copy My Documents to Mac (or Computer) copies `\My Documents`, with its folders, into a host folder. Shared Folder pairs a host folder with `\My Documents` and syncs them each time the device connects, or with Sync Shared Folder Now: a file changed on one side is copied to the other, and a file deleted on one side and unchanged on the other since the last sync is deleted there too. Dropping files on the window sends them, and dropping an H/PC Explorer `.load` script installs it. The RAPI socket is `rapi.sock` in the data folder, which `sh3emu-rapi` uses by default.
 
 `sh3emu-rapi` also copies folders, reads and writes the registry, starts programs, syncs a folder, and runs H/PC Explorer `.load` install scripts (taking the `.sh3` build where there is one). Paths are relative to `\My Documents` unless they start with `/` or `\`.
 

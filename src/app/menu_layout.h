@@ -3,8 +3,10 @@
 
 #ifdef __APPLE__
 #define MENU_SCREENSHOT_PLACE "Desktop"
+#define MENU_HOST             "Mac"
 #else
 #define MENU_SCREENSHOT_PLACE "Pictures"
+#define MENU_HOST             "Computer"
 #endif
 
 typedef enum {
@@ -130,6 +132,15 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 14, "", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SERIAL_PORT_FIRST + 15, "", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
+    { MENU_ENTRY_END, 0, NULL, 0, 0 },
+
+    { MENU_ENTRY_MENU, 0, "PC Link", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SEND_FILES, "Send Files to Device" ELLIPSIS, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_FETCH_DOCUMENTS, "Copy My Documents to " MENU_HOST ELLIPSIS, 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SHARED_FOLDER, "Shared Folder" ELLIPSIS, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_SYNC_NOW, "Sync Shared Folder Now", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_STOP_SHARING, "Stop Sharing Folder", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
 };
 

@@ -149,10 +149,10 @@ static const option_t OPTIONS[] = {
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
-    [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 0 s, or 2 s after --load); CE dials it at boot", 0 },
+    [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the device's RAPI port on a Unix socket, for sh3emu-rapi --socket", 0 },
     [OPT_RAPI_PORT] = { "rapi-port", "PORT", "expose the device's RAPI port on this TCP port on all interfaces, for sh3emu-rapi --connect", 0 },
-    [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 0 s, or 2 s after --load)", 0 },
+    [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 20 s, or 2 s after --load)", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for agent clients", 0 },
@@ -355,7 +355,7 @@ int main(int argc, char **argv) {
         const char *failure = serial_link_open(&serial, run.net ? SERIAL_NETWORK : SERIAL_PTY, NULL);
         if (failure) { fprintf(stderr, "headless: %s\n", failure); return 1; }
         if (run.pty) fprintf(stderr, "serial: COM1 on %s\n", serial.name);
-        if (run.net_at < 0) run.net_at = run.load ? 2 : 0;
+        if (run.net_at < 0) run.net_at = run.load ? 2 : 20;
         machine_serial_connect(machine, false);
     }
     if (run.gdb_process && !run.gdb_port) {
