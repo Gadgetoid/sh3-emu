@@ -1,6 +1,6 @@
 #!/bin/sh
 set -e
-version=${SDL_VERSION:-3.4.18}
+version=${SDL_VERSION:-3.4.16}
 prefix=${1:-$PWD/build/sdl3}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
