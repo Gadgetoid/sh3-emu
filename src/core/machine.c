@@ -131,7 +131,9 @@
 #define SERIAL_RX_RING     0x1000u
 #define SERIAL_FIFO        16384
 #define SERIAL_BYTES_PER_TICK 12
-#define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / 1000)
+#define SERIAL_TICKS_PER_SECOND 1000u
+#define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / SERIAL_TICKS_PER_SECOND)
+#define SERIAL_BITS_PER_BYTE 10u
 
 #define KB_RDRF            0x0001u
 #define KB_CLK_EN          0x8000u
@@ -344,6 +346,11 @@ static void update_product_serial_interrupt(machine_t *m) {
 }
 
 static void set_serial_lines(machine_t *m) {
+    if (m->hp) {
+        sh7709_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, m->serial_connected ? 0 : HP320LX_SERIAL_NO_CABLE);
+        sh7709_set_irq(&m->chip, HP320LX_SERIAL_IRQ, m->serial_connected);
+        return;
+    }
     p2_serial_t *serial = &m->serial[1];
     uint16_t lines = (uint16_t)(SERA_RI | (m->serial_connected ? 0 : SERA_DSR | SERA_CTS | SERA_CD));
     if ((serial->csr_a & SERA_LINES) == lines) return;
@@ -384,10 +391,21 @@ static void product_serial_receive(machine_t *m) {
     update_product_serial_interrupt(m);
 }
 
+static void onchip_serial_receive(machine_t *m) {
+    uint32_t per_tick = sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF) / SERIAL_BITS_PER_BYTE / SERIAL_TICKS_PER_SECOND;
+    if (!per_tick) per_tick = 1;
+    while (per_tick-- && m->serial_rx_count && sh7709_receive_room(&m->chip, HP320LX_SERIAL_SCIF)) {
+        sh7709_receive(&m->chip, HP320LX_SERIAL_SCIF, m->serial_rx[m->serial_rx_head]);
+        m->serial_rx_head = (m->serial_rx_head + 1) % SERIAL_FIFO;
+        m->serial_rx_count--;
+    }
+}
+
 static void serial_tick_event(machine_t *m) {
     if (m->cpu.cycles < m->serial_tick_at) return;
     m->serial_tick_at = m->cpu.cycles + SERIAL_TICK_CYCLES;
-    product_serial_receive(m);
+    if (m->hp) onchip_serial_receive(m);
+    else product_serial_receive(m);
 }
 
 static void serial_write(machine_t *m, p2_serial_t *serial, int slot, uint32_t offset, uint16_t value) {
@@ -752,9 +770,12 @@ static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     return NULL;
 }
 
-static void casio_transmit(void *context, int port, uint8_t byte) {
+static void onchip_transmit(void *context, int port, uint8_t byte) {
     machine_t *m = context;
-    (void)port;
+    if (m->hp && port == HP320LX_SERIAL_SCIF) {
+        if (m->serial_connected && m->serial_tx_count < SERIAL_FIFO) m->serial_tx[m->serial_tx_count++] = byte;
+        return;
+    }
     debug_character(m, &m->sci_line, byte);
 }
 
@@ -984,10 +1005,9 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
         sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_LUKE, HP320LX_MODEL_LUKE);
-        sh7709_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, HP320LX_SERIAL_NO_CABLE);
     }
     if (m->raw) {
-        m->chip.transmit = casio_transmit;
+        m->chip.transmit = onchip_transmit;
         m->chip.transmit_context = m;
     }
     if (m->hp) {
@@ -1262,7 +1282,14 @@ void machine_serial_connect(machine_t *m, bool connected) {
 
 bool machine_serial_connected(machine_t *m) { return m->serial_connected; }
 
-bool machine_serial_dtr(machine_t *m) { return (m->serial[1].csr_b & SERB_DTR) != 0; }
+bool machine_serial_dtr(machine_t *m) {
+    if (m->hp) return !(m->chip.ports[HP320LX_SERIAL_CONTROL_PORT] & HP320LX_SERIAL_DTR);
+    return (m->serial[1].csr_b & SERB_DTR) != 0;
+}
+
+uint32_t machine_serial_baud(machine_t *m) {
+    return m->hp ? sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF) : 0;
+}
 
 size_t machine_serial_space(machine_t *m) { return SERIAL_FIFO - m->serial_rx_count; }
 
@@ -1524,7 +1551,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
     cfcard_rebind(&m->card_slot, image);
     if (!image) m->card_path[0] = 0;
-    m->chip.transmit = m->raw ? casio_transmit : NULL;
+    m->chip.transmit = m->raw ? onchip_transmit : NULL;
     m->chip.transmit_context = m->raw ? m : NULL;
     m->chip.ports_written = m->hp ? hp_ports_written : NULL;
     sh3_flush_translations(&m->cpu);

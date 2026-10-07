@@ -8,6 +8,7 @@
 #define INTC_BASE   0xFFFFFEE0u
 #define ICR0_NMIL   0x8000u
 #define STBCR_STBY  0x80u
+#define ICR1_LEVEL  2u
 #define PCC_NO_CARD 0x0Cu
 #define BSC_BASE    0xFFFFFF60u
 #define CPG_BASE    0xFFFFFF80u
@@ -45,6 +46,8 @@
 #define SCIF_BRK  0x10u
 #define SCIF_RDF  0x02u
 #define SCIF_DR   0x01u
+#define SCIF_FIFO 16u
+#define SMR_CKS   0x03u
 
 #define ADCSR_ADF   0x80u
 #define ADCSR_ADIE  0x40u
@@ -428,6 +431,26 @@ void sh7709_receive(sh7709_t *chip, int port, uint8_t byte) {
     sh7709_update_interrupts(chip);
 }
 
+static const sh7709_serial_t *serial_port(const sh7709_t *chip, int port) {
+    if (port == 0) return &chip->sci;
+    if (port <= 2) return &chip->scif[port - 1];
+    return NULL;
+}
+
+size_t sh7709_receive_room(const sh7709_t *chip, int port) {
+    const sh7709_serial_t *serial = serial_port(chip, port);
+    if (!serial) return 0;
+    if (port == 0) return (serial->status & SCI_RDRF) ? 0 : 1;
+    return serial->received_count < SCIF_FIFO ? SCIF_FIFO - serial->received_count : 0;
+}
+
+uint32_t sh7709_baud(const sh7709_t *chip, int port) {
+    const sh7709_serial_t *serial = serial_port(chip, port);
+    if (!serial) return 0;
+    uint32_t divider = 64u << (2 * (serial->mode & SMR_CKS));
+    return chip->peripheral_hz / (divider * ((uint32_t)serial->bit_rate + 1));
+}
+
 void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second) {
     chip->rtc_counter[RTC_SECOND] = to_bcd(second);
     chip->rtc_counter[RTC_MINUTE] = to_bcd(minute);
@@ -622,9 +645,17 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     return true;
 }
 
+static uint32_t level_sensed(const sh7709_t *chip) {
+    uint32_t lines = 0;
+    for (int line = 0; line < 6; line++) {
+        if (((chip->icr1 >> (line * 2)) & 3) >= ICR1_LEVEL) lines |= 1u << line;
+    }
+    return lines;
+}
+
 static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     switch (offset) {
-        case 0x004: chip->irr0 &= (uint8_t)(value | chip->irq_lines); return true;
+        case 0x004: chip->irr0 &= (uint8_t)(value | (chip->irq_lines & level_sensed(chip))); return true;
         case 0x006: chip->irr1 &= (uint8_t)value; return true;
         case 0x008: chip->irr2 &= (uint8_t)value; return true;
         case 0x010: chip->icr1 = (uint16_t)value; return true;

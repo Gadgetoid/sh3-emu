@@ -93,6 +93,8 @@ void sh7709_set_irl(sh7709_t *chip, uint32_t level);
 void sh7709_set_irq(sh7709_t *chip, int line, bool asserted);
 void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code);
 void sh7709_receive(sh7709_t *chip, int port, uint8_t byte);
+size_t sh7709_receive_room(const sh7709_t *chip, int port);
+uint32_t sh7709_baud(const sh7709_t *chip, int port);
 void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second);
 void sh7709_add_seconds(sh7709_t *chip, uint32_t seconds);
 uint32_t sh7709_timer_count(sh7709_t *chip, int index);
