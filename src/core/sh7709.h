@@ -74,6 +74,7 @@ typedef struct {
     uint32_t ccr, ccr2;
     uint16_t ports[64];
     uint8_t  pcc[16];
+    uint32_t scif_alias, scif_alias_priority;
     uint16_t port_input_mask[64], port_input[64];
 
     uint8_t  adc_control, adc_config;
@@ -93,6 +94,7 @@ void sh7709_set_irl(sh7709_t *chip, uint32_t level);
 void sh7709_set_irq(sh7709_t *chip, int line, bool asserted);
 void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code);
 void sh7709_receive(sh7709_t *chip, int port, uint8_t byte);
+void sh7709_set_scif_alias(sh7709_t *chip, uint32_t pa, uint32_t priority);
 size_t sh7709_receive_room(const sh7709_t *chip, int port);
 uint32_t sh7709_baud(const sh7709_t *chip, int port);
 void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second);

@@ -11,6 +11,8 @@
 #define CASIO_TIMERS        2
 #define CASIO_VRAM_SIZE     0x20000
 #define CASIO_KEY_ROWS      9
+#define CASIO_SCIF_PA       0xFFFFFE70u
+#define CASIO_SCIF_PORT     2
 
 typedef void (*casio_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef uint64_t (*casio_cycles_fn)(void *context);
@@ -48,6 +50,8 @@ typedef struct {
     uint32_t scans;
     bool     powered_on;
     bool     pen_down;
+    bool     dsr;
+    uint16_t serial_flags;
     uint16_t pen_x, pen_y;
     uint16_t latched_requests;
 } casio_t;
@@ -58,6 +62,9 @@ bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size
 void casio_update(casio_t *board, const casio_host_t *host);
 uint64_t casio_next_event(const casio_t *board, const casio_host_t *host);
 void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool up);
+void casio_serial_line(casio_t *board, const casio_host_t *host, bool dsr);
+uint32_t casio_serial_baud(const casio_t *board);
+uint32_t casio_scif_priority(const casio_t *board);
 void casio_card_changed(casio_t *board, const casio_host_t *host);
 void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int y);
 void casio_screen(const casio_t *board, uint8_t *levels);

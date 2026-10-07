@@ -346,6 +346,10 @@ static void update_product_serial_interrupt(machine_t *m) {
 }
 
 static void set_serial_lines(machine_t *m) {
+    if (m->casio) {
+        casio_serial_line(&m->casio_board, &m->casio_host, m->serial_connected);
+        return;
+    }
     if (m->hp) {
         sh7709_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, m->serial_connected ? 0 : HP320LX_SERIAL_NO_CABLE);
         sh7709_set_irq(&m->chip, HP320LX_SERIAL_IRQ, m->serial_connected);
@@ -391,11 +395,16 @@ static void product_serial_receive(machine_t *m) {
     update_product_serial_interrupt(m);
 }
 
+static int onchip_serial_port(machine_t *m) {
+    return m->hp ? HP320LX_SERIAL_SCIF : m->casio ? CASIO_SCIF_PORT : -1;
+}
+
 static void onchip_serial_receive(machine_t *m) {
-    uint32_t per_tick = sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF) / SERIAL_BITS_PER_BYTE / SERIAL_TICKS_PER_SECOND;
+    int port = onchip_serial_port(m);
+    uint32_t per_tick = machine_serial_baud(m) / SERIAL_BITS_PER_BYTE / SERIAL_TICKS_PER_SECOND;
     if (!per_tick) per_tick = 1;
-    while (per_tick-- && m->serial_rx_count && sh7709_receive_room(&m->chip, HP320LX_SERIAL_SCIF)) {
-        sh7709_receive(&m->chip, HP320LX_SERIAL_SCIF, m->serial_rx[m->serial_rx_head]);
+    while (per_tick-- && m->serial_rx_count && sh7709_receive_room(&m->chip, port)) {
+        sh7709_receive(&m->chip, port, m->serial_rx[m->serial_rx_head]);
         m->serial_rx_head = (m->serial_rx_head + 1) % SERIAL_FIFO;
         m->serial_rx_count--;
     }
@@ -404,7 +413,7 @@ static void onchip_serial_receive(machine_t *m) {
 static void serial_tick_event(machine_t *m) {
     if (m->cpu.cycles < m->serial_tick_at) return;
     m->serial_tick_at = m->cpu.cycles + SERIAL_TICK_CYCLES;
-    if (m->hp) onchip_serial_receive(m);
+    if (m->hp || m->casio) onchip_serial_receive(m);
     else product_serial_receive(m);
 }
 
@@ -720,7 +729,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
         if (sh7709_write(&m->chip, pa, size, value)) return true;
-        if (m->casio && casio_write(&m->casio_board, &m->casio_host, pa, size, value)) return true;
+        if (m->casio && casio_write(&m->casio_board, &m->casio_host, pa, size, value)) {
+            sh7709_set_scif_alias(&m->chip, CASIO_SCIF_PA, casio_scif_priority(&m->casio_board));
+            return true;
+        }
         note_unknown(m, "write P4", pa, size, value);
         return true;
     }
@@ -772,7 +784,7 @@ static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
 
 static void onchip_transmit(void *context, int port, uint8_t byte) {
     machine_t *m = context;
-    if (m->hp && port == HP320LX_SERIAL_SCIF) {
+    if (port == onchip_serial_port(m)) {
         if (m->serial_connected && m->serial_tx_count < SERIAL_FIFO) m->serial_tx[m->serial_tx_count++] = byte;
         return;
     }
@@ -997,6 +1009,7 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
+    if (m->casio) sh7709_set_scif_alias(&m->chip, CASIO_SCIF_PA, 0);
     sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
     if (m->host_clock) apply_host_time(m);
     autopc_reset(&m->board);
@@ -1284,11 +1297,14 @@ bool machine_serial_connected(machine_t *m) { return m->serial_connected; }
 
 bool machine_serial_dtr(machine_t *m) {
     if (m->hp) return !(m->chip.ports[HP320LX_SERIAL_CONTROL_PORT] & HP320LX_SERIAL_DTR);
+    if (m->casio) return m->serial_connected;
     return (m->serial[1].csr_b & SERB_DTR) != 0;
 }
 
 uint32_t machine_serial_baud(machine_t *m) {
-    return m->hp ? sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF) : 0;
+    if (m->hp) return sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF);
+    if (m->casio) return casio_serial_baud(&m->casio_board);
+    return 0;
 }
 
 size_t machine_serial_space(machine_t *m) { return SERIAL_FIFO - m->serial_rx_count; }

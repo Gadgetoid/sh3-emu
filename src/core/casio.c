@@ -54,6 +54,24 @@
 #define SLOT0_EMPTY     0x0006u
 #define SLOT1_STATUS    0x282u
 #define SLOT1_EMPTY     0x0007u
+#define SERIAL_EDGES    0x052u
+#define SERIAL_RISE_ENABLE 0x0002u
+#define SERIAL_FALL_ENABLE 0x0001u
+#define SERIAL_RISEN    0x0020u
+#define SERIAL_FALLEN   0x0010u
+#define SERIAL_ENABLES  0x000Fu
+#define SERIAL_INTERRUPT 0x0400u
+#define SERIAL_VECTOR   8u
+#define SERIAL_MODE     0x230u
+#define SERIAL_SPEED    0x00C0u
+#define SERIAL_115200   0x0080u
+#define SERIAL_9600     0x0040u
+#define SERIAL_DIVISOR  0x232u
+#define SERIAL_DIVISOR_MASK 0x01FFu
+#define SERIAL_DIVIDED_CLOCK 57600u
+#define SERIAL_LINES    0x234u
+#define SERIAL_DSR      0x0004u
+#define SCIF_PRIORITY_SHIFT 4
 
 #define ONCHIP_PA       0xFFFFFE00u
 #define ONCHIP_SIZE     0x80u
@@ -104,7 +122,7 @@ static bool asic_modelled(uint32_t offset) {
     switch (offset) {
         case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case POWER_STATUS: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
         case TOUCH_PEN_UP: case 0x098u: case 0x09Au: case 0x09Cu:
-        case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: return true;
+        case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: case SERIAL_EDGES: case SERIAL_LINES: return true;
         default: return false;
     }
 }
@@ -130,7 +148,7 @@ static bool card_line(const casio_host_t *host) {
 }
 
 static uint16_t asic_requests(const casio_t *board, const casio_host_t *host) {
-    return (uint16_t)((key_columns(board) ? KEY_INTERRUPT : 0) | (card_line(host) ? CARD_INTERRUPT : 0) | board->latched_requests);
+    return (uint16_t)((key_columns(board) ? KEY_INTERRUPT : 0) | (card_line(host) ? CARD_INTERRUPT : 0) | (board->serial_flags ? SERIAL_INTERRUPT : 0) | board->latched_requests);
 }
 
 static uint16_t asic_vector(const casio_t *board, const casio_host_t *host) {
@@ -139,6 +157,7 @@ static uint16_t asic_vector(const casio_t *board, const casio_host_t *host) {
     if (active & CARD_INTERRUPT) return CARD_VECTOR;
     if (active & TOUCH_INTERRUPT) return TOUCH_VECTOR;
     if (active & CARD_CHANGE_INTERRUPT) return CARD_CHANGE_VECTOR;
+    if (active & SERIAL_INTERRUPT) return SERIAL_VECTOR;
     return 0;
 }
 
@@ -152,6 +171,7 @@ static uint16_t touch_result(const casio_t *board) {
 
 static uint16_t asic_read(casio_t *board, const casio_host_t *host, uint32_t offset) {
     uint16_t stored = board->asic[offset / 2];
+    if (offset == SERIAL_EDGES) return (uint16_t)((stored & SERIAL_ENABLES) | board->serial_flags);
     if (offset - PINS_FIRST <= PINS_LAST - PINS_FIRST) return stored & (uint16_t)~PIN_INPUT;
     if (offset - TOUCH_RESULT_FIRST <= TOUCH_RESULT_LAST - TOUCH_RESULT_FIRST) return touch_result(board);
     switch (offset) {
@@ -164,6 +184,7 @@ static uint16_t asic_read(casio_t *board, const casio_host_t *host, uint32_t off
         case LOCK_STATUS: return unlocked(board) ? LOCK_OPEN : 0;
         case LOCK_LOW: return board->lock_low;
         case LOCK_HIGH: return board->lock_high;
+        case SERIAL_LINES: return board->dsr ? (uint16_t)(stored | SERIAL_DSR) : (uint16_t)(stored & ~SERIAL_DSR);
         case SLOT0_STATUS: return card_present(host, 0) ? (uint16_t)(stored & ~SLOT0_EMPTY) : (uint16_t)(stored | SLOT0_EMPTY);
         case SLOT1_STATUS: return card_present(host, 1) ? (uint16_t)(stored & ~SLOT1_EMPTY) : (uint16_t)(stored | SLOT1_EMPTY);
         default: return stored;
@@ -193,6 +214,10 @@ static void asic_write(casio_t *board, uint32_t offset, uint16_t value) {
             break;
         case LOCK_LOW: board->lock_low = value; break;
         case LOCK_HIGH: board->lock_high = value; break;
+        case SERIAL_EDGES:
+            board->serial_flags &= (uint16_t)~value;
+            board->asic[offset / 2] = value & SERIAL_ENABLES;
+            break;
         case INT_CLEAR:
             board->latched_requests &= (uint16_t)~value;
             break;
@@ -342,7 +367,7 @@ bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size
     asic_write(board, offset, (uint16_t)value);
     if (size == 4) asic_write(board, offset + 2, (uint16_t)(value >> 16));
     if (!asic_modelled(offset) && host->trace) host->trace(host->context, true, pa, size, value);
-    if (offset == INT_MASK || offset == INT_CLEAR || offset == KEY_ROWS) casio_update(board, host);
+    if (offset == INT_MASK || offset == INT_CLEAR || offset == KEY_ROWS || offset == SERIAL_EDGES) casio_update(board, host);
     return true;
 }
 
@@ -409,6 +434,26 @@ void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int
     if (down && !board->pen_down) board->latched_requests |= TOUCH_INTERRUPT;
     board->pen_down = down;
     casio_update(board, host);
+}
+
+void casio_serial_line(casio_t *board, const casio_host_t *host, bool dsr) {
+    if (dsr == board->dsr) return;
+    uint16_t enables = board->asic[SERIAL_EDGES / 2];
+    if (dsr && (enables & SERIAL_RISE_ENABLE)) board->serial_flags |= SERIAL_RISEN;
+    if (!dsr && (enables & SERIAL_FALL_ENABLE)) board->serial_flags |= SERIAL_FALLEN;
+    board->dsr = dsr;
+    casio_update(board, host);
+}
+
+uint32_t casio_serial_baud(const casio_t *board) {
+    uint16_t mode = board->asic[SERIAL_MODE / 2] & SERIAL_SPEED;
+    if (mode == SERIAL_115200) return 115200;
+    if (mode == SERIAL_9600) return 9600;
+    return SERIAL_DIVIDED_CLOCK / ((board->asic[SERIAL_DIVISOR / 2] & SERIAL_DIVISOR_MASK) + 1u);
+}
+
+uint32_t casio_scif_priority(const casio_t *board) {
+    return (board->onchip_priority >> SCIF_PRIORITY_SHIFT) & 15u;
 }
 
 void casio_card_changed(casio_t *board, const casio_host_t *host) {

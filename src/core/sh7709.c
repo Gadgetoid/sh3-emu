@@ -48,6 +48,8 @@
 #define SCIF_DR   0x01u
 #define SCIF_FIFO 16u
 #define SMR_CKS   0x03u
+#define SCIF_SIZE 0x10u
+#define SCIF_ALIAS_CODE 0x700u
 
 #define ADCSR_ADF   0x80u
 #define ADCSR_ADIE  0x40u
@@ -357,6 +359,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     consider(&best, rtc_level, 0x4C0, (chip->rtc_control1 & RCR1_CF) && (chip->rtc_control1 & RCR1_CIE));
     uint32_t offset;
     if (sci_pending(&chip->sci, &offset)) consider(&best, (iprb >> 4) & 15, 0x4E0 + offset, true);
+    if (chip->scif_alias && scif_pending(&chip->scif[1], &offset)) consider(&best, chip->scif_alias_priority, SCIF_ALIAS_CODE + offset, true);
     if (chip->variant == SH7709) {
         uint16_t iprc = chip->priority[2], iprd = chip->priority[3], ipre = chip->priority[4];
         for (int line = 0; line < 6; line++) {
@@ -435,6 +438,13 @@ static const sh7709_serial_t *serial_port(const sh7709_t *chip, int port) {
     if (port == 0) return &chip->sci;
     if (port <= 2) return &chip->scif[port - 1];
     return NULL;
+}
+
+void sh7709_set_scif_alias(sh7709_t *chip, uint32_t pa, uint32_t priority) {
+    if (chip->scif_alias == pa && chip->scif_alias_priority == priority) return;
+    chip->scif_alias = pa;
+    chip->scif_alias_priority = priority;
+    sh7709_update_interrupts(chip);
 }
 
 size_t sh7709_receive_room(const sh7709_t *chip, int port) {
@@ -688,6 +698,10 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
 }
 
 bool sh7709_read(sh7709_t *chip, uint32_t pa, int size, uint32_t *value) {
+    if (chip->scif_alias && pa - chip->scif_alias < SCIF_SIZE) {
+        *value = scif_read(&chip->scif[1], pa - chip->scif_alias);
+        return true;
+    }
     (void)size;
     if (chip->variant == SH7709 && pa - AREA1_BASE < AREA1_SIZE) return area1_read(chip, pa - AREA1_BASE, value);
     if (pa < SCI_BASE) return false;
@@ -719,6 +733,11 @@ bool sh7709_read(sh7709_t *chip, uint32_t pa, int size, uint32_t *value) {
 }
 
 bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
+    if (chip->scif_alias && pa - chip->scif_alias < SCIF_SIZE) {
+        scif_write(chip, 1, pa - chip->scif_alias, value);
+        sh7709_update_interrupts(chip);
+        return true;
+    }
     (void)size;
     bool handled = true;
     if (chip->variant == SH7709 && pa - AREA1_BASE < AREA1_SIZE) handled = area1_write(chip, pa - AREA1_BASE, value);

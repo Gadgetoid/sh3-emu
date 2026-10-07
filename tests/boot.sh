@@ -116,6 +116,12 @@ if [ -f "$CASIO_ROM" ]; then
         --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --tap=64:334:68:0.08 --tap=64.2:334:68:0.08 --pgm="$OUT/casio_card.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_card.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_CARD_HASH" ]; then echo "ok   casio_card"; else echo "FAIL casio_card $actual"; exit 1; fi
+    if ./headless "$CASIO_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
+        echo "skip casio_net: headless built without libslirp"
+    else
+        ./headless "$CASIO_ROM" --seconds=50 --net=22 > "$OUT/casio_net.log" 2>&1
+        if grep -q "^ppp: IPCP up" "$OUT/casio_net.log"; then echo "ok   casio_net"; else echo "FAIL casio_net"; exit 1; fi
+    fi
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
 fi
