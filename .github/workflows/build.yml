@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential pkg-config git ca-certificates python3 \
+          apt-get install -y --no-install-recommends build-essential pkg-config dpkg-dev git ca-certificates python3 \
             libsdl3-dev libslirp-dev zlib1g-dev
       - uses: actions/checkout@v7
         with:
@@ -54,6 +54,12 @@ jobs:
         run: make all sh3emu
       - name: Check
         run: make check
+      - name: Package
+        run: sh tools/mkdeb.sh dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sh3emu-debian-13
+          path: dist/*.deb
 
   release:
     if: github.ref_type == 'tag'
@@ -68,4 +74,6 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
-          files: "*.zip"
+          files: |
+            *.zip
+            *.deb
