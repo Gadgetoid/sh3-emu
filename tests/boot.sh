@@ -123,6 +123,7 @@ fi
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
 HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
 HP_TYPE_HASH=4dc31d2529542b201f74f36dac630329503df9a4869ce0b53b3c09c6dcc1be52
+HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
 if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
@@ -130,6 +131,10 @@ if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --seconds=28 --key=20:9F --key=21:2D --type=23:"Hello, World!" --pgm="$OUT/hp_type.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/hp_type.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_TYPE_HASH" ]; then echo "ok   hp_type"; else echo "FAIL hp_type $actual"; exit 1; fi
+    ./headless "$HP_ROM" --seconds=45 --key=20.5:5A --key=22:5A --tap=24:320:120:1.5 --tap=27:128:48:1.5 --tap=30:128:192:1.5 \
+        --tap=33:512:192:1.5 --tap=36:512:48:1.5 --key=38:5A --tap=42:216:47:0.2 --pgm="$OUT/hp_touch.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/hp_touch.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$HP_TOUCH_HASH" ]; then echo "ok   hp_touch"; else echo "FAIL hp_touch $actual"; exit 1; fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
 fi

@@ -758,6 +758,10 @@ static void hp_ports_written(void *context) {
     uint16_t columns = hp320lx_key_columns(&m->hp_board, m->chip.ports);
     sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
     sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
+    hp320lx_touch_t touch = hp320lx_touch_inputs(&m->hp_board, m->chip.ports);
+    sh7709_set_adc(&m->chip, 0, touch.channel_a);
+    sh7709_set_adc(&m->chip, 1, touch.channel_b);
+    if (touch.pen_interrupt != (((m->chip.irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(&m->chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
 }
 
 static void casio_power_key(machine_t *m) {
@@ -1157,6 +1161,11 @@ static uint16_t touch_raw(int pixel) {
 void machine_touch(machine_t *m, bool down, int x, int y) {
     if (m->casio) {
         casio_touch(&m->casio_board, &m->casio_host, down, x, y);
+        return;
+    }
+    if (m->hp) {
+        hp320lx_touch(&m->hp_board, down, x, y);
+        hp_ports_written(m);
         return;
     }
     m->adc_x = touch_raw(x);

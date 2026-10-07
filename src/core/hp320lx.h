@@ -15,6 +15,7 @@
 #define HP320LX_KEY_ROWS      8
 #define HP320LX_KEY_COLUMNS   11
 #define HP320LX_KEY_EVENTS    64
+#define HP320LX_PEN_IRQ       3
 
 typedef void (*hp320lx_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*hp320lx_line_fn)(void *context, const char *line);
@@ -41,7 +42,14 @@ typedef struct {
     uint32_t key_event_head, key_event_count;
     uint32_t scans, key_changed_scan;
     uint8_t  rows_driven;
+    bool     pen_down;
+    uint16_t pen_x, pen_y;
 } hp320lx_t;
+
+typedef struct {
+    uint16_t channel_a, channel_b;
+    bool     pen_interrupt;
+} hp320lx_touch_t;
 
 bool hp320lx_detect(const uint8_t *image, size_t size);
 void hp320lx_reset(hp320lx_t *board);
@@ -49,4 +57,6 @@ bool hp320lx_read(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int
 bool hp320lx_write(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t value);
 bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up);
 uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports);
+void hp320lx_touch(hp320lx_t *board, bool down, int x, int y);
+hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *ports);
 void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels);

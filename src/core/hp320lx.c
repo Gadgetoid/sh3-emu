@@ -17,6 +17,14 @@
 #define LINK_STROBE        0x40u
 #define KEY_HOLD_SCANS     8u
 #define ALL_ROWS           0xFFu
+#define PORT_H_DATA        0x17u
+#define PORT_K_DATA        0x19u
+#define TOUCH_DRIVE        0x80u
+#define TOUCH_X_SELECT     0x04u
+#define TOUCH_Y_SELECT     0x01u
+#define TOUCH_RAW_MIN      64u
+#define TOUCH_RAW_SPAN     896u
+#define TOUCH_PEN_LEVEL    0x3FFu
 
 typedef struct {
     uint8_t control, data, bit;
@@ -158,6 +166,33 @@ uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports) {
         if (driven & (1u << row)) low |= board->keys_down[row];
     }
     return (uint16_t)(~low & ((1u << HP320LX_KEY_COLUMNS) - 1));
+}
+
+static uint16_t touch_raw(int pixel, int size) {
+    if (pixel < 0) pixel = 0;
+    if (pixel >= size) pixel = size - 1;
+    return (uint16_t)(TOUCH_RAW_MIN + (uint32_t)pixel * TOUCH_RAW_SPAN / (uint32_t)size);
+}
+
+void hp320lx_touch(hp320lx_t *board, bool down, int x, int y) {
+    board->pen_down = down;
+    board->pen_x = touch_raw(x, HP320LX_SCREEN_WIDTH);
+    board->pen_y = touch_raw(y, HP320LX_SCREEN_HEIGHT);
+}
+
+hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *ports) {
+    hp320lx_touch_t inputs = { 0, 0, false };
+    if (!board->pen_down) return inputs;
+    uint16_t drive = ports[PORT_H_DATA] & TOUCH_DRIVE, select = ports[PORT_K_DATA] & (TOUCH_X_SELECT | TOUCH_Y_SELECT);
+    if (!drive) {
+        inputs.channel_a = TOUCH_PEN_LEVEL;
+        inputs.pen_interrupt = true;
+    } else if (select == TOUCH_X_SELECT) {
+        inputs.channel_a = board->pen_x;
+    } else if (select == TOUCH_Y_SELECT) {
+        inputs.channel_b = board->pen_y;
+    }
+    return inputs;
 }
 
 void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels) {
