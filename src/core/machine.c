@@ -1315,10 +1315,35 @@ static bool state_header_matches(const machine_t *m, const uint8_t *data, size_t
            !memcmp(data + sizeof STATE_MAGIC, &m->rom_hash, 8);
 }
 
+static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length) {
+    const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
+    while (cursor < end) {
+        uint8_t name_length = *cursor++;
+        if (!name_length || end - cursor < name_length + 4) break;
+        char name[256];
+        memcpy(name, cursor, name_length);
+        name[name_length] = 0;
+        cursor += name_length;
+        uint32_t size;
+        memcpy(&size, cursor, 4);
+        cursor += 4;
+        if ((size_t)(end - cursor) < size) return false;
+#define CHECK_FIELD(key, field) if (!strcmp(name, #key) && size != sizeof(field)) return false;
+        STATE_FIELDS(CHECK_FIELD)
+#undef CHECK_FIELD
+        cursor += size;
+    }
+    return true;
+}
+
+static bool state_usable(machine_t *m, const uint8_t *data, size_t length) {
+    return state_header_matches(m, data, length) && state_fields_match(m, data, length);
+}
+
 bool machine_state_matches(machine_t *m, const char *path) {
     size_t length;
     uint8_t *data = read_state(path, &length);
-    bool matches = data && state_header_matches(m, data, length);
+    bool matches = data && state_usable(m, data, length);
     free(data);
     return matches;
 }
@@ -1327,7 +1352,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     size_t length;
     uint8_t *data = read_state(path, &length);
     if (!data) return false;
-    if (!state_header_matches(m, data, length)) {
+    if (!state_usable(m, data, length)) {
         free(data);
         return false;
     }

@@ -24,6 +24,8 @@
 #define BOOT_CTRL_ROW   8u
 #define BOOT_CTRL_COLUMN 0u
 #define ASIC_IRL_LEVEL  4u
+#define FIRST_ROW       0x0001u
+#define KEY_HOLD_SCANS  4u
 #define PINS_FIRST      0x040u
 #define PINS_LAST       0x066u
 #define PIN_INPUT       0x0030u
@@ -123,8 +125,27 @@ static uint16_t asic_read(casio_t *board, uint32_t offset) {
     }
 }
 
+static void release_held_keys(casio_t *board) {
+    for (uint32_t row = 0; row < CASIO_KEY_ROWS; row++) {
+        for (uint32_t column = 0; column < 8; column++) {
+            uint8_t bit = (uint8_t)(1u << column);
+            if ((board->keys_releasing[row] & bit) && board->scans - board->key_pressed_scan[row][column] >= KEY_HOLD_SCANS) {
+                board->keys_releasing[row] &= (uint8_t)~bit;
+                board->keys_down[row] &= (uint8_t)~bit;
+            }
+        }
+    }
+}
+
 static void asic_write(casio_t *board, uint32_t offset, uint16_t value) {
     switch (offset) {
+        case KEY_ROWS:
+            if (value == FIRST_ROW) {
+                board->scans++;
+                release_held_keys(board);
+            }
+            board->asic[offset / 2] = value;
+            break;
         case LOCK_LOW: board->lock_low = value; break;
         case LOCK_HIGH: board->lock_high = value; break;
         case INT_MASK:
@@ -276,8 +297,14 @@ void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool 
         const casio_key_t *key = &key_map[i];
         if (key->scancode != scancode) continue;
         uint8_t bit = (uint8_t)(1u << key->column);
-        if (up) board->keys_down[key->row] &= (uint8_t)~bit;
-        else board->keys_down[key->row] |= bit;
+        if (up) {
+            board->keys_releasing[key->row] |= bit;
+            release_held_keys(board);
+        } else {
+            board->keys_down[key->row] |= bit;
+            board->keys_releasing[key->row] &= (uint8_t)~bit;
+            board->key_pressed_scan[key->row][key->column] = board->scans;
+        }
         casio_update(board, host);
         return;
     }

@@ -40,6 +40,9 @@ typedef struct {
     uint16_t onchip_extra;
     uint16_t onchip_priority;
     uint8_t  keys_down[CASIO_KEY_ROWS];
+    uint8_t  keys_releasing[CASIO_KEY_ROWS];
+    uint32_t key_pressed_scan[CASIO_KEY_ROWS][8];
+    uint32_t scans;
     bool     boot_ctrl_held;
 } casio_t;
 
