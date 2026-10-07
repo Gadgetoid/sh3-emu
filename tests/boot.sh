@@ -139,6 +139,12 @@ if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --seconds=240 --key=230:5A --key=233:9F --pgm="$OUT/hp_wake.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/hp_wake.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_WAKE_HASH" ]; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi
+    if ./headless "$HP_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
+        echo "skip hp_net: headless built without libslirp"
+    else
+        ./headless "$HP_ROM" --seconds=40 --net=20 > "$OUT/hp_net.log" 2>&1
+        if grep -q "^ppp: IPCP up" "$OUT/hp_net.log"; then echo "ok   hp_net"; else echo "FAIL hp_net"; exit 1; fi
+    fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
 fi
