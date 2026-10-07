@@ -79,3 +79,16 @@ rm -f "$OUT/agent.sock"
 STUB=$!
 if python3 tests/agent_reconnect.py "$OUT/agent.sock" 20 > "$OUT/reconnect.txt"; then echo "ok   agent_reconnect"; else echo "FAIL agent_reconnect"; kill $STUB; cat "$OUT/reconnect.txt"; exit 1; fi
 kill $STUB 2>/dev/null || true
+AUTOPC_ROM=${AUTOPC_ROM:-rom/autopc-burnos.bin}
+AUTOPC_HASH=72eff421d8c18cfecd168e12cd29604ce533d1007d34fafaa4246f0562285d3c
+AUTOPC_ENTER_HASH=0285b06f0aa4563508d113f5e6125a16eac5e8a2a9c2df56852ddc12579818ee
+if [ -f "$AUTOPC_ROM" ]; then
+    ./headless "$AUTOPC_ROM" --debug-output --seconds=15 --pgm="$OUT/autopc.pgm" > "$OUT/autopc.log" 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc.pgm" | cut -d' ' -f1)
+    if grep -q "^debug: FPL_Init Succeeded" "$OUT/autopc.log" && [ "$actual" = "$AUTOPC_HASH" ]; then echo "ok   autopc"; else echo "FAIL autopc $actual"; exit 1; fi
+    ./headless "$AUTOPC_ROM" --seconds=24 --key=15:5A --pgm="$OUT/autopc_enter.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc_enter.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$AUTOPC_ENTER_HASH" ]; then echo "ok   autopc_enter"; else echo "FAIL autopc_enter $actual"; exit 1; fi
+else
+    echo "skip autopc: no $AUTOPC_ROM (Clarion AutoPC BurnOS.bin)"
+fi

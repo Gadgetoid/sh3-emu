@@ -86,6 +86,8 @@ static bool write_panel_png(const char *path, machine_t *machine, int cell, int 
     lcd_compose_setup(cell);
     lcd_set_power(machine_lcd_enabled(machine));
     lcd_set_backlight(backlight < 0 ? machine_backlight(machine) : backlight != 0);
+    uint32_t palette[LCD_PALETTE_MAX];
+    lcd_set_palette(palette, machine_screen_palette(machine, palette));
     machine_screen(machine, lcd_framebuffer);
     lcd_compose(10.0f);
     uint8_t *png;

@@ -31,6 +31,7 @@ uint32_t   machine_pc(machine_t *machine);
 bool machine_lcd_enabled(machine_t *machine);
 bool machine_backlight(machine_t *machine);
 bool machine_screen(machine_t *machine, uint8_t *levels);
+int  machine_screen_palette(machine_t *machine, uint32_t *palette);
 screen_size_t machine_screen_size(machine_t *machine);
 screen_size_t machine_screen_next(machine_t *machine);
 bool          machine_screen_supported(machine_t *machine, screen_size_t size);

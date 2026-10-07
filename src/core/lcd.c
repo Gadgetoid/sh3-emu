@@ -66,6 +66,8 @@ static column_t *columns = NULL;
 static int changed_left, changed_right, changed_top, changed_bottom;
 static int dirty_x, dirty_y, dirty_w, dirty_h;
 static bool force_compose = true;
+static uint32_t palette[LCD_PALETTE_MAX];
+static int palette_count = 0;
 static bool backlight = true;
 static bool powered = true;
 
@@ -81,6 +83,21 @@ void lcd_set_size(int width, int height) {
     output = NULL;
     cell = output_w = output_h = 0;
     force_compose = true;
+}
+
+void lcd_set_palette(const uint32_t *colours, int count) {
+    if (count < 0 || count > LCD_PALETTE_MAX) count = 0;
+    if (count == palette_count && !memcmp(palette, colours, (size_t)count * sizeof palette[0])) return;
+    memcpy(palette, colours, (size_t)count * sizeof palette[0]);
+    palette_count = count;
+    memset(shown, 0, sizeof shown);
+    force_compose = true;
+}
+
+int lcd_palette_count(void) { return palette_count; }
+
+uint32_t lcd_palette_colour(uint8_t value) {
+    return value < palette_count ? palette[value] : 0;
 }
 
 int lcd_width(void) { return screen_w; }
@@ -231,6 +248,7 @@ void lcd_set_response(float scale) {
 }
 
 static float pixel_target(int i) {
+    if (palette_count) return powered ? lcd_framebuffer[i] : 0.0f;
     return powered ? lcd_framebuffer[i] / 15.0f : 0.0f;
 }
 
@@ -263,7 +281,7 @@ static bool settle_pixels(float seconds) {
             if (x > changed_right) changed_right = x;
             if (y < changed_top) changed_top = y;
             changed_bottom = y;
-            if (fabsf(delta) < 0.01f) shown[i] = target;
+            if (palette_count || fabsf(delta) < 0.01f) shown[i] = target;
             else shown[i] += delta * (delta > 0 ? darken : lighten);
         }
     }
@@ -283,6 +301,24 @@ static inline uint8_t to_byte(float value) {
     return (uint8_t)(value + 0.5f);
 }
 
+static void compose_colour(void) {
+    int gap = cell >= 4 ? max_int(1, cell / 7) : 1;
+    for (int y = dirty_y; y < dirty_y + dirty_h; y++) {
+        int grid_y = y / cell;
+        bool row_in_panel = grid_y >= LCD_MARGIN_Y && grid_y < LCD_MARGIN_Y + screen_h;
+        bool row_electrode = y % cell < cell - gap;
+        uint32_t *out_row = &output[(size_t)y * output_w];
+        for (int x = dirty_x; x < dirty_x + dirty_w; x++) {
+            const column_t *column = &columns[x];
+            uint32_t colour = 0;
+            if (row_in_panel && column->in_panel) colour = palette[(int)shown[(grid_y - LCD_MARGIN_Y) * screen_w + column->grid - LCD_MARGIN_X]];
+            float light = vignette_x[x] * vignette_y[y] * grain[(size_t)y * output_w + x] * (row_electrode && column->electrode ? 1.0f : 0.55f);
+            float r = (colour & 0xff) * light + 6.0f, g = ((colour >> 8) & 0xff) * light + 6.0f, b = ((colour >> 16) & 0xff) * light + 8.0f;
+            out_row[x] = (uint32_t)to_byte(r) | (uint32_t)to_byte(g) << 8 | (uint32_t)to_byte(b) << 16 | 0xff000000u;
+        }
+    }
+}
+
 bool lcd_compose(float seconds) {
     if (!output) return false;
     bool settled_change = settle_pixels(seconds);
@@ -300,6 +336,11 @@ bool lcd_compose(float seconds) {
     dirty_y = top * cell;
     dirty_w = (right - left + 1) * cell;
     dirty_h = (bottom - top + 1) * cell;
+
+    if (palette_count) {
+        compose_colour();
+        return true;
+    }
 
     const panel_t *panel = backlight && powered ? &panel_lit : &panel_unlit;
     int gap = cell >= 4 ? max_int(1, cell / 7) : 1;

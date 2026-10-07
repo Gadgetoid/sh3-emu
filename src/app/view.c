@@ -99,7 +99,8 @@ static bool fill_sharp(view_t *view, bool powered) {
     bool changed = false;
     for (int i = 0; i < lcd_width() * lcd_height(); i++) {
         uint32_t grey = powered ? 255u - lcd_framebuffer[i] * 17u : 255u;
-        uint32_t pixel = grey | grey << 8 | grey << 16 | 0xff000000u;
+        uint32_t pixel = lcd_palette_count() ? (powered ? lcd_palette_colour(lcd_framebuffer[i]) : 0) | 0xff000000u
+                                             : grey | grey << 8 | grey << 16 | 0xff000000u;
         if (view->sharp[i] != pixel) {
             view->sharp[i] = pixel;
             changed = true;

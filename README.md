@@ -95,11 +95,25 @@ The host mailbox and GDB stub are velo-emu's, ported to the SH-3.
 gdb -ex "set architecture sh3" -ex "target extended-remote :1234" -ex 'set remote exec-file \Windows\cmd.exe' -ex starti
 ```
 
+## Clarion AutoPC
+
+An image containing `apcdll.dll` runs on a Clarion AutoPC 310C board instead of the Odo. The one tested is `BurnOS.bin` (sha256 `dc09e84b046c247cbf5088ebee0a1185327981d0bd56586e04d9520c7c8c9a31`), the temporary OS that the AutoPC's update loads into RAM to burn a new `NK.BIN` into flash; `make test` uses it from `rom/autopc-burnos.bin` if it's there. It isn't the full AutoPC OS: its only program is `osupdate.exe`, which shows its prompts on the faceplate.
+
+```
+./headless rom/autopc-burnos.bin --seconds=15 --debug-output --png=faceplate.png
+```
+
+The emulator leaves the resident bootloader's download handshake in RAM, as the bootloader does before starting a downloaded image, so osupdate starts in its flash update step ("WARNING! About to update the flash memory"). Enter goes on to look for the update media and Esc cancels; cancelling asks for a reboot through the SH-3's watchdog, which isn't emulated, so the machine stops there.
+
+The faceplate keys are a 5x6 matrix the faceplate driver scans over the link. PS/2 keys map to them: the arrows, Enter, Esc, the left Windows key, Alt, 0-9, F1, F2, F5, F6 and F7 (`--key=SECONDS:5A` presses Enter). Unknown register accesses are logged once per address and instruction.
+
 ## What's emulated
 
 - CPU (`src/core/sh3.c`): the SH-3 instruction set, little-endian, with delay slots; banked registers, SR.MD/RB/BL; exceptions, TRAPA and interrupts through VBR+0x100/0x400/0x600 with EXPEVT, INTEVT, TRA, SPC and SSR; the MMU with the 128-entry 4-way UTLB, 1 KB and 4 KB pages, ASIDs, shared pages, MMUCR (AT, IX, TF, RC, SV), LDTLB, TLB miss, invalid, protection and initial page write exceptions, and the memory-mapped TLB arrays; SLEEP. No FPU or DSP.
 - On-chip peripherals (`src/core/sh7709.c`), SH7708 and SH7709: the INTC (IRL levels, IPRA to IPRE, IRQ0-5 on the SH7709), TMU channels 0-2 with underflow interrupts, the RTC (BCD counters, 64 Hz counter, alarm, periodic and carry interrupts), SCI, the two SH7709 SCIFs, and register storage for the BSC, CPG, WDT, CCR and the SH7709 ports. The cache isn't modelled.
 - Odo board (`src/core/machine.c`): 16 MB DRAM at 0x0C000000 (32 or 64 with `--memory`), the system ASIC at 0x10000000 (interrupt status and mask on IRL level 4, debug serial port output, the 480x240 2 bpp display DMA, the PS/2 keyboard, the touch and sound block with the UCB register interface and pen timer, the PC Card controller with a CompactFlash card in socket 0), and the housekeeping FPGA (LEDs and the parallel port).
+
+- AutoPC board (`src/core/autopc.c`): the 16550 debug UART at 0x10800000, the board FPGA's register file at 0x11000000 (ignition on, powered-on boot), the PCI host bridge at 0x10000000 with configuration cycles at 0x0A000000, and the Clarion faceplate controller (PCI 1398:0003) in slot 1: its interrupt status and mask on IRL level 8, its memory BAR, and the DMA link to the faceplate, which carries the faceplate's control port, LCD controller registers (read back with the bits the driver expects), the 256x64 display memory (an 8-colour RGB STN, one bit per channel; which bit is which channel is a guess) and the key matrix. The PC Card controller at 0x11800000 has the CompactFlash card from `--card` in socket 0, with its interrupts through the board FPGA (pending 0x1100000C, mask 0x11000008); CE configures it and reads sectors, but osupdate doesn't find `NK.BIN` on it yet. Not modelled: the faceplate's other keys and messages, the IR remote, flash, the CD drive's IDE controller, audio, and the tuner.
 
 Guest time is the instruction count at 58.98 MHz, with the peripheral clock at 14.75 MHz.
 
@@ -112,7 +126,7 @@ Not yet: sound output, the IR port, PC Cards other than CompactFlash in socket 0
 ## Testing
 
 - `make check` needs no ROMs: the command lines, and the gateway's `CLIENT` handshake after stray text.
-- `make test` runs the CPU tests, boots `rom/odo-sh3-ce212.bin` (or `make test ROM=PATH`) to the desktop, the Start menu (a tap, so it checks the preset calibration) and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, runs a program from `--folder` through Start > Run, and with `--net` runs `nettest` (from `guest/build.sh`, or `NET_PROGRAM=PATH`), which resolves `host` and makes two HTTP requests to a local server; the server checks the requests.
+- `make test` runs the CPU tests, boots `rom/odo-sh3-ce212.bin` (or `make test ROM=PATH`) to the desktop, the Start menu (a tap, so it checks the preset calibration) and the console comparing framebuffer hashes, checks the GDB stub, inserts a card image into the running desktop and has CE copy a file on it (checked on the host), starts debugmgr and checks GDB's file transfer, run, step and kill through it, runs a program from `--folder` through Start > Run, and with `--net` runs `nettest` (from `guest/build.sh`, or `NET_PROGRAM=PATH`), which resolves `host` and makes two HTTP requests to a local server; the server checks the requests. With `rom/autopc-burnos.bin` (or `AUTOPC_ROM=PATH`) it also boots the AutoPC image and compares the faceplate's framebuffer hash, before and after pressing Enter.
 - `tests/gui.sh` (Linux, needs Xorg's dummy driver and python3-xlib) starts `sh3emu` on a headless X server, opens the console and lists a directory with injected mouse and key events, saves a screenshot, runs `nettest` over `--net` and `mbtest` from the host folder set in `sh3emu.ini`, and checks it used its own data folder.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.

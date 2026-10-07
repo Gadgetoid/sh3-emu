@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <zlib.h>
 
+#include "core/autopc.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/ppfs.h"
@@ -79,6 +80,7 @@
 #define TOUCH_SCALE        4
 #define PEN_TIMER_CYCLES   (MACHINE_CLOCK_HZ / 200)
 #define BOARD_IRL_LEVEL    4u
+#define AUTOPC_IRL_LEVEL   8u
 
 #define DISP_LCD_ON        0x0004u
 
@@ -122,6 +124,8 @@
 #define KB_CSR_READ_ONLY   0x07FFu
 #define KEY_FIFO           64
 
+#define UNKNOWN_SEEN       4096
+
 #define STATE_MAGIC        "SH3ODO01"
 
 #define MAILBOX_FAULT_TRIES 4
@@ -148,6 +152,9 @@ struct machine {
     size_t    image_size;
     uint32_t  entry;
     uint64_t  rom_hash;
+    bool      autopc;
+    autopc_t  board;
+    autopc_host_t board_host;
 
     uint16_t  asic[ASIC_SIZE / 2];
     cfcard_t  card;
@@ -187,6 +194,7 @@ struct machine {
     machine_debug_fn debug_sink;
     void     *debug_context;
     uint32_t  unknown_logged;
+    uint64_t  unknown_seen[UNKNOWN_SEEN];
     bool      host_clock;
     uint32_t  watch[MACHINE_WATCH_MAX];
     int       watch_count;
@@ -202,10 +210,39 @@ static void machine_logf(machine_t *m, const char *format, ...) {
     m->log(text);
 }
 
+static bool unknown_seen(machine_t *m, const char *what, uint32_t pa) {
+    uint64_t key = ((uint64_t)pa << 32 | m->cpu.pc) ^ (uint64_t)(what[0] == 'w');
+    if (!key) key = 1;
+    uint32_t index = (uint32_t)((key * 11400714819323198485ull) >> 52);
+    for (uint32_t probe = 0; probe < UNKNOWN_SEEN; probe++) {
+        uint64_t *slot = &m->unknown_seen[(index + probe) % UNKNOWN_SEEN];
+        if (*slot == key) return true;
+        if (!*slot) {
+            *slot = key;
+            return false;
+        }
+    }
+    return true;
+}
+
 static void note_unknown(machine_t *m, const char *what, uint32_t pa, int size, uint32_t value) {
-    if (m->unknown_logged >= 200) return;
+    if (m->autopc ? unknown_seen(m, what, pa) : m->unknown_logged >= 200) return;
     m->unknown_logged++;
     machine_logf(m, "%s %08X (%d) = %08X at pc %08X\n", what, pa, size, value, m->cpu.pc);
+}
+
+static void autopc_debug_line(void *context, const char *line) {
+    machine_t *m = context;
+    if (m->debug_sink) m->debug_sink(m->debug_context, line);
+}
+
+static void autopc_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
+    note_unknown(context, write ? "write faceplate" : "read  faceplate", pa, size, value);
+}
+
+static void autopc_irl(void *context, bool asserted) {
+    machine_t *m = context;
+    sh7709_set_irl(&m->chip, asserted ? AUTOPC_IRL_LEVEL : 0);
 }
 
 static uint32_t read_le32(const uint8_t *p) {
@@ -569,6 +606,12 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     }
     pa &= AREA_MASK;
     if (sh7709_read(&m->chip, pa, size, value)) return true;
+    if (m->autopc && pa - DRAM_PA >= DRAM_AREA_SIZE) {
+        if (autopc_read(&m->board, &m->board_host, pa, size, value)) return true;
+        note_unknown(m, "read ", pa, size, 0);
+        *value = 0;
+        return true;
+    }
     if (pa >= ASIC_PA && pa < ASIC_PA + ASIC_SIZE) { *value = asic_read(m, pa - ASIC_PA, size); return true; }
     if (pa >= HKEEP_PA && pa < HKEEP_END) {
         if ((pa & ~3u) == PARALLEL_PA) *value = ppfs_read_register(&m->ppfs);
@@ -598,6 +641,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     }
     pa &= AREA_MASK;
     if (sh7709_write(&m->chip, pa, size, value)) return true;
+    if (m->autopc && pa - DRAM_PA >= DRAM_AREA_SIZE) {
+        if (!autopc_write(&m->board, &m->board_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
+        return true;
+    }
     if (pa >= ASIC_PA && pa < ASIC_PA + ASIC_SIZE) { asic_write(m, pa - ASIC_PA, size, value); return true; }
     if (pa >= HKEEP_PA && pa < HKEEP_END) {
         if ((pa & ~3u) == PARALLEL_PA) ppfs_write_register(&m->ppfs, value);
@@ -762,6 +809,7 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     if (!keep_ram) {
         memset(m->dram, 0, m->dram_size);
         if (!load_b000ff(m, error, error_size)) return false;
+        if (m->autopc) autopc_prepare_ram(m->dram, m->dram_size);
     }
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.on_watch = on_watch;
@@ -776,6 +824,7 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     sh7709_init(&m->chip, &m->cpu, SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
     sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
     if (m->host_clock) apply_host_time(m);
+    autopc_reset(&m->board);
     memset(m->asic, 0, sizeof m->asic);
     m->pcmcia_state = 0;
     cfcard_reset(&m->card_slot);
@@ -806,6 +855,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     memcpy(m->image, rom, rom_size);
     m->image_size = rom_size;
     m->rom_hash = hash_bytes(rom, rom_size);
+    m->autopc = autopc_detect(rom, rom_size);
+    m->board_host = (autopc_host_t){ autopc_debug_line, autopc_trace, autopc_irl, m, &m->card_slot };
     m->card_slot.state = &m->card;
     m->dram_size_next = DRAM_DEFAULT_SIZE;
     if (!reset_machine(m, false, error, error_size)) {
@@ -867,11 +918,11 @@ bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
 uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 
-bool machine_lcd_enabled(machine_t *m) { return (m->display_csr & DISP_LCD_ON) != 0; }
+bool machine_lcd_enabled(machine_t *m) { return m->autopc || (m->display_csr & DISP_LCD_ON) != 0; }
 bool machine_backlight(machine_t *m) { return machine_lcd_enabled(m); }
 
 screen_size_t machine_screen_size(machine_t *m) {
-    (void)m;
+    if (m->autopc) return (screen_size_t){ AUTOPC_SCREEN_WIDTH, AUTOPC_SCREEN_HEIGHT };
     return (screen_size_t){ SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT };
 }
 
@@ -884,7 +935,15 @@ bool machine_screen_supported(machine_t *m, screen_size_t size) {
 
 bool machine_set_screen(machine_t *m, screen_size_t size) { return machine_screen_supported(m, size); }
 
+int machine_screen_palette(machine_t *m, uint32_t *palette) {
+    return m->autopc ? autopc_palette(palette) : 0;
+}
+
 bool machine_screen(machine_t *m, uint8_t *levels) {
+    if (m->autopc) {
+        autopc_screen(&m->board, levels);
+        return true;
+    }
     screen_size_t size = machine_screen_size(m);
     uint32_t width = size.width, height = size.height;
     if (!machine_lcd_enabled(m)) {
@@ -904,6 +963,10 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
 }
 
 void machine_key(machine_t *m, uint8_t scancode, bool up) {
+    if (m->autopc) {
+        autopc_key(&m->board, &m->board_host, scancode, up);
+        return;
+    }
     if (!(m->keyboard_csr & KB_CLK_EN)) return;
     bool extended = scancode >= 0x80 && scancode != 0x83;
     if (extended) keyboard_push(m, 0xE0);
@@ -933,6 +996,7 @@ static bool insert_card_now(machine_t *m, const char *path) {
     snprintf(m->card_path, sizeof m->card_path, "%s", path);
     m->pcmcia_state |= PCMCIA_STATE_INTR;
     update_pcmcia_interrupt(m);
+    if (m->autopc) autopc_card_changed(&m->board, &m->board_host);
     return true;
 }
 
@@ -961,6 +1025,7 @@ void machine_eject_card(machine_t *m) {
     m->card_path[0] = 0;
     m->pcmcia_state |= PCMCIA_STATE_INTR;
     update_pcmcia_interrupt(m);
+    if (m->autopc) autopc_card_changed(&m->board, &m->board_host);
 }
 
 bool machine_card_inserted(machine_t *m) { return m->card.inserted; }
@@ -1074,7 +1139,7 @@ void machine_dump_state(machine_t *m) {
     X(adc_cntr, m->adc_cntr) X(adc_str, m->adc_str) X(ucb_cntr, m->ucb_cntr) X(ucb_str, m->ucb_str) \
     X(ucb_register, m->ucb_register) X(sound_cntr, m->sound_cntr) X(sound_str, m->sound_str) \
     X(touch_mask, m->touch_mask) X(ucb_regs, m->ucb_regs) X(pen_timer_at, m->pen_timer_at) \
-    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state)
+    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state) X(board, m->board)
 
 static bool write_bytes(gzFile file, const void *data, uint32_t size) {
     return size == 0 || gzwrite(file, data, size) == (int)size;

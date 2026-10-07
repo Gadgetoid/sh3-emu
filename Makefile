@@ -35,7 +35,7 @@ else
 SRC_NET   = src/net/net_gateway_none.c src/net/net_link.c
 endif
 
-SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
+SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/autopc.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))

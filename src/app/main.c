@@ -1542,6 +1542,8 @@ int main(int argc, char **argv) {
         }
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight(machine_backlight(machine));
+        uint32_t palette[LCD_PALETTE_MAX];
+        lcd_set_palette(palette, machine_screen_palette(machine, palette));
         machine_screen(machine, lcd_framebuffer);
         bool lcd_on = machine_lcd_enabled(machine);
         SDL_UnlockMutex(runner.lock);
