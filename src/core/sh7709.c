@@ -6,6 +6,7 @@
 #define TMU_BASE    0xFFFFFE90u
 #define RTC_BASE    0xFFFFFEC0u
 #define INTC_BASE   0xFFFFFEE0u
+#define ICR0_NMIL   0x8000u
 #define BSC_BASE    0xFFFFFF60u
 #define CPG_BASE    0xFFFFFF80u
 #define CCR_ADDRESS 0xFFFFFFECu
@@ -557,7 +558,7 @@ bool sh7709_read(sh7709_t *chip, uint32_t pa, int size, uint32_t *value) {
     if (pa < INTC_BASE) { *value = rtc_read(chip, pa - RTC_BASE); return true; }
     if (pa < INTC_BASE + 6) {
         uint32_t offset = pa - INTC_BASE;
-        *value = offset == 0 ? chip->icr0 : chip->priority[(offset - 2) / 2];
+        *value = offset == 0 ? (uint32_t)((chip->icr0 & ~ICR0_NMIL) | (chip->nmi ? 0 : ICR0_NMIL)) : chip->priority[(offset - 2) / 2];
         return true;
     }
     if (pa >= BSC_BASE && pa < BSC_BASE + 0x20) {

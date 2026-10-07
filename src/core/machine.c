@@ -11,6 +11,7 @@
 
 #include "core/autopc.h"
 #include "core/casio.h"
+#include "core/hp320lx.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/ppfs.h"
@@ -162,7 +163,11 @@ struct machine {
     uint32_t  entry;
     uint64_t  rom_hash;
     bool      autopc;
+    bool      raw;
     bool      casio;
+    bool      hp;
+    hp320lx_t hp_board;
+    hp320lx_host_t hp_host;
     uint8_t  *flash;
     casio_t   casio_board;
     casio_host_t casio_host;
@@ -240,7 +245,7 @@ static bool unknown_seen(machine_t *m, const char *what, uint32_t pa) {
 }
 
 static void note_unknown(machine_t *m, const char *what, uint32_t pa, int size, uint32_t value) {
-    if (m->autopc || m->casio ? unknown_seen(m, what, pa) : m->unknown_logged >= 200) return;
+    if (m->autopc || m->raw ? unknown_seen(m, what, pa) : m->unknown_logged >= 200) return;
     m->unknown_logged++;
     machine_logf(m, "%s %08X (%d) = %08X at pc %08X\n", what, pa, size, value, m->cpu.pc);
 }
@@ -255,6 +260,10 @@ static void autopc_trace(void *context, bool write, uint32_t pa, int size, uint3
 }
 
 static void casio_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
+    note_unknown(context, write ? "write board" : "read  board", pa, size, value);
+}
+
+static void hp_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
     note_unknown(context, write ? "write board" : "read  board", pa, size, value);
 }
 
@@ -644,6 +653,9 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     }
     pa &= AREA_MASK;
     if (sh7709_read(&m->chip, pa, size, value)) return true;
+    if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        return hp320lx_read(&m->hp_board, &m->hp_host, pa, size, value);
+    }
     if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         if (casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         note_unknown(m, "read ", pa, size, 0);
@@ -691,6 +703,9 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     }
     pa &= AREA_MASK;
     if (sh7709_write(&m->chip, pa, size, value)) return true;
+    if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        return hp320lx_write(&m->hp_board, &m->hp_host, pa, size, value);
+    }
     if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         if (!casio_write(&m->casio_board, &m->casio_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
         return true;
@@ -921,12 +936,13 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     m->cpu.pc = m->entry;
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
-    sh7709_init(&m->chip, &m->cpu, SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
+    sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, MACHINE_PERIPHERAL_HZ);
     sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
     if (m->host_clock) apply_host_time(m);
     autopc_reset(&m->board);
     casio_reset(&m->casio_board);
-    if (m->casio) {
+    hp320lx_reset(&m->hp_board);
+    if (m->raw) {
         m->chip.transmit = casio_transmit;
         m->chip.transmit_context = m;
     }
@@ -961,11 +977,14 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->image_size = rom_size;
     m->rom_hash = hash_bytes(rom, rom_size);
     m->autopc = autopc_detect(rom, rom_size);
-    m->casio = rom_size < 7 || memcmp(rom, "B000FF\n", 7);
+    m->raw = rom_size < 7 || memcmp(rom, "B000FF\n", 7);
+    m->hp = m->raw && hp320lx_detect(rom, rom_size);
+    m->casio = m->raw && !m->hp;
     m->board_host = (autopc_host_t){ autopc_debug_line, autopc_trace, autopc_irl, m, &m->card_slot };
+    m->hp_host = (hp320lx_host_t){ hp_trace, autopc_debug_line, m };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, m };
     m->card_slot.state = &m->card;
-    if (m->casio && !load_flash(m, error, error_size)) {
+    if (m->raw && !load_flash(m, error, error_size)) {
         machine_destroy(m);
         return NULL;
     }
@@ -1038,12 +1057,13 @@ bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
 uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 
-bool machine_lcd_enabled(machine_t *m) { return m->autopc || m->casio || (m->display_csr & DISP_LCD_ON) != 0; }
+bool machine_lcd_enabled(machine_t *m) { return m->autopc || m->raw || (m->display_csr & DISP_LCD_ON) != 0; }
 bool machine_backlight(machine_t *m) { return machine_lcd_enabled(m); }
 
 screen_size_t machine_screen_size(machine_t *m) {
     if (m->autopc) return (screen_size_t){ AUTOPC_SCREEN_WIDTH, AUTOPC_SCREEN_HEIGHT };
     if (m->casio) return (screen_size_t){ CASIO_SCREEN_WIDTH, CASIO_SCREEN_HEIGHT };
+    if (m->hp) return (screen_size_t){ HP320LX_SCREEN_WIDTH, HP320LX_SCREEN_HEIGHT };
     return (screen_size_t){ SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT };
 }
 
@@ -1067,6 +1087,12 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
     }
     if (m->casio) {
         casio_screen(&m->casio_board, levels);
+        return true;
+    }
+    if (m->hp) {
+        uint32_t offset = HP320LX_FRAMEBUFFER - DRAM_PA;
+        if (offset + HP320LX_SCREEN_WIDTH / 4 * HP320LX_SCREEN_HEIGHT > m->dram_size) return false;
+        hp320lx_screen(m->dram + offset, levels);
         return true;
     }
     screen_size_t size = machine_screen_size(m);
@@ -1274,7 +1300,7 @@ void machine_dump_state(machine_t *m) {
     X(adc_cntr, m->adc_cntr) X(adc_str, m->adc_str) X(ucb_cntr, m->ucb_cntr) X(ucb_str, m->ucb_str) \
     X(ucb_register, m->ucb_register) X(sound_cntr, m->sound_cntr) X(sound_str, m->sound_str) \
     X(touch_mask, m->touch_mask) X(ucb_regs, m->ucb_regs) X(pen_timer_at, m->pen_timer_at) \
-    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state) X(board, m->board) X(casio_board, m->casio_board)
+    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state) X(board, m->board) X(casio_board, m->casio_board) X(hp_board, m->hp_board)
 
 static bool write_bytes(gzFile file, const void *data, uint32_t size) {
     return size == 0 || gzwrite(file, data, size) == (int)size;
@@ -1415,8 +1441,8 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
     cfcard_rebind(&m->card_slot, image);
     if (!image) m->card_path[0] = 0;
-    m->chip.transmit = m->casio ? casio_transmit : NULL;
-    m->chip.transmit_context = m->casio ? m : NULL;
+    m->chip.transmit = m->raw ? casio_transmit : NULL;
+    m->chip.transmit_context = m->raw ? m : NULL;
     sh3_flush_translations(&m->cpu);
     return true;
 }
