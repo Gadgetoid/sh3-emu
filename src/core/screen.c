@@ -5,11 +5,8 @@
 #include <string.h>
 
 const screen_size_t SCREEN_PRESETS[] = {
-    { 256, 64 },
     { 480, 240 },
     { 640, 240 },
-    { 640, 480 },
-    { 800, 600 },
 };
 const int SCREEN_PRESET_COUNT = (int)(sizeof SCREEN_PRESETS / sizeof SCREEN_PRESETS[0]);
 

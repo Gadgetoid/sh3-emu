@@ -85,32 +85,10 @@ def basic(client):
     check("libraries", "coredll.elf" in libraries.lower(), libraries[:200])
 
 
-def run_program(client):
-    check("extended", client.request("!") == "OK")
-    reply = client.request("vFile:open:%s,%x,%x" % ("\\gdbtest.txt".encode().hex(), 0x601, 0o644))
-    check("vFile open", reply.startswith("F") and not reply.startswith("F-1"), reply)
-    descriptor = int(reply[1:].split(";")[0], 16)
-    reply = client.request("vFile:pwrite:%x,0,hello" % descriptor)
-    check("vFile pwrite", reply == "F5", reply)
-    reply = client.request("vFile:pread:%x,10,0" % descriptor)
-    check("vFile pread", reply == "F5;hello", reply)
-    check("vFile close", client.request("vFile:close:%x" % descriptor) == "F0")
-    stop = client.request("vRun;%s" % "\\Windows\\cmd.exe".encode().hex())
-    check("vRun", stop.startswith("T05"), stop)
-    pc = client.register(PC_REGISTER)
-    check("vRun first instruction", pc < 0x02000000, hex(pc))
-    stop = client.request("s")
-    check("vRun step", stop.startswith("T05") and client.register(PC_REGISTER) == pc + 2, hex(client.register(PC_REGISTER)))
-    check("vKill", client.request("vKill;1") == "OK")
-
-
 def main():
     client = Client(int(sys.argv[1]))
     client.request("QStartNoAckMode")
-    if len(sys.argv) > 2 and sys.argv[2] == "run":
-        run_program(client)
-    else:
-        basic(client)
+    basic(client)
     client.send("k")
 
 

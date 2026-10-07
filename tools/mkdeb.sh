@@ -28,7 +28,7 @@ Files: *
 Copyright: 2026 Phil Howard
 License: MIT
  See /usr/share/doc/$package/LICENSE
-Comment: The Odo system ASIC's behaviour follows CERF (MIT), see /usr/share/doc/$package/licences/MIT-CERF.txt
+Comment: Parts follow CERF (MIT), see /usr/share/doc/$package/licences/MIT-CERF.txt
 
 Files: src/vendor/stb_truetype.h
 License: public-domain
@@ -71,9 +71,9 @@ Recommends: mtools, dosfstools, fdisk, fonts-dejavu-core | fonts-noto-core
 Section: otherosfs
 Priority: optional
 Description: Hitachi SH-3 Windows CE emulator
- Emulates Windows CE machines built on the Hitachi SH-3: Microsoft's Odo
- reference board, the Clarion AutoPC, the Casio Cassiopeia A-51 and the
- HP 320LX, with a simulated LCD, PC Card images and a PPP network.
+ Emulates Windows CE handhelds built on the Hitachi SH-3: the Casio
+ Cassiopeia A-51 and the HP 320LX, with a simulated LCD, PC Card images,
+ a serial port and a PPP network.
  .
  sh3emu is the emulator and sh3emu-headless runs it without a window for
  tests and scripts. ROMs are not included.

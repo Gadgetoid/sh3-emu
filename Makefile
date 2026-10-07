@@ -4,7 +4,7 @@ SH3RUN    = sh3-run
 GATEWAYCHECK = $(BUILD)/gateway-check
 APP       = SH3Emu.app
 BUILD     = build
-ROM      ?= rom/odo-sh3-ce212.bin
+ROM      ?= rom/nk-hp320lx.bin
 
 .DEFAULT_GOAL := all
 
@@ -41,7 +41,7 @@ else
 SRC_NET   = src/net/net_gateway_none.c src/net/serial_link.c
 endif
 
-SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/autopc.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/ppfs.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
+SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
@@ -110,7 +110,7 @@ check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK)
 
 test: $(HEADLESS) $(SH3RUN)
 	sh tests/sh3/run.sh
-	sh tests/boot.sh $(ROM)
+	sh tests/boot.sh
 
 sh3-fuzz: $(SH3RUN)
 	python3 tests/sh3/fuzz.py --runner ./$(SH3RUN)

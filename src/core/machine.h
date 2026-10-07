@@ -44,7 +44,6 @@ bool machine_suspended(machine_t *machine);
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
 bool machine_card_inserted(machine_t *machine);
-bool machine_set_host_folder(machine_t *machine, const char *path);
 
 void   machine_serial_connect(machine_t *machine, bool connected);
 bool   machine_serial_connected(machine_t *machine);
@@ -67,8 +66,6 @@ bool machine_save(machine_t *machine, const char *path, int64_t host_time);
 uint64_t machine_rom_hash(machine_t *machine);
 enum {
     MACHINE_BOARD_NONE,
-    MACHINE_BOARD_ODO,
-    MACHINE_BOARD_AUTOPC,
     MACHINE_BOARD_CASIO,
     MACHINE_BOARD_HP,
     MACHINE_BOARD_COUNT,

@@ -21,8 +21,8 @@ cat > "$app/Contents/Info.plist" <<EOF
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Odo SH3</string>
-    <key>CFBundleDisplayName</key><string>Odo SH3</string>
+    <key>CFBundleName</key><string>SH3Emu</string>
+    <key>CFBundleDisplayName</key><string>SH3Emu</string>
     <key>CFBundleIdentifier</key><string>org.sh3-emu.SH3Emu</string>
     <key>CFBundleExecutable</key><string>sh3emu</string>
     <key>CFBundleIconFile</key><string>SH3Emu</string>
@@ -30,7 +30,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Emulates the Odo SH3 Windows CE reference board. ROMs not included.</string>
+    <key>NSHumanReadableCopyright</key><string>Emulates the Casio Cassiopeia A-51 and HP 320LX Windows CE handhelds. ROMs not included.</string>
 </dict>
 </plist>
 EOF

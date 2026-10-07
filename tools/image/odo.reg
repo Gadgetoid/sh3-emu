@@ -1,9 +1,0 @@
-[HKEY_LOCAL_MACHINE\HARDWARE\DEVICEMAP\TOUCH]
-    "CalibrationData"="960,480 192,96 192,864 1728,864 1728,96 "
-
-[HKEY_LOCAL_MACHINE\init]
-    "Launch60"="netdial.exe"
-    "Depend60"=hex:14,00,1e,00
-
-[HKEY_CURRENT_USER\ControlPanel\Comm]
-    "AutoCnct"=dword:0

@@ -269,7 +269,7 @@ static void release_keys(input_queue_t *input, machine_t *machine, bool *held, i
     }
 }
 
-typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_FOLDER } pick_kind_t;
+typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD } pick_kind_t;
 
 #define PICK_MAX 64
 
@@ -508,7 +508,6 @@ typedef struct {
     uint32_t system;
     char     machine[64];
     uint32_t display;
-    char     host_folder[1024];
     uint32_t serial;
     char     serial_device[SERIAL_LINK_PORT_NAME];
 } settings_t;
@@ -567,7 +566,6 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "network=%u", &value) == 1) settings.serial = value ? SERIAL_NETWORK : SERIAL_OFF;
         else if (sscanf(line, "serial=%u", &value) == 1 && value <= SERIAL_DEVICE) settings.serial = value;
         else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
-        else if (!strncmp(line, "host_folder=", 12)) copy_setting(settings.host_folder, sizeof settings.host_folder, line + 12);
     }
     fclose(file);
     return settings;
@@ -578,9 +576,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nhost_folder=%s\nserial=%u\nserial_device=%s\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->host_folder, settings->serial, settings->serial_device);
+            settings->serial, settings->serial_device);
     fclose(file);
 }
 
@@ -762,7 +760,7 @@ static void find_roms(rom_set_t *roms) {
 static bool no_roms_dialog(void) {
     char folder[1100], message[1400];
     rom_folder(folder, sizeof folder);
-    snprintf(message, sizeof message, "Put a ROM in %s: an Odo SH3 or Clarion AutoPC nk.bin, or a Casio Cassiopeia A-51 or HP 320LX ROM image.", folder);
+    snprintf(message, sizeof message, "Put a ROM in %s: a Casio Cassiopeia A-51 or HP 320LX ROM image.", folder);
     const SDL_MessageBoxButtonData buttons[] = {
         { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
         { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Show ROM Folder" },
@@ -844,7 +842,7 @@ static screen_size_t rom_screen(const char *path, screen_size_t preferred) {
 }
 
 static void migrate_profiles(profiles_t *profiles, const rom_set_t *roms, const settings_t *settings, const char *folder) {
-    for (int system = MACHINE_BOARD_ODO; system < MACHINE_BOARD_COUNT; system++) {
+    for (int system = MACHINE_BOARD_CASIO; system < MACHINE_BOARD_COUNT; system++) {
         if (!roms->path[system][0]) continue;
         profile_t profile = { .memory = settings->memory, .screen = settings->screen, .host_time = settings->host_time != 0 };
         snprintf(profile.name, sizeof profile.name, "%s", machine_board_name(system));
@@ -968,7 +966,7 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
 
 typedef struct {
     settings_t   *settings;
-    const char   *card, *folder, *state_file, *machine;
+    const char   *card, *state_file, *machine;
     bool          fresh;
     int           gdb_port;
     const char   *gdb_process;
@@ -976,7 +974,7 @@ typedef struct {
 } launch_t;
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_FOLDER, LAUNCH_MEMORY, LAUNCH_SPEED,
+    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
@@ -987,7 +985,6 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_STATE] = { "state", "FILE", "load, save and autosave FILE instead of the ROM's own state", 0 },
     [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
     [LAUNCH_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image", 0 },
-    [LAUNCH_FOLDER] = { "folder", "DIR", "serve DIR to CE's parallel-port file system (PPFS), for programs that aren't in ROM", 0 },
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
@@ -1011,7 +1008,6 @@ static bool launch_option(void *context, int option, const char *value, char *er
     case LAUNCH_STATE: launch->state_file = value; return true;
     case LAUNCH_FRESH: launch->fresh = true; return true;
     case LAUNCH_CARD: launch->card = value; return true;
-    case LAUNCH_FOLDER: launch->folder = value; return true;
     case LAUNCH_MEMORY:
         if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
         settings->memory = (uint32_t)integer;
@@ -1035,7 +1031,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
 
 static const option_spec_t LAUNCH_SPEC = {
     "sh3emu", "[OPTIONS] [ROM]",
-    "Emulates Hitachi SH-3 Windows CE machines: Microsoft's Odo reference board, the Clarion AutoPC, the Casio Cassiopeia A-51 and the HP 320LX. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
+    "Emulates the Casio Cassiopeia A-51 and HP 320LX Windows CE handhelds. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
     LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
     "headless runs the machine without a window, for tests and scripts.",
 };
@@ -1043,7 +1039,7 @@ static const option_spec_t LAUNCH_SPEC = {
 int main(int argc, char **argv) {
     const char *rom_path = NULL;
     settings_t settings = settings_load();
-    launch_t launch = { &settings, NULL, NULL, NULL, NULL, false, 0, NULL, NULL };
+    launch_t launch = { &settings, NULL, NULL, NULL, false, 0, NULL, NULL };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
@@ -1051,7 +1047,6 @@ int main(int argc, char **argv) {
     if (parsed == OPTIONS_ERROR) return 2;
     if (positional_count) rom_path = positional[0];
     const char *card = launch.card, *state_file = launch.state_file;
-    const char *host_folder = launch.folder ? launch.folder : settings.host_folder[0] ? settings.host_folder : NULL;
     bool fresh = launch.fresh;
     static rom_set_t roms;
     find_roms(&roms);
@@ -1113,17 +1108,7 @@ int main(int argc, char **argv) {
     double since_autosave = 0, since_backup = 0, notice_left = 0;
     const char *notice = startup_notice;
     if (notice) notice_left = 6;
-    char folder_notice[1200], paste_notice[64];
-    if (launch.folder && !machine_set_host_folder(machine, launch.folder)) {
-        fprintf(stderr, "cannot open folder %s\n", launch.folder);
-        return 1;
-    }
-    if (!launch.folder && host_folder && !machine_set_host_folder(machine, host_folder)) {
-        snprintf(folder_notice, sizeof folder_notice, "host folder %s is missing", host_folder);
-        notice = folder_notice;
-        notice_left = NOTICE_SECONDS * 3;
-        host_folder = NULL;
-    }
+    char paste_notice[64];
     static typer_t typer;
     static scroller_t scroller;
     static input_queue_t input;
@@ -1425,18 +1410,6 @@ int main(int argc, char **argv) {
                     switch_to = item - MENU_MACHINE_FIRST;
                 }
                 break;
-            case MENU_HOST_FOLDER:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FOLDER, window, host_folder, false);
-                break;
-            case MENU_STOP_HOST_FOLDER:
-                snprintf(folder_notice, sizeof folder_notice, "stopped sharing %s", host_folder ? file_leaf_name(host_folder) : "");
-                settings.host_folder[0] = 0;
-                settings_save(&settings);
-                host_folder = NULL;
-                machine_set_host_folder(machine, NULL);
-                notice = folder_notice;
-                notice_left = NOTICE_SECONDS;
-                break;
             case MENU_SERIAL_OFF:
             case MENU_SERIAL_NETWORK:
             case MENU_SERIAL_PTY: {
@@ -1475,7 +1448,6 @@ int main(int argc, char **argv) {
                     key_layout = machine_key_layout(machine);
                     snprintf(settings.machine, sizeof settings.machine, "%s", current.id);
                     settings_save(&settings);
-                    if (host_folder) machine_set_host_folder(machine, host_folder);
                     set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                     since_backup = 0;
                     runner.machine = machine;
@@ -1511,22 +1483,12 @@ int main(int argc, char **argv) {
                 }
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
-            } else if (picked->kind == PICK_FOLDER) {
-                snprintf(settings.host_folder, sizeof settings.host_folder, "%s", picked->paths[0]);
-                settings_save(&settings);
-                host_folder = settings.host_folder;
-                bool served = machine_set_host_folder(machine, host_folder);
-                snprintf(folder_notice, sizeof folder_notice, served ? "serving %s to PPFS" : "cannot open folder %s", file_leaf_name(host_folder));
-                if (!served) host_folder = NULL;
-                notice = folder_notice;
-                notice_left = NOTICE_SECONDS * 2;
             }
             free(picked);
             picked = NULL;
         }
         menu_ensure();
         menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
-        menu_set_enabled(MENU_STOP_HOST_FOLDER, host_folder != NULL);
         menu_set_enabled(MENU_SERIAL_NETWORK, net_gateway_available());
         menu_set_checked(MENU_SERIAL_OFF, serial.mode == SERIAL_OFF);
         menu_set_checked(MENU_SERIAL_NETWORK, serial.mode == SERIAL_NETWORK);

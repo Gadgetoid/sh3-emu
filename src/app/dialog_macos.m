@@ -42,7 +42,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
     panel.canChooseFiles = YES;
     panel.canChooseDirectories = NO;
     panel.allowsMultipleSelection = NO;
-    panel.message = @"Choose a ROM: an Odo SH3 or Clarion AutoPC nk.bin, or a Casio Cassiopeia A-51 or HP 320LX ROM image.";
+    panel.message = @"Choose a ROM: a Casio Cassiopeia A-51 or HP 320LX ROM image.";
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         const char *path = panel.URL.fileSystemRepresentation;
         char label[160];

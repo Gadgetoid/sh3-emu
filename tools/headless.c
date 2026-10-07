@@ -111,7 +111,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double   seconds;
-    const char *png, *pgm, *load, *save, *card, *folder, *agent_socket, *gdb_process;
+    const char *png, *pgm, *load, *save, *card, *agent_socket, *gdb_process;
     int      png_cell, png_backlight, gdb_port;
     bool     trace_pc, host_time, trace_exceptions, debug_output, seconds_given;
     double   key_times[32];
@@ -135,7 +135,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_FOLDER, OPT_NET, OPT_PTY, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_NET, OPT_PTY, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -147,7 +147,6 @@ static const option_t OPTIONS[] = {
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
-    [OPT_FOLDER] = { "folder", "DIR", "serve DIR to CE's parallel-port file system (PPFS), for programs that aren't in ROM", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 0 s, or 2 s after --load); CE dials it at boot", 0 },
     [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 0 s, or 2 s after --load)", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
@@ -194,7 +193,6 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
-    case OPT_FOLDER: run->folder = value; return true;
     case OPT_NET:
     case OPT_PTY:
         if (option == OPT_NET) run->net = true;
@@ -286,7 +284,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
 
 static const option_spec_t SPEC = {
     "headless", "ROM [OPTIONS]",
-    "Runs the Odo SH3 board without a window, for tests and scripts. ROM is a Platform Builder nk.bin (B000FF) RAM image, or a raw ROM image such as the Casio Cassiopeia A-51's.",
+    "Runs a Casio Cassiopeia A-51 or HP 320LX ROM image without a window, for tests and scripts.",
     OPTIONS, (int)(sizeof OPTIONS / sizeof OPTIONS[0]),
     "Events at or after --seconds don't happen, and are reported. Options taking a value also accept it as the next argument.",
 };
@@ -310,11 +308,6 @@ int main(int argc, char **argv) {
         return 2;
     }
     run.rom_path = positional[0];
-    struct stat folder_info;
-    if (run.folder && (stat(run.folder, &folder_info) || !S_ISDIR(folder_info.st_mode))) {
-        fprintf(stderr, "cannot open folder %s\n", run.folder);
-        return 1;
-    }
     if (run.gdb_port && !run.seconds_given) run.seconds = 1e7;
     double latest = run.soft_reset_at;
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
@@ -340,7 +333,6 @@ int main(int argc, char **argv) {
     if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
     if (run.trace_exceptions) machine_trace_exceptions(machine, true);
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
-    if (run.folder && !machine_set_host_folder(machine, run.folder)) { fprintf(stderr, "cannot open folder %s\n", run.folder); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     serial_link_init(&serial, log_stderr);

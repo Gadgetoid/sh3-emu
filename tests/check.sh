@@ -17,8 +17,7 @@ expect_fail headless_unknown "unknown option --tpa" ./headless rom.bin --tpa=1:2
 expect_fail headless_bad_tap "wants SECONDS:X:Y" ./headless rom.bin --tap=21:108
 expect_fail headless_joined_taps "wants SECONDS:X:Y" ./headless rom.bin "--tap=4:240:120 --tap=6:48:24"
 expect_fail headless_bad_key "wants SECONDS:SCANCODE" ./headless rom.bin --key=1:11+0D+12+14+59
-expect_fail headless_not_image "not a B000FF" ./headless Makefile --seconds=1
-expect_fail headless_bad_folder "cannot open folder" ./headless Makefile --seconds=1 --folder=/nonexistent/folder
+expect_fail headless_not_image "not a Windows CE ROM image" ./headless Makefile --seconds=1
 expect_fail headless_bad_agent "cannot listen on agent socket" ./headless Makefile --seconds=1 --agent=/nonexistent/folder/agent.sock
 if [ -x ./sh3emu ]; then
     expect_fail sh3emu_unknown "unknown option --frob" ./sh3emu --frob
