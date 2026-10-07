@@ -10,6 +10,7 @@
 #include <zlib.h>
 
 #include "core/autopc.h"
+#include "core/casio.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/ppfs.h"
@@ -19,6 +20,12 @@
 #define DRAM_DEFAULT_SIZE  (16u << 20)
 #define DRAM_AREA_SIZE     (64u << 20)
 #define AREA_MASK          0x1FFFFFFFu
+#define FLASH_SIZE         (16u << 20)
+#define RESET_VECTOR       0xA0000000u
+#define P4_ROUTINES_END    0xE0010000u
+#define OP_RTS             0x000Bu
+#define OP_NOP             0x0009u
+#define ROM_HEADER_SIZE    0x54u
 
 #define HKEEP_PA           0x04000000u
 #define HKEEP_END          0x08000000u
@@ -153,6 +160,11 @@ struct machine {
     uint32_t  entry;
     uint64_t  rom_hash;
     bool      autopc;
+    bool      casio;
+    uint8_t  *flash;
+    casio_t   casio_board;
+    casio_host_t casio_host;
+    p2_serial_t sci_line;
     autopc_t  board;
     autopc_host_t board_host;
 
@@ -226,7 +238,7 @@ static bool unknown_seen(machine_t *m, const char *what, uint32_t pa) {
 }
 
 static void note_unknown(machine_t *m, const char *what, uint32_t pa, int size, uint32_t value) {
-    if (m->autopc ? unknown_seen(m, what, pa) : m->unknown_logged >= 200) return;
+    if (m->autopc || m->casio ? unknown_seen(m, what, pa) : m->unknown_logged >= 200) return;
     m->unknown_logged++;
     machine_logf(m, "%s %08X (%d) = %08X at pc %08X\n", what, pa, size, value, m->cpu.pc);
 }
@@ -238,6 +250,14 @@ static void autopc_debug_line(void *context, const char *line) {
 
 static void autopc_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
     note_unknown(context, write ? "write faceplate" : "read  faceplate", pa, size, value);
+}
+
+static void casio_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
+    note_unknown(context, write ? "write board" : "read  board", pa, size, value);
+}
+
+static uint64_t casio_cycles(void *context) {
+    return ((machine_t *)context)->cpu.cycles;
 }
 
 static void autopc_irl(void *context, bool asserted) {
@@ -600,12 +620,23 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
         if (sh7709_read(&m->chip, pa, size, value)) return true;
+        if (m->casio && casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
+        if (m->casio && pa < P4_ROUTINES_END) {
+            *value = (pa & 2) ? OP_RTS : OP_NOP;
+            return true;
+        }
         note_unknown(m, "read  P4", pa, size, 0);
         *value = 0;
         return true;
     }
     pa &= AREA_MASK;
     if (sh7709_read(&m->chip, pa, size, value)) return true;
+    if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
+        note_unknown(m, "read ", pa, size, 0);
+        *value = 0;
+        return true;
+    }
     if (m->autopc && pa - DRAM_PA >= DRAM_AREA_SIZE) {
         if (autopc_read(&m->board, &m->board_host, pa, size, value)) return true;
         note_unknown(m, "read ", pa, size, 0);
@@ -622,6 +653,11 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         *value = pcmcia_read(m, pa, size);
         return true;
     }
+    if (m->flash && pa < FLASH_SIZE) {
+        const uint8_t *base = m->flash + pa;
+        *value = size == 4 ? read_le32(base) : size == 2 ? (uint32_t)(base[0] | base[1] << 8) : base[0];
+        return true;
+    }
     if (pa - DRAM_PA < DRAM_AREA_SIZE) {
         const uint8_t *base = m->dram + (pa - DRAM_PA) % m->dram_size;
         *value = size == 4 ? read_le32(base) : size == 2 ? (uint32_t)(base[0] | base[1] << 8) : base[0];
@@ -636,11 +672,16 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
         if (sh7709_write(&m->chip, pa, size, value)) return true;
+        if (m->casio && casio_write(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         note_unknown(m, "write P4", pa, size, value);
         return true;
     }
     pa &= AREA_MASK;
     if (sh7709_write(&m->chip, pa, size, value)) return true;
+    if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (!casio_write(&m->casio_board, &m->casio_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
+        return true;
+    }
     if (m->autopc && pa - DRAM_PA >= DRAM_AREA_SIZE) {
         if (!autopc_write(&m->board, &m->board_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
         return true;
@@ -656,6 +697,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
         pcmcia_write(m, pa, size, value);
         return true;
     }
+    if (m->flash && pa < FLASH_SIZE) {
+        note_unknown(m, "write flash", pa, size, value);
+        return true;
+    }
     if (pa - DRAM_PA < DRAM_AREA_SIZE) {
         uint32_t offset = (pa - DRAM_PA) % m->dram_size;
         for (int i = 0; i < size; i++) m->dram[offset + (uint32_t)i] = (uint8_t)(value >> (8 * i));
@@ -667,9 +712,45 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
 
 static uint8_t *bus_fetch_page(void *context, uint32_t pa) {
     machine_t *m = context;
+    if (pa >= 0xE0000000u) return NULL;
     pa &= AREA_MASK;
     if (pa - DRAM_PA < m->dram_size) return m->dram + (pa - DRAM_PA);
+    if (m->flash && pa < FLASH_SIZE) return m->flash + pa;
     return NULL;
+}
+
+static void casio_transmit(void *context, int port, uint8_t byte) {
+    machine_t *m = context;
+    (void)port;
+    debug_character(m, &m->sci_line, byte);
+}
+
+static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfirst) {
+    for (size_t offset = 0; offset + ROM_HEADER_SIZE <= size; offset += 4) {
+        uint32_t first = read_le32(image + offset + 8), last = read_le32(image + offset + 12);
+        if (last - first == size && !(first & 0xFFFu)) {
+            *physfirst = first;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool load_flash(machine_t *m, char *error, size_t error_size) {
+    uint32_t physfirst;
+    if (m->image_size > FLASH_SIZE || !find_rom_header(m->image, m->image_size, &physfirst) || (physfirst & AREA_MASK) + m->image_size > FLASH_SIZE) {
+        snprintf(error, error_size, "not a B000FF (nk.bin) image or a ROM image");
+        return false;
+    }
+    m->flash = malloc(FLASH_SIZE);
+    if (!m->flash) {
+        snprintf(error, error_size, "out of memory");
+        return false;
+    }
+    memset(m->flash, 0xFF, FLASH_SIZE);
+    memcpy(m->flash + (physfirst & AREA_MASK), m->image, m->image_size);
+    m->entry = RESET_VECTOR;
+    return true;
 }
 
 static bool load_b000ff(machine_t *m, char *error, size_t error_size) {
@@ -808,7 +889,7 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     }
     if (!keep_ram) {
         memset(m->dram, 0, m->dram_size);
-        if (!load_b000ff(m, error, error_size)) return false;
+        if (!m->flash && !load_b000ff(m, error, error_size)) return false;
         if (m->autopc) autopc_prepare_ram(m->dram, m->dram_size);
     }
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
@@ -825,6 +906,11 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
     if (m->host_clock) apply_host_time(m);
     autopc_reset(&m->board);
+    casio_reset(&m->casio_board);
+    if (m->casio) {
+        m->chip.transmit = casio_transmit;
+        m->chip.transmit_context = m;
+    }
     memset(m->asic, 0, sizeof m->asic);
     m->pcmcia_state = 0;
     cfcard_reset(&m->card_slot);
@@ -856,8 +942,14 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->image_size = rom_size;
     m->rom_hash = hash_bytes(rom, rom_size);
     m->autopc = autopc_detect(rom, rom_size);
+    m->casio = rom_size < 7 || memcmp(rom, "B000FF\n", 7);
     m->board_host = (autopc_host_t){ autopc_debug_line, autopc_trace, autopc_irl, m, &m->card_slot };
+    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, MACHINE_CLOCK_HZ, m };
     m->card_slot.state = &m->card;
+    if (m->casio && !load_flash(m, error, error_size)) {
+        machine_destroy(m);
+        return NULL;
+    }
     m->dram_size_next = DRAM_DEFAULT_SIZE;
     if (!reset_machine(m, false, error, error_size)) {
         machine_destroy(m);
@@ -872,6 +964,7 @@ void machine_destroy(machine_t *m) {
     cfcard_eject(&m->card_slot);
     ppfs_close_all(&m->ppfs);
     free(m->dram);
+    free(m->flash);
     free(m->image);
     free(m);
 }
@@ -918,11 +1011,12 @@ bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
 uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 
-bool machine_lcd_enabled(machine_t *m) { return m->autopc || (m->display_csr & DISP_LCD_ON) != 0; }
+bool machine_lcd_enabled(machine_t *m) { return m->autopc || m->casio || (m->display_csr & DISP_LCD_ON) != 0; }
 bool machine_backlight(machine_t *m) { return machine_lcd_enabled(m); }
 
 screen_size_t machine_screen_size(machine_t *m) {
     if (m->autopc) return (screen_size_t){ AUTOPC_SCREEN_WIDTH, AUTOPC_SCREEN_HEIGHT };
+    if (m->casio) return (screen_size_t){ CASIO_SCREEN_WIDTH, CASIO_SCREEN_HEIGHT };
     return (screen_size_t){ SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT };
 }
 
@@ -942,6 +1036,10 @@ int machine_screen_palette(machine_t *m, uint32_t *palette) {
 bool machine_screen(machine_t *m, uint8_t *levels) {
     if (m->autopc) {
         autopc_screen(&m->board, levels);
+        return true;
+    }
+    if (m->casio) {
+        casio_screen(&m->casio_board, levels);
         return true;
     }
     screen_size_t size = machine_screen_size(m);
@@ -1139,7 +1237,7 @@ void machine_dump_state(machine_t *m) {
     X(adc_cntr, m->adc_cntr) X(adc_str, m->adc_str) X(ucb_cntr, m->ucb_cntr) X(ucb_str, m->ucb_str) \
     X(ucb_register, m->ucb_register) X(sound_cntr, m->sound_cntr) X(sound_str, m->sound_str) \
     X(touch_mask, m->touch_mask) X(ucb_regs, m->ucb_regs) X(pen_timer_at, m->pen_timer_at) \
-    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state) X(board, m->board)
+    X(card, m->card) X(card_path, m->card_path) X(pcmcia_state, m->pcmcia_state) X(board, m->board) X(casio_board, m->casio_board)
 
 static bool write_bytes(gzFile file, const void *data, uint32_t size) {
     return size == 0 || gzwrite(file, data, size) == (int)size;
@@ -1255,8 +1353,8 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
     cfcard_rebind(&m->card_slot, image);
     if (!image) m->card_path[0] = 0;
-    m->chip.transmit = NULL;
-    m->chip.transmit_context = NULL;
+    m->chip.transmit = m->casio ? casio_transmit : NULL;
+    m->chip.transmit_context = m->casio ? m : NULL;
     sh3_flush_translations(&m->cpu);
     return true;
 }

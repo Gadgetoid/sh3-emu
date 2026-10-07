@@ -274,7 +274,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
 
 static const option_spec_t SPEC = {
     "headless", "ROM [OPTIONS]",
-    "Runs the Odo SH3 board without a window, for tests and scripts. ROM is a Platform Builder nk.bin (B000FF) RAM image.",
+    "Runs the Odo SH3 board without a window, for tests and scripts. ROM is a Platform Builder nk.bin (B000FF) RAM image, or a raw ROM image such as the Casio Cassiopeia A-51's.",
     OPTIONS, (int)(sizeof OPTIONS / sizeof OPTIONS[0]),
     "Events at or after --seconds don't happen, and are reported. Options taking a value also accept it as the next argument.",
 };

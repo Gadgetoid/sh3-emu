@@ -92,3 +92,12 @@ if [ -f "$AUTOPC_ROM" ]; then
 else
     echo "skip autopc: no $AUTOPC_ROM (Clarion AutoPC BurnOS.bin)"
 fi
+CASIO_ROM=${CASIO_ROM:-rom/nk-a51-ce1.01.bin}
+CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
+if [ -f "$CASIO_ROM" ]; then
+    ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
+    actual=$(shasum -a 256 "$OUT/casio.pgm" | cut -d' ' -f1)
+    if grep -q "^debug: Windows CE Kernel for Hitachi SH" "$OUT/casio.log" && [ "$actual" = "$CASIO_HASH" ]; then echo "ok   casio"; else echo "FAIL casio $actual"; exit 1; fi
+else
+    echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
+fi
