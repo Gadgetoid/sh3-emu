@@ -9,9 +9,15 @@ ROM      ?= rom/odo-sh3-ce212.bin
 .DEFAULT_GOAL := all
 
 CFLAGS  += -Isrc -I$(BUILD) -Wall -Wextra -O2 -std=c11 -fno-common -MMD -MP
-CFLAGS  += $(shell pkg-config --cflags sdl3)
+ifeq ($(SDL_STATIC),1)
+SDL_PKG_CONFIG = pkg-config --static
+else
+SDL_PKG_CONFIG = pkg-config
+endif
+
+CFLAGS  += $(shell $(SDL_PKG_CONFIG) --cflags sdl3)
 THREAD_LIBS = -lpthread
-LDFLAGS += $(shell pkg-config --libs sdl3) -lm -lz $(THREAD_LIBS)
+LDFLAGS += $(shell $(SDL_PKG_CONFIG) --libs sdl3) -lm -lz $(THREAD_LIBS)
 
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Darwin)
