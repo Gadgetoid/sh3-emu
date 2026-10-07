@@ -76,10 +76,14 @@ void sh7709_reset(sh7709_t *chip) {
     uint32_t cpu_hz = chip->cpu_hz, peripheral_hz = chip->peripheral_hz;
     sh7709_transmit_fn transmit = chip->transmit;
     void *transmit_context = chip->transmit_context;
-    uint16_t adc_input[4];
+    uint16_t adc_input[4], port_input_mask[64], port_input[64];
     memcpy(adc_input, chip->adc_input, sizeof adc_input);
+    memcpy(port_input_mask, chip->port_input_mask, sizeof port_input_mask);
+    memcpy(port_input, chip->port_input, sizeof port_input);
     memset(chip, 0, sizeof *chip);
     memcpy(chip->adc_input, adc_input, sizeof adc_input);
+    memcpy(chip->port_input_mask, port_input_mask, sizeof port_input_mask);
+    memcpy(chip->port_input, port_input, sizeof port_input);
     chip->cpu = cpu;
     chip->variant = variant;
     chip->cpu_hz = cpu_hz;
@@ -232,6 +236,13 @@ static void start_adc(sh7709_t *chip) {
     uint32_t last = chip->adc_control & ADCSR_CH & 3u;
     uint32_t channels = (chip->adc_control & ADCSR_MULTI) ? last + 1 : 1;
     chip->adc_done = chip->cpu->cycles + (uint64_t)channels * (chip->cpu_hz / ADC_CHANNEL_HZ);
+}
+
+void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t value) {
+    uint32_t offset = (pa & 0x1FFFFFFFu) - AREA1_BASE;
+    if (offset < 0x100 || offset >= 0x140) return;
+    chip->port_input_mask[(offset - 0x100) / 2] = mask;
+    chip->port_input[(offset - 0x100) / 2] = value;
 }
 
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
@@ -572,7 +583,11 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     }
     if (offset == 0x090) { *value = chip->adc_control; return true; }
     if (offset == 0x092) { *value = chip->adc_config; return true; }
-    if (offset >= 0x100 && offset < 0x140) { *value = chip->ports[(offset - 0x100) / 2]; return true; }
+    if (offset >= 0x100 && offset < 0x140) {
+        uint32_t index = (offset - 0x100) / 2;
+        *value = (chip->ports[index] & ~chip->port_input_mask[index]) | (chip->port_input[index] & chip->port_input_mask[index]);
+        return true;
+    }
     if (offset >= 0x140 && offset < 0x150) { *value = scif_read(&chip->scif[0], offset - 0x140); return true; }
     if (offset >= 0x150 && offset < 0x160) { *value = scif_read(&chip->scif[1], offset - 0x150); return true; }
     *value = 0;

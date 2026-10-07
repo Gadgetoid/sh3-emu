@@ -71,6 +71,7 @@ typedef struct {
     uint16_t watchdog_count, watchdog_control;
     uint32_t ccr, ccr2;
     uint16_t ports[64];
+    uint16_t port_input_mask[64], port_input[64];
 
     uint8_t  adc_control, adc_config;
     uint16_t adc_data[4];
@@ -92,4 +93,5 @@ void sh7709_receive(sh7709_t *chip, int port, uint8_t byte);
 void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second);
 void sh7709_add_seconds(sh7709_t *chip, uint32_t seconds);
 uint32_t sh7709_timer_count(sh7709_t *chip, int index);
+void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t value);
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value);

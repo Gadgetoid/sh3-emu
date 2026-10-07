@@ -944,6 +944,7 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     hp320lx_reset(&m->hp_board);
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
+        sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_LUKE, HP320LX_MODEL_LUKE);
     }
     if (m->raw) {
         m->chip.transmit = casio_transmit;

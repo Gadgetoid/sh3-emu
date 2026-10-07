@@ -8,6 +8,8 @@
 #define HP320LX_REGISTERS     4096
 #define HP320LX_FRAMEBUFFER   0x0C005000u
 #define HP320LX_ADC_HEALTHY   0x3A0u
+#define HP320LX_MODEL_PORT    0xA4000134u
+#define HP320LX_MODEL_LUKE    0x0010u
 
 typedef void (*hp320lx_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*hp320lx_line_fn)(void *context, const char *line);
