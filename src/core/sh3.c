@@ -976,6 +976,7 @@ static bool interrupt_acceptable(const sh3_cpu_t *cpu) {
 static void take_interrupt(sh3_cpu_t *cpu) {
     uint32_t code = cpu->interrupt_code;
     cpu->intevt = code;
+    cpu->intevt2 = cpu->interrupt_source ? cpu->interrupt_source : code;
     if (cpu->on_interrupt) cpu->on_interrupt(cpu->bus.context, code);
     cpu->exceptions[63]++;
     cpu->sleeping = false;

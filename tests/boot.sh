@@ -119,3 +119,13 @@ if [ -f "$CASIO_ROM" ]; then
 else
     echo "skip casio: no $CASIO_ROM (Casio Cassiopeia A-51 ROM image)"
 fi
+
+HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
+HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
+if [ -f "$HP_ROM" ]; then
+    ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
+    actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
+    if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp.log" && [ "$actual" = "$HP_HASH" ]; then echo "ok   hp"; else echo "FAIL hp $actual"; exit 1; fi
+else
+    echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
+fi

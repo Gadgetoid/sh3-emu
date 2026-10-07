@@ -942,6 +942,9 @@ static bool reset_machine(machine_t *m, bool keep_ram, char *error, size_t error
     autopc_reset(&m->board);
     casio_reset(&m->casio_board);
     hp320lx_reset(&m->hp_board);
+    if (m->hp) {
+        for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
+    }
     if (m->raw) {
         m->chip.transmit = casio_transmit;
         m->chip.transmit_context = m;
