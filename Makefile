@@ -145,13 +145,13 @@ clean:
 
 check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK) $(PROXYCHECK)
 	sh tests/check.sh
+	$(GATEWAYCHECK)
 
 format:
 	$(UNCRUSTIFY) -c .uncrustify.cfg --replace --no-backup $(C_STYLE_SOURCES)
 
 format-check:
 	$(UNCRUSTIFY) -c .uncrustify.cfg --check $(C_STYLE_SOURCES)
-	$(GATEWAYCHECK)
 
 test: $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)
 	sh tests/sh3/run.sh
