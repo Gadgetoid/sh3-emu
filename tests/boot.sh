@@ -27,6 +27,29 @@ rapi_check() {
     rm -f "$socket"
     if cmp -s "$OUT/$name.txt" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
 }
+debugmgr_check() {
+    name=$1; rom=$2; net_at=$3
+    socket=/tmp/sh3emu-rapi-$$.sock
+    agent=/tmp/sh3emu-agent-$$.sock
+    rm -f "$socket" "$agent" "$OUT/$name.state"
+    ./headless "$rom" --seconds=300 --net="$net_at" --rapi="$socket" --agent="$agent" --realtime=4 --save="$OUT/$name.state" > "$OUT/$name.log" 2>&1 &
+    EMULATOR=$!
+    for attempt in $(seq 1 120); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
+    sleep 2
+    started=fail
+    ./sh3emu-rapi --socket="$socket" debugmgr run > /dev/null 2>&1 && python3 tests/agent_ping.py "$agent" 30 > /dev/null && started=ok
+    kill $EMULATOR 2>/dev/null || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$socket" "$agent"
+    ./headless "$rom" --load="$OUT/$name.state" --soft-reset=0 --seconds=120 --agent="$agent" --realtime=4 > "$OUT/$name.reset.log" 2>&1 &
+    EMULATOR=$!
+    restarted=fail
+    python3 tests/agent_ping.py "$agent" 60 > /dev/null && restarted=ok
+    kill $EMULATOR 2>/dev/null || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$agent"
+    if [ $started = ok ] && [ $restarted = ok ]; then echo "ok   $name"; else echo "FAIL $name: started $started, after a soft reset $restarted"; exit 1; fi
+}
 reconnect_check() {
     name=$1; rom=$2; shift 2
     ./headless "$rom" "$@" > "$OUT/$name.log" 2>&1
@@ -87,6 +110,7 @@ if [ -f "$CASIO_ROM" ]; then
         reconnect_check casio_replug "$CASIO_ROM" --seconds=60 --net=22 --replug=37
         reconnect_check casio_soft_reset "$CASIO_ROM" --seconds=110 --net=22 --soft-reset=60 --replug=88
         rapi_check casio_rapi "$CASIO_ROM" 22
+        debugmgr_check casio_debugmgr "$CASIO_ROM" 22
         if [ -f "$CASIO_DICTIONARY" ]; then dictionary_check casio_dictionary "$CASIO_ROM" "$CASIO_DICTIONARY"; else echo "skip casio_dictionary: no $CASIO_DICTIONARY"; fi
     fi
 else
@@ -125,6 +149,7 @@ if [ -f "$HP_ROM" ]; then
         reconnect_check hp_replug "$HP_ROM" --seconds=60 --net=20 --replug=35
         reconnect_check hp_soft_reset "$HP_ROM" --seconds=110 --net=20 --soft-reset=60 --replug=88
         rapi_check hp_rapi "$HP_ROM" 20
+        debugmgr_check hp_debugmgr "$HP_ROM" 20
     fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"

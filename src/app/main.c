@@ -46,6 +46,7 @@
 #define CABLE_RESET_SECONDS  30
 #define SPEED_SETTLE_SECONDS 10
 #define RAPI_DEFAULT_PORT    9990
+#define GDB_DEFAULT_PORT     1234
 #define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
@@ -554,6 +555,7 @@ typedef struct {
     char     dictionary[1024];
     uint32_t network_rapi, rapi_port;
     uint32_t full_brightness;
+    uint32_t gdb_server, gdb_port;
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -587,7 +589,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1 };
+    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1, .gdb_port = GDB_DEFAULT_PORT };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -615,6 +617,8 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "rapi_port=%u", &value) == 1 && value > 0 && value < 65536) settings.rapi_port = value;
         else if (!strncmp(line, "dictionary=", 11)) copy_setting(settings.dictionary, sizeof settings.dictionary, line + 11);
         else if (sscanf(line, "full_brightness=%u", &value) == 1) settings.full_brightness = value != 0;
+        else if (sscanf(line, "gdb_server=%u", &value) == 1) settings.gdb_server = value != 0;
+        else if (sscanf(line, "gdb_port=%u", &value) == 1 && value > 0 && value < 65536) settings.gdb_port = value;
     }
     fclose(file);
     return settings;
@@ -625,9 +629,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness);
+            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness, settings->gdb_server, settings->gdb_port);
     fclose(file);
 }
 
@@ -644,6 +648,15 @@ static void local_address(char *address, size_t size) {
         inet_ntop(AF_INET, &((struct sockaddr_in *)at->ifa_addr)->sin_addr, address, (socklen_t)size);
     }
     freeifaddrs(interfaces);
+}
+
+static gdb_t *start_network_gdb(machine_t *machine, uint32_t port, char *notice, size_t size) {
+    gdb_t *gdb = gdb_create(machine, (int)port, true, log_gdb);
+    char address[64];
+    local_address(address, sizeof address);
+    if (gdb) snprintf(notice, size, "GDB server at %s:%u", address, port);
+    else snprintf(notice, size, "cannot listen for GDB on port %u", port);
+    return gdb;
 }
 
 static const char *mount_dictionary(machine_t *machine, const settings_t *settings) {
@@ -1332,13 +1345,22 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (launch.gdb_port) {
-        debugger = gdb_create(machine, launch.gdb_port, log_gdb);
+        debugger = gdb_create(machine, launch.gdb_port, false, log_gdb);
         if (!debugger) {
             fprintf(stderr, "sh3emu: cannot listen for GDB on port %d\n", launch.gdb_port);
             return 1;
         }
         if (launch.gdb_process) gdb_set_process(debugger, launch.gdb_process);
     }
+    static char gdb_notice[160];
+    if (!debugger && settings.gdb_server) {
+        debugger = start_network_gdb(machine, settings.gdb_port, gdb_notice, sizeof gdb_notice);
+        if (!notice) {
+            notice = gdb_notice;
+            notice_left = NOTICE_SECONDS * 3;
+        }
+    }
+    bool debugmgr_wanted = false;
     uint64_t serial_plug_at = 0, serial_unplug_at = 0, power_release_at = 0, backlight_release_at = 0, port_scan_at = 0;
     static char ports[SERIAL_PORT_MAX][SERIAL_LINK_PORT_NAME];
     int port_count = 0;
@@ -1629,6 +1651,21 @@ int main(int argc, char **argv) {
             case MENU_QUIT:
                 running = false;
                 break;
+            case MENU_GDB_SERVER:
+                if (debugger) {
+                    gdb_destroy(debugger);
+                    debugger = NULL;
+                    settings.gdb_server = 0;
+                    notice = "GDB server stopped";
+                } else {
+                    debugger = start_network_gdb(machine, settings.gdb_port, gdb_notice, sizeof gdb_notice);
+                    settings.gdb_server = debugger != NULL;
+                    notice = gdb_notice;
+                    debugmgr_wanted = debugger != NULL;
+                }
+                settings_save(&settings);
+                notice_left = NOTICE_SECONDS * 3;
+                break;
 #ifdef __ANDROID__
             case MENU_IMPORT: {
                 static char import_notice[160];
@@ -1856,7 +1893,15 @@ int main(int argc, char **argv) {
             picked = NULL;
         }
         bool device_online = serial.gateway && net_gateway_online(serial.gateway);
-        if (serial.gateway && net_gateway_take_desktop_connected(serial.gateway) && settings.shared_folder[0]) desktop_sync(desktop, settings.shared_folder);
+        if (serial.gateway && net_gateway_take_desktop_connected(serial.gateway)) {
+            if (settings.shared_folder[0]) desktop_sync(desktop, settings.shared_folder);
+            debugmgr_wanted = debugger != NULL;
+        }
+        if (!device_online) debugmgr_wanted = false;
+        if (debugmgr_wanted && !desktop_busy(desktop)) {
+            debugmgr_wanted = false;
+            if (debugger && !machine_agent_running(machine)) desktop_install_debugmgr(desktop);
+        }
         if (desktop_take_reconnect(desktop) && serial.mode == SERIAL_NETWORK) serial_unplug_at = machine_cycles(machine) + SPEED_SETTLE_SECONDS * (uint64_t)MACHINE_CLOCK_HZ;
         if (serial_unplug_at && machine_cycles(machine) >= serial_unplug_at) {
             serial_unplug_at = 0;
@@ -1920,6 +1965,7 @@ int main(int argc, char **argv) {
         }
         reap_reveal_children();
         menu_set_checked(MENU_PAUSE, paused);
+        menu_set_checked(MENU_GDB_SERVER, debugger != NULL);
         menu_set_checked(MENU_FULL_BRIGHTNESS, settings.full_brightness != 0);
         menu_set_checked(MENU_SOUND, sound);
         for (int i = 0; i < PROFILES_MAX; i++) {

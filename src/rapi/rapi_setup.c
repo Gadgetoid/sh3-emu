@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>
 
 #define PROXY_KEY       "Software\\Apps\\PocketIE"
 #define RAS_BOOK        "Comm\\RasBook"
@@ -10,6 +11,9 @@
 #define DEFAULT_BAUD    19200
 #define SERIAL_DEVICE   4
 #define DEVCFG_BAUD     36
+#define INIT_KEY        "Init"
+#define LAUNCH_FIRST    90
+#define LAUNCH_LAST     99
 
 static const uint8_t devcfg_template[88] = {
     0x58, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
@@ -89,4 +93,35 @@ bool rapi_setup_connection(rapi_t *rapi, uint32_t baud) {
                    set_dword(rapi, key, "DevID", SERIAL_DEVICE);
     rapi_reg_close(rapi, key);
     return written && select_connection(rapi, name);
+}
+
+static bool launch_at_boot(rapi_t *rapi, const char *program) {
+    uint32_t key;
+    if (!rapi_reg_open(rapi, RAPI_HKEY_LOCAL_MACHINE, INIT_KEY, false, &key)) return false;
+    int free_slot = -1;
+    for (int slot = LAUNCH_FIRST; slot <= LAUNCH_LAST; slot++) {
+        char name[16], text[RAPI_REG_DATA_MAX];
+        uint8_t data[RAPI_REG_DATA_MAX];
+        uint32_t type, length;
+        snprintf(name, sizeof name, "Launch%d", slot);
+        if (!rapi_reg_get(rapi, key, name, &type, data, sizeof data, &length)) {
+            if (free_slot < 0) free_slot = slot;
+            continue;
+        }
+        rapi_reg_text(data, length, text, sizeof text);
+        if (!strcasecmp(text, program)) {
+            rapi_reg_close(rapi, key);
+            return true;
+        }
+    }
+    char name[16];
+    snprintf(name, sizeof name, "Launch%d", free_slot);
+    bool set = free_slot >= 0 && set_string(rapi, key, name, program);
+    rapi_reg_close(rapi, key);
+    return set;
+}
+
+bool rapi_setup_debugmgr(rapi_t *rapi, const uint8_t *image, size_t size, bool run) {
+    return rapi_put(rapi, "\\Windows\\" RAPI_SETUP_DEBUGMGR, image, size) && launch_at_boot(rapi, RAPI_SETUP_DEBUGMGR) &&
+           (!run || rapi_run(rapi, "\\Windows\\" RAPI_SETUP_DEBUGMGR, ""));
 }

@@ -389,7 +389,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (run.gdb_port) {
-        debugger = gdb_create(machine, run.gdb_port, log_stderr);
+        debugger = gdb_create(machine, run.gdb_port, false, log_stderr);
         if (!debugger) { fprintf(stderr, "cannot listen for GDB on port %d\n", run.gdb_port); return 1; }
         if (run.gdb_process && !gdb_set_process(debugger, run.gdb_process)) fprintf(stderr, "gdb: waiting for %s to start\n", run.gdb_process);
         fprintf(stderr, "gdb: waiting for a connection: target remote :%d\n", run.gdb_port);

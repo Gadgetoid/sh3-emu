@@ -107,6 +107,7 @@ struct machine {
     uint32_t  mailbox_fault_va;
     int       mailbox_fault_tries;
     uint32_t  mailbox_pc;
+    uint64_t  agent_poll_at;
     mailbox_page_t mailbox_pages[MAILBOX_PAGES];
     int       mailbox_page_count;
 
@@ -483,6 +484,7 @@ static bool on_trapa(void *context, uint32_t number) {
     mailbox_call_t call = { .operation = cpu->r[4], .buffer = cpu->r[5], .length = cpu->r[6], .extra = cpu->r[1] };
     uint32_t fault_va;
     if (mailbox_trap(&m->mailbox, &call, mailbox_copy, m, &fault_va)) {
+        if (call.operation == MAILBOX_RECV) m->agent_poll_at = cpu->cycles + 1;
         cpu->r[0] = call.result;
         cpu->r[1] = call.extra;
         m->mailbox_pc = 0;
@@ -552,6 +554,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     mailbox_clear(&m->mailbox);
     m->mailbox_pc = 0;
     m->mailbox_page_count = 0;
+    m->agent_poll_at = 0;
     m->cpu.pc = m->entry;
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
@@ -673,6 +676,10 @@ bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint
 }
 
 uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
+
+bool machine_agent_running(machine_t *m) {
+    return m->agent_poll_at && m->cpu.cycles < m->agent_poll_at + MACHINE_CLOCK_HZ / 2;
+}
 uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
 
 bool machine_lcd_enabled(machine_t *m) { return !machine_suspended(m); }
@@ -1014,6 +1021,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         return false;
     }
     if (host_time) memcpy(host_time, data + sizeof STATE_MAGIC + 8, 8);
+    m->agent_poll_at = 0;
     sh3_debug_t *debug = m->cpu.debug;
     const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
     while (cursor < end) {

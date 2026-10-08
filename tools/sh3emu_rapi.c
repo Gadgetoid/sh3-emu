@@ -1,3 +1,4 @@
+#include "rapi/debugmgr_images.h"
 #include "rapi/rapi.h"
 #include "rapi/rapi_load.h"
 #include "rapi/rapi_setup.h"
@@ -29,6 +30,7 @@ static const char *usage =
     "  load SCRIPT [DEST]       run an H/PC Explorer .load install script (DEST from its Install.inf, or \\Program Files\\Accessories)\n"
     "  proxy on|off             point Pocket IE at the emulator's web proxy\n"
     "  baud 19200|38400|57600|115200  desktop connection speed, from the next connection\n"
+    "  debugmgr [run]           install debugmgr, for GDB file transfer and run, and start it at boot; run also starts it now\n"
     "  reg ls|dump KEY          list a registry key, or everything under it\n"
     "  reg get KEY NAME         read a value\n"
     "  reg set KEY NAME dword|string VALUE\n"
@@ -338,6 +340,10 @@ int main(int argc, char **argv) {
     else if (!strcmp(command, "baud") && count == 1) {
         uint32_t baud = (uint32_t)strtoul(args[0], NULL, 10);
         if (baud == 19200 || baud == 38400 || baud == 57600 || baud == 115200) status = rapi_setup_connection(rapi, baud) ? 0 : fail(rapi);
+    }
+    else if (!strcmp(command, "debugmgr") && (count == 0 || (count == 1 && !strcmp(args[0], "run")))) {
+        bool ce2 = rapi_os_major(rapi) >= 2;
+        status = rapi_setup_debugmgr(rapi, ce2 ? DEBUGMGR_CE2 : DEBUGMGR_CE1, ce2 ? DEBUGMGR_CE2_SIZE : DEBUGMGR_CE1_SIZE, count == 1) ? 0 : fail(rapi);
     }
     if (status == 2) fputs(usage, stderr);
     rapi_disconnect(rapi);

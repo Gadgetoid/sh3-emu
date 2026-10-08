@@ -1,4 +1,5 @@
 #include "app/desktop.h"
+#include "rapi/debugmgr_images.h"
 #include "rapi/rapi.h"
 #include "rapi/rapi_load.h"
 #include "rapi/rapi_setup.h"
@@ -16,7 +17,7 @@
 #define CONNECT_ATTEMPTS 10
 #define PATH_SIZE        1024
 
-typedef enum { JOB_SEND, JOB_FETCH, JOB_SYNC, JOB_PROXY, JOB_BAUD, JOB_LOAD } job_kind_t;
+typedef enum { JOB_SEND, JOB_FETCH, JOB_SYNC, JOB_PROXY, JOB_BAUD, JOB_LOAD, JOB_DEBUGMGR } job_kind_t;
 
 struct desktop {
     char            socket_path[PATH_SIZE];
@@ -166,6 +167,12 @@ static void run_baud(desktop_t *desktop, rapi_t *rapi) {
     pthread_mutex_unlock(&desktop->lock);
 }
 
+static void run_debugmgr(desktop_t *desktop, rapi_t *rapi) {
+    bool ce2 = rapi_os_major(rapi) >= 2;
+    if (rapi_setup_debugmgr(rapi, ce2 ? DEBUGMGR_CE2 : DEBUGMGR_CE1, ce2 ? DEBUGMGR_CE2_SIZE : DEBUGMGR_CE1_SIZE, true)) set_status(desktop, "debugmgr installed and started, for GDB file transfer and run");
+    else set_status(desktop, "couldn't install debugmgr: %s", rapi_error(rapi));
+}
+
 static void *job_thread(void *opaque) {
     desktop_t *desktop = opaque;
     rapi_t *rapi = connect_device(desktop);
@@ -175,6 +182,7 @@ static void *job_thread(void *opaque) {
         else if (desktop->kind == JOB_PROXY) run_proxy(desktop, rapi);
         else if (desktop->kind == JOB_BAUD) run_baud(desktop, rapi);
         else if (desktop->kind == JOB_LOAD) run_load(desktop, rapi);
+        else if (desktop->kind == JOB_DEBUGMGR) run_debugmgr(desktop, rapi);
         else run_sync(desktop, rapi);
         rapi_disconnect(rapi);
     }
@@ -284,6 +292,12 @@ bool desktop_set_baud(desktop_t *desktop, unsigned baud) {
     if (!claim(desktop)) return false;
     desktop->kind = JOB_BAUD;
     desktop->baud = baud;
+    return start(desktop);
+}
+
+bool desktop_install_debugmgr(desktop_t *desktop) {
+    if (!claim(desktop)) return false;
+    desktop->kind = JOB_DEBUGMGR;
     return start(desktop);
 }
 

@@ -78,7 +78,7 @@ PC Link > Device Settings changes the device over RAPI:
 - RAPI over the Network also offers RAPI on TCP port 9990 on all interfaces, for `sh3emu-rapi --connect=HOST:9990` from another computer, and says the address.
 - Connection Speed picks the HP 320LX's desktop connection, from 19200 to 115200 baud (`sh3emu-rapi baud`); the emulator then unplugs and replugs the cable so CE dials at the new speed. The Casio A-51's CE 1.01 ignores the speed in a new connection entry and stays at 19200, so it's only offered on the HP.
 
-`sh3emu-rapi` also copies folders, reads and writes the registry, starts programs, syncs a folder, and runs H/PC Explorer `.load` install scripts (taking the `.sh3` build where there is one). Paths are relative to `\My Documents` unless they start with `/` or `\`.
+`sh3emu-rapi` also copies folders, reads and writes the registry, starts programs, syncs a folder, installs debugmgr (see Debugging), and runs H/PC Explorer `.load` install scripts (taking the `.sh3` build where there is one). Paths are relative to `\My Documents` unless they start with `/` or `\`.
 
 Devices > Serial Port can instead connect COM1 to a pseudo-terminal (its name is in the notice and on stderr) or to a host serial port, for a real desktop or another program at the other end. A host port follows CE's baud rate. `headless --pty[=SECONDS]` does the pseudo-terminal, naming it on stderr.
 
@@ -101,13 +101,15 @@ The host mailbox and GDB stub are velo-emu's, ported to the SH-3.
   	nop
   ```
 
-- `--gdb=PORT` serves GDB's remote protocol. The target description names the `sh3` architecture, and the `g` packet follows GDB's SH-3 register layout (r0-r15, pc, pr, gbr, vbr, mach, macl, sr, unused FPU slots, ssr, spc and both banks of r0-r7). Breakpoints, watchpoints and single steps are the emulator's own, not code patches. `monitor processes` and `monitor modules` read CE 1.01's and 2.0's process and module lists. File transfer and starting programs need a guest agent (velo-toolchain's debugmgr), which isn't built for these devices yet.
+- `--gdb=PORT` serves GDB's remote protocol. The target description names the `sh3` architecture, and the `g` packet follows GDB's SH-3 register layout (r0-r15, pc, pr, gbr, vbr, mach, macl, sr, unused FPU slots, ssr, spc and both banks of r0-r7). Breakpoints, watchpoints and single steps are the emulator's own, not code patches. `monitor processes` and `monitor modules` read CE 1.01's and 2.0's process and module lists. `remote put`, `remote get` and `run` (with `target extended-remote` and `set remote exec-file`) go through velo-toolchain's debugmgr on the device, which the emulator installs itself (see below).
 
 ```
 ./headless rom/nk-hp320lx.bin --seconds=20 --save=wizard.state
 ./headless rom/nk-hp320lx.bin --load=wizard.state --gdb=1234
 gdb -ex "set architecture sh3" -ex "target remote :1234"
 ```
+
+In `sh3emu`, Machine > GDB Server listens on port 1234 (`gdb_port` in `sh3emu.ini`) on every network interface, and is remembered, so GDB on another computer or a phone's emulator over Wi-Fi can attach: `target extended-remote 192.168.1.20:1234`. With the GDB server on (or `--gdb`), each time PC Link connects and no debugmgr is running, the emulator copies the SH3 debugmgr for the device's CE version to `\Windows\debugmgr.exe` over RAPI, adds it to `HKLM\Init` so CE starts it at every boot, and starts it. `sh3emu-rapi debugmgr [run]` does the same by hand. The two builds are in `src/rapi/debugmgr_images.c`; `make debugmgr` rebuilds them from velo-toolchain (`VELO_TOOLCHAIN`, default `../../velo-toolchain`, with `VELO_SH3_LLVM` set).
 
 ## Casio Cassiopeia A-51
 
@@ -182,7 +184,7 @@ Notices appear at the bottom of the screen. The unlit screen is dimmed; with the
 ## Testing
 
 - `make check` needs no ROMs: the command lines, and the gateway's `CLIENT` handshake after stray text.
-- `make test` runs the CPU tests and, with `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`), boots the Casio image and compares the Setup Wizard's framebuffer hash, before and after pressing Enter, after calibrating the touch panel, and with a card, after finishing the wizard and opening `\Storage Card`; checks the GDB stub; and that the backlight key lights the screen; with `rom/a51-dictionary.bin` (or `CASIO_DICTIONARY=PATH`), that the dictionary app shows its first entries; and with `--net`, that it brings PPP up and connects to the desktop, connects again after a replug and after a soft reset, and that a file goes there and back over RAPI. With `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) it boots the HP image and compares the Setup Wizard's framebuffer hash, after typing into Start > Run, after calibrating the touch panel and tapping a tab, and after Start > Suspend and a key to wake it; that the startup sound plays; that the backlight key lights the screen; checks the GDB stub; and with `--net`, that it brings PPP up and connects to the desktop, connects again after a replug and after a soft reset, and that a file goes there and back over RAPI.
+- `make test` runs the CPU tests and, with `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`), boots the Casio image and compares the Setup Wizard's framebuffer hash, before and after pressing Enter, after calibrating the touch panel, and with a card, after finishing the wizard and opening `\Storage Card`; checks the GDB stub; and that the backlight key lights the screen; with `rom/a51-dictionary.bin` (or `CASIO_DICTIONARY=PATH`), that the dictionary app shows its first entries; and with `--net`, that it brings PPP up and connects to the desktop, connects again after a replug and after a soft reset, and that a file goes there and back over RAPI, and that debugmgr installs over RAPI, answers, and starts again after a soft reset. With `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) it boots the HP image and compares the Setup Wizard's framebuffer hash, after typing into Start > Run, after calibrating the touch panel and tapping a tab, and after Start > Suspend and a key to wake it; that the startup sound plays; that the backlight key lights the screen; checks the GDB stub; and with `--net`, that it brings PPP up and connects to the desktop, connects again after a replug and after a soft reset, that a file goes there and back over RAPI, and that debugmgr installs, answers and starts again after a soft reset.
 - `tests/sh3/run.sh` assembles `tests/sh3/*.s` with an `sh-elf` binutils (`SH_PREFIX`) and runs them on `sh3-run`, a bare harness for the core: exceptions, banks, user mode and the MMU.
 - `make sh3-fuzz` compares random user-mode instruction streams between `sh3-run` and a reference, `qemu-sh4` by default; `SH_REFERENCE=HOST:qemu-sh4` runs it on another machine over ssh. qemu 10.2 gets T wrong after ROTL and ROTR and DIV1 by zero, so the fuzzer avoids those.
 

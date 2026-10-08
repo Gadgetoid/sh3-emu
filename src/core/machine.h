@@ -25,6 +25,7 @@ mailbox_t *machine_mailbox(machine_t *machine);
 bool       machine_read_physical(machine_t *machine, uint32_t pa, uint8_t *data, uint32_t length);
 bool       machine_write_physical(machine_t *machine, uint32_t pa, const uint8_t *data, uint32_t length);
 uint64_t   machine_cycles(machine_t *machine);
+bool       machine_agent_running(machine_t *machine);
 uint32_t   machine_pc(machine_t *machine);
 
 bool machine_lcd_enabled(machine_t *machine);

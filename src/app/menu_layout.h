@@ -71,7 +71,9 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SPEED_4, "4x", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SPEED_8, "8x", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SHOW_DEBUG_OUTPUT, "Show Debug Output", 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_GDB_SERVER, "GDB Server", 0, 0 },
 #ifndef __APPLE__
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_QUIT, "Quit", 'q', MENU_KEY_PRIMARY },

@@ -7,6 +7,7 @@ PROXYCHECK = proxycheck
 APP       = SH3Emu.app
 BUILD     = build
 ROM      ?= rom/nk-hp320lx.bin
+VELO_TOOLCHAIN ?= ../../velo-toolchain
 
 .DEFAULT_GOAL := all
 
@@ -55,7 +56,7 @@ SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_l
 endif
 
 SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
-SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c
+SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c src/rapi/debugmgr_images.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
@@ -129,10 +130,14 @@ apk-push:
 apk-install: icons
 	ICONS=$(BUILD)/icons sh tools/mkapk.sh install
 
+debugmgr:
+	$(MAKE) -C $(VELO_TOOLCHAIN) debugmgr-sh3
+	python3 tools/mkdebugmgr.py $(VELO_TOOLCHAIN)/build/debugmgr src/rapi/debugmgr_images.c
+
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL) $(PROXYCHECK) $(APP)
 
-.PHONY: all run clean test check app apk apk-push apk-install icons sh3-fuzz FORCE
+.PHONY: all run clean test check app apk apk-push apk-install icons debugmgr sh3-fuzz FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/sh3emu_rapi.d
 
