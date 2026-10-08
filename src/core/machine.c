@@ -7,12 +7,12 @@
 #include <time.h>
 #include <zlib.h>
 
-#include "core/accel.h"
 #include "core/casio.h"
 #include "core/ce.h"
 #include "core/hp320lx.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
+#include "core/optimiser.h"
 #include "core/sh7709.h"
 #include "util/file.h"
 
@@ -42,10 +42,7 @@
 #define AUDIO_RING         65536u
 #define AUDIO_GAP_CYCLES   (MACHINE_CLOCK_HZ / 20)
 #define AUDIO_CHANNEL      1
-#define TICK_COUNTER_PA    0xFFFFFE98u
-#define CASIO_LINK_STATUS_PA 0x10000122u
-#define SPIN_READS         16u
-#define SPIN_WINDOW        (MACHINE_CLOCK_HZ / 1000)
+#define POLL_WINDOW        (MACHINE_CLOCK_HZ / 1000)
 #define DICTIONARY_MAX     (8u << 20)
 #define SERIAL_TICKS_PER_SECOND 1000u
 #define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / SERIAL_TICKS_PER_SECOND)
@@ -67,11 +64,6 @@ typedef struct {
     char line[256];
     int length;
 } debug_line_t;
-
-typedef struct {
-    uint64_t window;
-    uint32_t reads;
-} spin_t;
 
 struct machine {
     sh3_cpu_t cpu;
@@ -111,10 +103,9 @@ struct machine {
     uint32_t serial_rx_head, serial_rx_count, serial_tx_count;
     uint64_t serial_tick_at;
     uint64_t run_target;
-    spin_t tick_spin, link_spin;
     bool optimisations;
-    accel_hooks_t accel;
-    ce_t accel_ce;
+    optimiser_t optimiser;
+    ce_t optimiser_ce;
 
     mailbox_t mailbox;
     uint32_t mailbox_fault_va;
@@ -250,16 +241,8 @@ static void serial_tick_event(machine_t *m) {
 
 static uint64_t next_event(machine_t *m);
 
-static void stall_spin(machine_t *m, spin_t *spin) {
-    uint64_t window = m->cpu.cycles / SPIN_WINDOW;
-    if (window != spin->window) {
-        spin->window = window;
-        spin->reads = 0;
-        return;
-    }
-    if (++spin->reads < SPIN_READS) return;
-    spin->reads = 0;
-    uint64_t when = (window + 1) * SPIN_WINDOW;
+static void skip_ahead(machine_t *m) {
+    uint64_t when = (m->cpu.cycles / POLL_WINDOW + 1) * POLL_WINDOW;
     uint64_t limit = next_event(m);
     if (limit < when) when = limit;
     if (m->run_target < when) when = m->run_target;
@@ -268,8 +251,8 @@ static void stall_spin(machine_t *m, spin_t *spin) {
 
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
+    if (m->optimisations && optimiser_polled(&m->optimiser, pa, m->cpu.cycles)) skip_ahead(m);
     if (pa >= 0xE0000000u) {
-        if (pa == TICK_COUNTER_PA && m->optimisations) stall_spin(m, &m->tick_spin);
         if (sh7709_read(&m->chip, pa, size, value)) return true;
         if (m->casio && casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         if (m->casio && pa < P4_ROUTINES_END) {
@@ -291,7 +274,6 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
-        if (pa == CASIO_LINK_STATUS_PA && m->optimisations) stall_spin(m, &m->link_spin);
         if (casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         note_unknown(m, "read ", pa, size, 0);
         *value = 0;
@@ -545,26 +527,23 @@ mailbox_t *machine_mailbox(machine_t *m) {
     return &m->mailbox;
 }
 
-static uint8_t *accel_map(void *context, uint32_t va, bool write) {
+static uint8_t *optimiser_map(void *context, uint32_t va, bool write) {
     machine_t *m = context;
     uint32_t pa;
-    if (!ce_translate_current(&m->accel_ce, va, write, &pa)) return NULL;
+    if (!ce_translate_current(&m->optimiser_ce, va, write, &pa)) return NULL;
     if (pa - DRAM_PA < DRAM_AREA_SIZE) return m->dram + (pa - DRAM_PA) % m->dram_size;
     if (!write && pa < FLASH_SIZE) return m->flash + pa;
     return NULL;
 }
 
-static const uint8_t *accel_rom(void *context, uint32_t pa, uint32_t length) {
+static const uint8_t *optimiser_rom(void *context, uint32_t pa, uint32_t length) {
     machine_t *m = context;
     return pa < FLASH_SIZE && length <= FLASH_SIZE - pa ? m->flash + pa : NULL;
 }
 
 static bool on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
-    if (accel_hooked(&m->accel, pc)) {
-        accel_memory_t memory = { m, accel_map };
-        return m->optimisations && accel_call(&m->accel, &m->cpu, &memory, pc);
-    }
+    if (optimiser_hooked(&m->optimiser, pc)) return m->optimisations && optimiser_call(&m->optimiser, &m->cpu, pc);
     machine_logf(m, "watch: pc %08X r4=%08X r5=%08X r6=%08X r7=%08X pr=%08X\n", pc, m->cpu.r[4], m->cpu.r[5], m->cpu.r[6], m->cpu.r[7], m->cpu.pr);
     return false;
 }
@@ -572,7 +551,7 @@ static bool on_watch(void *context, uint32_t pc) {
 static void sync_watches(machine_t *m) {
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     m->cpu.watch_count = m->watch_count;
-    for (int i = 0; i < m->accel.count && m->cpu.watch_count < SH3_WATCH_MAX; i++) m->cpu.watch[m->cpu.watch_count++] = m->accel.hooks[i].va;
+    for (int i = 0; i < m->optimiser.hook_count && m->cpu.watch_count < SH3_WATCH_MAX; i++) m->cpu.watch[m->cpu.watch_count++] = m->optimiser.hooks[i].va;
 }
 
 static void trace_exception(void *context, uint32_t code, uint32_t pc, bool user) {
@@ -672,8 +651,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
         machine_destroy(m);
         return NULL;
     }
-    accel_find(accel_rom, m, &m->accel);
-    ce_init(&m->accel_ce, m);
+    ce_init(&m->optimiser_ce, m);
+    optimiser_init(&m->optimiser, optimiser_rom, m, (native_memory_t){ m, optimiser_map }, POLL_WINDOW);
     m->dram_size_next = DRAM_DEFAULT_SIZE;
     reset_machine(m, false);
     return m;

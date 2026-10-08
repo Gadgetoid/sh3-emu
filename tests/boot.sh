@@ -118,7 +118,7 @@ CASIO_CARD_HASH=ac572c440c42daa5c55bc679024626b640cd6fc7eeecfb165a38bd9e81931544
 CASIO_OPTIMISED_HASH=882c7981b0732f921f2dc30cdc2dca4b3fe1aa7a9ff13be10995cceee6368371
 CASIO_WAKE_HASH=0156b2079d2223fd711dfe432cf5260f1b1ecc4dc37be80237caf1257db59118
 if [ -f "$CASIO_ROM" ]; then
-    if ./build/accel-check "$CASIO_ROM" > "$OUT/casio_accel.log" 2>&1; then echo "ok   casio_accel"; else echo "FAIL casio_accel"; cat "$OUT/casio_accel.log"; exit 1; fi
+    if ./build/native-check "$CASIO_ROM" > "$OUT/casio_native.log" 2>&1; then echo "ok   casio_native"; else echo "FAIL casio_native"; cat "$OUT/casio_native.log"; exit 1; fi
     ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
     actual=$(shasum -a 256 "$OUT/casio.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Windows CE Kernel for Hitachi SH" "$OUT/casio.log" && [ "$actual" = "$CASIO_HASH" ]; then echo "ok   casio"; else echo "FAIL casio $actual"; exit 1; fi
@@ -180,7 +180,7 @@ HP_OPTIMISED_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b405
 HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
 HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
 if [ -f "$HP_ROM" ]; then
-    if ./build/accel-check "$HP_ROM" > "$OUT/hp_accel.log" 2>&1; then echo "ok   hp_accel"; else echo "FAIL hp_accel"; cat "$OUT/hp_accel.log"; exit 1; fi
+    if ./build/native-check "$HP_ROM" > "$OUT/hp_native.log" 2>&1; then echo "ok   hp_native"; else echo "FAIL hp_native"; cat "$OUT/hp_native.log"; exit 1; fi
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp.log" && [ "$actual" = "$HP_HASH" ]; then echo "ok   hp"; else echo "FAIL hp $actual"; exit 1; fi

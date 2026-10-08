@@ -1,4 +1,4 @@
-#include "core/accel.h"
+#include "core/optimiser.h"
 #include "core/sh3.h"
 #include "util/file.h"
 
@@ -60,7 +60,19 @@ static const uint8_t *rom_at(void *context, uint32_t pa, uint32_t length) {
     return pa < rom_size && length <= rom_size - pa ? rom + pa : NULL;
 }
 
-static bool load_module_code(const accel_hook_t *hook) {
+typedef enum { KIND_OTHER, KIND_FILL, KIND_STRCMP, KIND_PURGE, KIND_WIDEN, KIND_RANGE, KIND_WCSLEN } kind_t;
+
+static kind_t kind_of(native_fn run) {
+    if (run == native_fill32) return KIND_FILL;
+    if (run == native_strcmp) return KIND_STRCMP;
+    if (run == native_return_zero) return KIND_PURGE;
+    if (run == native_widen) return KIND_WIDEN;
+    if (run == native_range_lookup) return KIND_RANGE;
+    if (run == native_wcslen) return KIND_WCSLEN;
+    return KIND_OTHER;
+}
+
+static bool load_module_code(const optimiser_hook_t *hook) {
     uint8_t code[CODE_WORDS * 4];
     for (uint32_t i = 0; i < hook->words; i++) {
         for (int b = 0; b < 4; b++) code[i * 4 + (uint32_t)b] = (uint8_t)(hook->code[i] >> (8 * b));
@@ -111,10 +123,10 @@ static void random_string(uint32_t va, int length, int alphabet) {
     ram[va + (uint32_t)length] = 0;
 }
 
-static void prepare(accel_kind_t kind, sh3_cpu_t *cpu, int trial) {
+static void prepare(kind_t kind, sh3_cpu_t *cpu, int trial) {
     memset(ram + DATA_VA, 0xA5, DATA_SIZE);
     switch (kind) {
-    case ACCEL_STRCMP: {
+    case KIND_STRCMP: {
         int length = rand() % 40, alphabet = 1 + rand() % 3 * 100;
         uint32_t left = SOURCE_VA + (uint32_t)(trial % 4), right = OTHER_VA + (uint32_t)(rand() % 4);
         random_string(left, length, alphabet);
@@ -124,20 +136,20 @@ static void prepare(accel_kind_t kind, sh3_cpu_t *cpu, int trial) {
         cpu->r[5] = right;
         break;
     }
-    case ACCEL_WCSLEN: {
+    case KIND_WCSLEN: {
         int length = rand() % 60;
         for (int i = 0; i < length; i++) put16(SOURCE_VA + (uint32_t)i * 2, 1 + random_word() % 0xFFFF);
         put16(SOURCE_VA + (uint32_t)length * 2, 0);
         cpu->r[4] = SOURCE_VA;
         break;
     }
-    case ACCEL_WIDEN:
+    case KIND_WIDEN:
         random_string(SOURCE_VA + (uint32_t)(trial % 3), rand() % 50, 255);
         cpu->r[4] = TARGET_VA;
         cpu->r[5] = SOURCE_VA + (uint32_t)(trial % 3);
         cpu->r[6] = (uint32_t)(rand() % 64 - 4);
         break;
-    case ACCEL_RANGE: {
+    case KIND_RANGE: {
         int count = rand() % 40;
         uint32_t next = random_word() % 200;
         for (int i = 0; i < count; i++) {
@@ -152,7 +164,7 @@ static void prepare(accel_kind_t kind, sh3_cpu_t *cpu, int trial) {
         cpu->r[6] = trial % 7 ? random_word() % (next + 20) : random_word();
         break;
     }
-    case ACCEL_FILL:
+    case KIND_FILL:
         cpu->r[4] = TARGET_VA;
         cpu->r[5] = random_word();
         cpu->r[6] = (uint32_t)(rand() % 1024) * 4;
@@ -162,12 +174,8 @@ static void prepare(accel_kind_t kind, sh3_cpu_t *cpu, int trial) {
     }
 }
 
-static bool checked_kind(accel_kind_t kind) {
-    return kind == ACCEL_STRCMP || kind == ACCEL_WCSLEN || kind == ACCEL_WIDEN || kind == ACCEL_RANGE || kind == ACCEL_FILL || kind == ACCEL_PURGE;
-}
-
-static const char *kind_name(accel_kind_t kind) {
-    static const char *names[] = { "decode", "encode", "fill", "strcmp", "purge", "widen", "range", "wcslen" };
+static const char *kind_name(kind_t kind) {
+    static const char *names[] = { "other", "fill", "strcmp", "purge", "widen", "range", "wcslen" };
     return names[kind];
 }
 
@@ -180,46 +188,41 @@ static bool same_result(const sh3_cpu_t *guest, const sh3_cpu_t *native, const u
     return memcmp(guest_data, ram + DATA_VA, DATA_SIZE) == 0;
 }
 
-static int check_hook(accel_hooks_t *hooks, int index) {
-    accel_hook_t *hook = &hooks->hooks[index];
-    if (!checked_kind(hook->kind)) return 0;
-    static uint8_t guest_data[DATA_SIZE];
-    accel_memory_t memory = { NULL, memory_map };
+static int check_hook(optimiser_t *optimiser, int index) {
+    optimiser_hook_t *hook = &optimiser->hooks[index];
+    kind_t kind = kind_of(hook->run);
+    if (kind == KIND_OTHER) return 0;
+    static uint8_t guest_data[DATA_SIZE], data_before[DATA_SIZE];
     int failures = 0, declined = 0;
     for (int trial = 0; trial < TRIALS; trial++) {
         srand((unsigned)(trial * 7919 + index));
         start(&guest, hook->va);
-        prepare(hook->kind, &guest, trial);
+        prepare(kind, &guest, trial);
         native = guest;
-        uint8_t *data_before = malloc(DATA_SIZE);
         memcpy(data_before, ram + DATA_VA, DATA_SIZE);
         sh3_run(&guest, RUN_CYCLES);
         memcpy(guest_data, ram + DATA_VA, DATA_SIZE);
         memcpy(ram + DATA_VA, data_before, DATA_SIZE);
-        free(data_before);
-        if (!accel_call(hooks, &native, &memory, hook->va)) {
+        if (!optimiser_call(optimiser, &native, hook->va)) {
             declined++;
             continue;
         }
-        if (!same_result(&guest, &native, guest_data)) {
-            if (failures++ < 3) {
-                printf("  %s trial %d: guest r0 %08X sr %08X, native r0 %08X sr %08X\n", kind_name(hook->kind), trial, guest.r[0], guest.sr, native.r[0],
-                       native.sr);
-            }
+        if (!same_result(&guest, &native, guest_data) && failures++ < 3) {
+            printf("  %s trial %d: guest r0 %08X sr %08X, native r0 %08X sr %08X\n", kind_name(kind), trial, guest.r[0], guest.sr, native.r[0], native.sr);
         }
     }
-    printf("%-8s %08X: %d trials, %d declined, %d differ\n", kind_name(hook->kind), hook->va, TRIALS, declined, failures);
+    printf("%-8s %08X: %d trials, %d declined, %d differ\n", kind_name(kind), hook->va, TRIALS, declined, failures);
     return failures || declined == TRIALS;
 }
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr, "usage: accel_check ROM\n");
+        fprintf(stderr, "usage: native-check ROM\n");
         return 2;
     }
     uint8_t *image = file_read(argv[1], &rom_size);
     if (!image) {
-        fprintf(stderr, "accel_check: cannot read %s\n", argv[1]);
+        fprintf(stderr, "native-check: cannot read %s\n", argv[1]);
         return 1;
     }
     rom = image;
@@ -227,16 +230,19 @@ int main(int argc, char **argv) {
     memcpy(ram, rom, rom_size < FLASH_SIZE ? rom_size : FLASH_SIZE);
     put16(RETURN_VA, 0xAFFE);
     put16(RETURN_VA + 2, 0x0009);
-    accel_hooks_t hooks;
-    if (!accel_find(rom_at, NULL, &hooks)) {
-        fprintf(stderr, "accel_check: no hooks for %s\n", argv[1]);
+    optimiser_t optimiser;
+    optimiser_init(&optimiser, rom_at, NULL, (native_memory_t){ NULL, memory_map }, RUN_CYCLES);
+    if (!optimiser.hook_count) {
+        fprintf(stderr, "native-check: no optimisation profile matches %s\n", argv[1]);
         return 1;
     }
-    for (int i = 0; i < hooks.count; i++) {
-        if (hooks.hooks[i].state == ACCEL_UNCHECKED && !load_module_code(&hooks.hooks[i])) printf("%s %08X: code not found in the ROM\n", kind_name(hooks.hooks[i].kind), hooks.hooks[i].va);
+    printf("%s\n", optimiser.profile);
+    for (int i = 0; i < optimiser.hook_count; i++) {
+        optimiser_hook_t *hook = &optimiser.hooks[i];
+        if (hook->state == OPTIMISER_UNCHECKED && !load_module_code(hook)) printf("%s %08X: code not found in the ROM\n", kind_name(kind_of(hook->run)), hook->va);
     }
     int failed = 0;
-    for (int i = 0; i < hooks.count; i++) failed |= check_hook(&hooks, i);
+    for (int i = 0; i < optimiser.hook_count; i++) failed |= check_hook(&optimiser, i);
     free(ram);
     free(image);
     return failed;

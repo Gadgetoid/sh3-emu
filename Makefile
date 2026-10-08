@@ -3,7 +3,7 @@ HEADLESS  = headless
 SH3RUN    = sh3-run
 RAPI_TOOL = sh3emu-rapi
 GATEWAYCHECK = $(BUILD)/gateway-check
-ACCELCHECK = $(BUILD)/accel-check
+NATIVECHECK = $(BUILD)/native-check
 PROXYCHECK = proxycheck
 APP       = SH3Emu.app
 BUILD     = build
@@ -58,7 +58,7 @@ else
 SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_link.c
 endif
 
-SRC_MACHINE = src/core/sh3.c src/core/accel.c src/core/lz.c src/core/lzw.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
+SRC_MACHINE = src/core/sh3.c src/core/optimiser.c src/native/native.c src/native/lz.c src/native/lzw.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
 SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c src/rapi/debugmgr_images.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/capture.c src/app/desktop.c src/app/host.c src/app/input.c src/app/launch.c src/app/library.c src/app/log.c src/app/machine_session.c src/app/notices.c src/app/paths.c src/app/picks.c src/app/rom_catalog.c src/app/runner.c src/app/serial_service.c src/app/settings.c src/app/snapshot_store.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c src/frontend/common/dialog.c src/frontend/common/menu_queue.c $(SRC_MENU)
 
@@ -76,7 +76,7 @@ $(BUILD)/libmain.so: $(OBJ_APP)
 $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS) $(NET_LIBS)
 
-$(ACCELCHECK): $(BUILD)/src/core/sh3.o $(BUILD)/src/core/accel.o $(BUILD)/src/core/lz.o $(BUILD)/src/core/lzw.o $(BUILD)/src/util/file.o $(BUILD)/tools/accel_check.o
+$(NATIVECHECK): $(BUILD)/src/core/sh3.o $(BUILD)/src/core/optimiser.o $(BUILD)/src/native/native.o $(BUILD)/src/native/lz.o $(BUILD)/src/native/lzw.o $(BUILD)/src/util/file.o $(BUILD)/tools/native_check.o
 	$(CC) -o $@ $^ -lz
 
 $(GATEWAYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
@@ -145,7 +145,7 @@ clean:
 
 .PHONY: all run clean test check format format-check app apk apk-push apk-install icons debugmgr sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/accel_check.d $(BUILD)/tools/sh3emu_rapi.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/native_check.d $(BUILD)/tools/sh3emu_rapi.d
 
 check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK) $(PROXYCHECK)
 	sh tests/check.sh
