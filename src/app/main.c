@@ -871,13 +871,13 @@ static int load_launch(app_t *app, int argc, char **argv, bool *start) {
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
 #endif
-    char base[1024];
-    app_data_folder(base, sizeof base);
-    snapshot_store_init(&app->snapshots, base);
     app->settings = settings_load();
     options_result_t parsed = launch_parse(&app->launch, &app->settings, argc, argv);
     if (parsed == OPTIONS_EXIT) return 0;
     if (parsed == OPTIONS_ERROR) return 2;
+    char base[1024];
+    app_data_folder(base, sizeof base);
+    snapshot_store_init(&app->snapshots, base);
     app_log_set_verbose(app->launch.verbose);
     debug_log_set_stderr(app->launch.debug_output);
     *start = true;

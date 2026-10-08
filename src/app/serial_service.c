@@ -40,8 +40,7 @@ void serial_service_init(serial_service_t *service, settings_t *settings) {
     serial_link_init(&service->link, NULL);
     service->link.tcp_port = (int)settings->serial_tcp_port;
     service->link.options.user_agent = settings->user_agent;
-    app_rapi_socket_path(service->rapi_socket, sizeof service->rapi_socket);
-    service->link.options.rapi_socket = service->rapi_socket;
+    if (app_rapi_socket_path(service->rapi_socket, sizeof service->rapi_socket)) service->link.options.rapi_socket = service->rapi_socket;
     service->link.options.rapi_port = settings->network_rapi ? (int)settings->rapi_port : 0;
 }
 

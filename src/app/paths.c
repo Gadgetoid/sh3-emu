@@ -32,10 +32,10 @@ void app_settings_path(char *path, size_t size) {
     snprintf(path, size, "%s/" SETTINGS_FILE, base);
 }
 
-void app_rapi_socket_path(char *path, size_t size) {
+bool app_rapi_socket_path(char *path, size_t size) {
 #ifdef __ANDROID__
-    net_gateway_socket_path(path, size, RAPI_TOOL);
+    return net_gateway_socket_path(path, size, RAPI_TOOL);
 #else
-    rapi_data_path("rapi.sock", path, size);
+    return rapi_data_path("rapi.sock", path, size);
 #endif
 }
