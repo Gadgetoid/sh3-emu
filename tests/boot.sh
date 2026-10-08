@@ -72,6 +72,23 @@ reconnect_check() {
     ./headless "$rom" "$@" > "$OUT/$name.log" 2>&1
     if [ "$(grep -c "^desktop: connection from the device" "$OUT/$name.log")" = 2 ]; then echo "ok   $name"; else echo "FAIL $name"; exit 1; fi
 }
+app_check() {
+    name=$1; rom=$2; state=$3
+    data="$OUT/$name"
+    rm -rf "$data"
+    mkdir -p "$data"
+    cp "$state" "$data/app.state"
+    PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    TCP_PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    XDG_DATA_HOME="$data" XDG_CONFIG_HOME="$data" SDL_VIDEO_DRIVER=dummy SDL_RENDER_DRIVER=software SDL_AUDIO_DRIVER=dummy \
+        ./sh3emu "$rom" --state="$data/app.state" --gdb="$PORT" --tcp="$TCP_PORT" > "$OUT/$name.log" 2>&1 &
+    APP=$!
+    if python3 tests/gdb_client.py "$PORT" > "$OUT/${name}_gdb.log" 2>&1; then echo "ok   ${name}_gdb"; else echo "FAIL ${name}_gdb"; cat "$OUT/${name}_gdb.log" "$OUT/$name.log"; kill $APP; exit 1; fi
+    if python3 -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=5).close()' "$TCP_PORT"; then echo "ok   ${name}_tcp"; else echo "FAIL ${name}_tcp"; kill $APP; exit 1; fi
+    kill -TERM $APP 2>/dev/null || true
+    if wait $APP; then echo "ok   ${name}_quit"; else echo "FAIL ${name}_quit"; cat "$OUT/$name.log"; exit 1; fi
+    if ! cmp -s "$state" "$data/app.state"; then echo "ok   ${name}_state_saved"; else echo "FAIL ${name}_state_saved"; exit 1; fi
+}
 dictionary_check() {
     name=$1; rom=$2; dictionary=$3
     socket=/tmp/sh3emu-dic-$$.sock
@@ -171,6 +188,7 @@ if [ -f "$HP_ROM" ]; then
     if python3 -c "$SOUND" "$OUT/hp_sound.wav"; then echo "ok   hp_sound"; else echo "FAIL hp_sound"; exit 1; fi
     if ./headless "$HP_ROM" --seconds=22 --backlight=20 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   hp_backlight"; else echo "FAIL hp_backlight"; exit 1; fi
     gdb_check hp_gdb "$HP_ROM"
+    app_check hp_app "$HP_ROM" "$OUT/hp_gdb.state"
     cable_check hp_cable "$HP_ROM" 22
     if ./headless "$HP_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
         echo "skip hp_net: headless built without libslirp"

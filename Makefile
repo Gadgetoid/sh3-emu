@@ -153,7 +153,7 @@ format-check:
 	$(UNCRUSTIFY) -c .uncrustify.cfg --check $(C_STYLE_SOURCES)
 	$(GATEWAYCHECK)
 
-test: $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)
+test: $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)
 	sh tests/sh3/run.sh
 	sh tests/boot.sh
 
