@@ -8,10 +8,7 @@
 #include <string.h>
 #include <time.h>
 
-#include "app/android.h"
 #include "app/desktop.h"
-#include "app/dialog.h"
-#include "app/menu.h"
 #include "app/profiles.h"
 #include "app/typer.h"
 #include "app/view.h"
@@ -20,6 +17,9 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
+#include "frontend/android/android.h"
+#include "frontend/common/dialog.h"
+#include "frontend/common/menu.h"
 #include "net/net_gateway.h"
 #include "net/serial_link.h"
 #include "rapi/rapi.h"
@@ -957,8 +957,6 @@ static bool first_run_import(void) {
     return true;
 }
 #endif
-
-const uint32_t DIALOG_MEMORY_SIZES[DIALOG_MEMORY_COUNT] = { 16, 32, 64 };
 
 static void machines_folder(char *path, size_t size) {
     char base[1024];

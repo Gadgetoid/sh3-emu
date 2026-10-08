@@ -1,13 +1,8 @@
 #import <Cocoa/Cocoa.h>
 
-#include "app/dialog.h"
+#include "frontend/common/dialog.h"
 
 #include <string.h>
-
-static NSString *const SCREEN_TITLES[] = { @"480 x 240 (original)", @"640 x 240", @"640 x 480", @"800 x 600" };
-static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
-    @"16 MB", @"32 MB", @"64 MB",
-};
 
 @interface MachineForm : NSObject
 @property(strong) NSAlert *alert;
@@ -42,7 +37,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
     panel.canChooseFiles = YES;
     panel.canChooseDirectories = NO;
     panel.allowsMultipleSelection = NO;
-    panel.message = @"Choose a ROM: a Casio Cassiopeia A-51 or HP 320LX ROM image.";
+    panel.message = [NSString stringWithUTF8String:DIALOG_ROM_PROMPT];
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         const char *path = panel.URL.fileSystemRepresentation;
         char label[160];
@@ -58,7 +53,7 @@ static NSString *const MEMORY_TITLES[DIALOG_MEMORY_COUNT] = {
             return;
         }
         NSAlert *alert = [[NSAlert alloc] init];
-        alert.messageText = @"Not a ROM this emulator can run";
+        alert.messageText = [NSString stringWithUTF8String:DIALOG_NOT_A_ROM];
         alert.informativeText = [NSString stringWithFormat:@"%@ isn't a ROM this emulator can run.", panel.URL.lastPathComponent];
         [alert runModal];
     }
@@ -109,19 +104,19 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
     }
 
     form.screen = popup();
-    for (int i = 0; i < SCREEN_PRESET_COUNT && i < (int)(sizeof SCREEN_TITLES / sizeof SCREEN_TITLES[0]); i++) {
-        [form.screen addItemWithTitle:SCREEN_TITLES[i]];
+    for (int i = 0; i < SCREEN_PRESET_COUNT && dialog_screen_label(i); i++) {
+        [form.screen addItemWithTitle:[NSString stringWithUTF8String:dialog_screen_label(i)]];
         if (SCREEN_PRESETS[i].width == result->screen.width && SCREEN_PRESETS[i].height == result->screen.height) [form.screen selectItemAtIndex:i];
     }
     [form updateScreens];
 
     NSPopUpButton *memory = popup();
     for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
-        [memory addItemWithTitle:MEMORY_TITLES[i]];
+        [memory addItemWithTitle:[NSString stringWithUTF8String:DIALOG_MEMORY_LABELS[i]]];
         if (DIALOG_MEMORY_SIZES[i] == result->memory) [memory selectItemAtIndex:i];
     }
 
-    NSButton *clock = [NSButton checkboxWithTitle:@"Set the clock from this Mac at the first boot" target:nil action:nil];
+    NSButton *clock = [NSButton checkboxWithTitle:[NSString stringWithUTF8String:DIALOG_CLOCK_LABEL] target:nil action:nil];
     clock.state = result->host_time ? NSControlStateValueOn : NSControlStateValueOff;
 
     NSGridView *grid = [NSGridView gridViewWithViews:@[
@@ -139,7 +134,7 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"New Machine";
-    alert.informativeText = @"The screen, memory and clock settings are fixed for the life of the machine. The ROM decides which screen sizes are available.";
+    alert.informativeText = [NSString stringWithUTF8String:DIALOG_NEW_MACHINE_MESSAGE];
     alert.accessoryView = grid;
     [alert addButtonWithTitle:@"Create"];
     [alert addButtonWithTitle:@"Cancel"];
@@ -164,7 +159,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         if (rom < 0 || rom >= (NSInteger)form.paths.count) {
             NSAlert *missing = [[NSAlert alloc] init];
             missing.messageText = @"No ROM chosen";
-            missing.informativeText = @"Put a ROM in the roms folder, or choose Other ROM File\u2026.";
+            missing.informativeText = [NSString stringWithUTF8String:DIALOG_NO_ROM_HINT];
             [missing runModal];
             return false;
         }
@@ -190,7 +185,7 @@ static NSAlert *manage_alert(const char *const *names, int count, int current, i
 
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"Manage Machines";
-    alert.informativeText = @"Reset sets a machine back to its factory state. Delete removes it and its saved state. Both put a backup in Snapshots/Backups first. The running machine can be reset but not deleted.";
+    alert.informativeText = [NSString stringWithUTF8String:DIALOG_MANAGE_MESSAGE];
     alert.accessoryView = list;
     [alert addButtonWithTitle:@"Done"];
     [alert addButtonWithTitle:@"Reset\u2026"];

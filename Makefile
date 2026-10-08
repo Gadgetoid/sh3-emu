@@ -34,12 +34,12 @@ MENU     ?= bar
 CFLAGS   += -D_GNU_SOURCE
 endif
 ifeq ($(MENU),macos)
-SRC_MENU  = src/app/menu_macos.m src/app/dialog_macos.m
+SRC_MENU  = src/frontend/macos/menu.m src/frontend/macos/dialog.m
 LDFLAGS  += -framework Cocoa
 else ifeq ($(MENU),android)
-SRC_MENU  = src/app/menu_android.c src/app/android.c src/vendor/truetype.c
+SRC_MENU  = src/frontend/android/menu.c src/frontend/android/dialog.c src/frontend/android/keystrip.c src/frontend/android/list.c src/frontend/android/text.c src/frontend/android/toast.c src/frontend/common/menu_state.c src/frontend/android/android.c src/vendor/truetype.c
 else
-SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
+SRC_MENU  = src/frontend/linux/menu.c src/frontend/linux/dialog.c src/frontend/linux/ui.c src/frontend/common/menu_state.c src/vendor/truetype.c
 endif
 
 ifeq ($(shell $(PKG_CONFIG) --exists slirp && echo yes),yes)
@@ -59,7 +59,7 @@ endif
 
 SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
 SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c src/rapi/debugmgr_images.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c $(SRC_MENU)
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/desktop.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c src/frontend/common/dialog.c src/frontend/common/menu_queue.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
