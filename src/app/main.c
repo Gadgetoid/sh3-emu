@@ -9,6 +9,10 @@
 #include <time.h>
 
 #include "app/desktop.h"
+#include "app/host.h"
+#include "app/input.h"
+#include "app/log.h"
+#include "app/paths.h"
 #include "app/profiles.h"
 #include "app/typer.h"
 #include "app/view.h"
@@ -70,132 +74,6 @@
 #define SCREENSHOT_FOLDER SDL_FOLDER_PICTURES
 #endif
 
-typedef struct {
-    SDL_Keycode key;
-    uint8_t scancode;
-} key_binding_t;
-
-static const key_binding_t key_bindings[] = {
-    { SDLK_TAB, 0x0D }, { SDLK_BACKSPACE, 0x66 }, { SDLK_RETURN, 0x5A }, { SDLK_ESCAPE, 0x76 },
-    { SDLK_LSHIFT, 0x12 }, { SDLK_RSHIFT, 0x59 }, { SDLK_LCTRL, 0x14 }, { SDLK_RCTRL, 0x94 },
-    { SDLK_LALT, 0x11 }, { SDLK_RALT, 0x91 }, { SDLK_CAPSLOCK, 0x58 },
-    { SDLK_LEFT, 0xEB }, { SDLK_UP, 0xF5 }, { SDLK_RIGHT, 0xF4 }, { SDLK_DOWN, 0xF2 },
-    { SDLK_DELETE, 0xF1 }, { SDLK_INSERT, 0xF0 }, { SDLK_HOME, 0xEC }, { SDLK_END, 0xE9 },
-    { SDLK_PAGEUP, 0xFD }, { SDLK_PAGEDOWN, 0xFA },
-    { SDLK_F1, 0x05 }, { SDLK_F2, 0x06 }, { SDLK_F3, 0x04 }, { SDLK_F4, 0x0C }, { SDLK_F5, 0x03 }, { SDLK_F6, 0x0B },
-    { SDLK_F7, 0x83 }, { SDLK_F8, 0x0A }, { SDLK_F9, 0x01 }, { SDLK_F10, 0x09 }, { SDLK_F11, 0x78 }, { SDLK_F12, 0x07 },
-};
-
-static bool find_scancode(key_layout_t layout, SDL_Keycode key, uint8_t *scancode) {
-    if (key >= 0x20 && key < 0x7F) {
-        bool shifted;
-        return key_text_find(layout, (char)key, scancode, &shifted);
-    }
-    for (size_t i = 0; i < sizeof key_bindings / sizeof key_bindings[0]; i++) {
-        if (key_bindings[i].key == key) { *scancode = key_bindings[i].scancode; return true; }
-    }
-    return false;
-}
-
-static bool verbose = false;
-
-#define SCROLL_STEP    (MACHINE_CLOCK_HZ / 50)
-#define SCROLL_PENDING 8
-
-typedef struct {
-    float vertical, horizontal;
-    int pending;
-    uint8_t scancode;
-    bool pressed;
-    uint64_t next_at;
-} scroller_t;
-
-static void scroller_add(scroller_t *scroller, float vertical, float horizontal) {
-    scroller->vertical += vertical;
-    scroller->horizontal += horizontal;
-    float *axis = fabsf(scroller->vertical) >= fabsf(scroller->horizontal) ? &scroller->vertical : &scroller->horizontal;
-    if (fabsf(*axis) < 1.0f) return;
-    uint8_t scancode = axis == &scroller->vertical ? (*axis > 0 ? 0xF5 : 0xF2) : (*axis > 0 ? 0xF4 : 0xEB);
-    int steps = (int)fabsf(*axis);
-    *axis -= *axis > 0 ? (float)steps : -(float)steps;
-    if (scancode != scroller->scancode) {
-        if (scroller->pressed) return;
-        scroller->scancode = scancode;
-        scroller->pending = 0;
-    }
-    scroller->pending += steps;
-    if (scroller->pending > SCROLL_PENDING) scroller->pending = SCROLL_PENDING;
-}
-
-static void scroller_step(scroller_t *scroller, machine_t *machine) {
-    uint64_t now = machine_cycles(machine);
-    if (scroller->next_at > now + SCROLL_STEP) scroller->next_at = now;
-    if (!scroller->pending || now < scroller->next_at) return;
-    machine_key(machine, scroller->scancode, scroller->pressed);
-    if (scroller->pressed) scroller->pending--;
-    scroller->pressed = !scroller->pressed;
-    scroller->next_at = now + SCROLL_STEP;
-}
-
-#define INPUT_QUEUE    64
-#define PEN_MIN_CYCLES (MACHINE_CLOCK_HZ * 6 / 100)
-#define KEY_MIN_CYCLES (MACHINE_CLOCK_HZ / 50)
-
-typedef enum { INPUT_PEN, INPUT_KEY } input_kind_t;
-
-typedef struct {
-    struct { uint64_t at; input_kind_t kind; bool down; int x, y; uint8_t scancode; } events[INPUT_QUEUE];
-    int count;
-    uint64_t last_at, seen;
-} input_queue_t;
-
-static void input_rebase(input_queue_t *input, uint64_t now) {
-    if (now < input->seen) {
-        for (int i = 0; i < input->count; i++) input->events[i].at = now;
-        input->last_at = now;
-    }
-    input->seen = now;
-}
-
-static void input_add(input_queue_t *input, machine_t *machine, input_kind_t kind, bool down, int x, int y, uint8_t scancode) {
-    if (input->count == INPUT_QUEUE) return;
-    uint64_t now = machine_cycles(machine);
-    input_rebase(input, now);
-    uint64_t spacing = kind == INPUT_PEN ? PEN_MIN_CYCLES : KEY_MIN_CYCLES;
-    uint64_t at = input->last_at + spacing > now ? input->last_at + spacing : now;
-    input->events[input->count].at = at;
-    input->events[input->count].kind = kind;
-    input->events[input->count].down = down;
-    input->events[input->count].x = x;
-    input->events[input->count].y = y;
-    input->events[input->count].scancode = scancode;
-    input->count++;
-    input->last_at = at;
-}
-
-static void pen_move(input_queue_t *input, machine_t *machine, int x, int y) {
-    if (input->count) return;
-    machine_touch(machine, true, x, y);
-}
-
-static void input_step(input_queue_t *input, machine_t *machine) {
-    uint64_t now = machine_cycles(machine);
-    input_rebase(input, now);
-    int done = 0;
-    while (done < input->count && input->events[done].at <= now) {
-        if (input->events[done].kind == INPUT_PEN) machine_touch(machine, input->events[done].down, input->events[done].x, input->events[done].y);
-        else machine_key(machine, input->events[done].scancode, !input->events[done].down);
-        done++;
-    }
-    for (int i = done; i < input->count; i++) input->events[i - done] = input->events[i];
-    input->count -= done;
-}
-
-static void input_clear(input_queue_t *input) {
-    input->count = 0;
-    input->last_at = input->seen = 0;
-}
-
 static gdb_t *debugger;
 static agent_t *agent;
 static serial_link_t serial;
@@ -217,13 +95,6 @@ static const char *set_serial(machine_t *machine, serial_mode_t mode, const char
     }
     if (mode != SERIAL_OFF && mode != SERIAL_TCP) *plug_at = cable_plug_time(machine);
     return NULL;
-}
-
-static void log_gdb(const char *message) {
-#ifdef __ANDROID__
-    SDL_Log("%s", message);
-#endif
-    fputs(message, stderr);
 }
 
 typedef struct {
@@ -332,11 +203,6 @@ typedef struct {
     int count;
 } dropped_t;
 
-static bool has_extension(const char *path, const char *extension) {
-    const char *dot = strrchr(path, '.');
-    return dot && !strcasecmp(dot, extension);
-}
-
 static bool is_directory(const char *path) {
     struct stat info;
     return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
@@ -349,8 +215,8 @@ static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t
     for (int i = 0; i < dropped->count; i++) {
         const char *path = dropped->paths[i];
         if (is_directory(path)) continue;
-        if (has_extension(path, ".img") && cards < 0) cards = i;
-        else if (has_extension(path, ".load") && scripts < 0) scripts = i;
+        if (file_has_extension(path, ".img") && cards < 0) cards = i;
+        else if (file_has_extension(path, ".load") && scripts < 0) scripts = i;
         list[files++] = path;
     }
     list[files] = NULL;
@@ -368,76 +234,15 @@ static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t
     return desktop_send(desktop, list) ? "sending to \\My Documents" : "busy with the last transfer";
 }
 
-static void log_message(const char *message) {
-#ifdef __ANDROID__
-    SDL_Log("%s", message);
-#endif
-    if (verbose) fputs(message, stderr);
-}
-
-#define DEBUG_LOG_MAX (1024 * 1024)
-
-static FILE *debug_log;
-static bool debug_to_stderr;
-
-static void data_folder(char *path, size_t size);
-
-static void debug_log_path(char *path, size_t size) {
-    char base[1024];
-    data_folder(base, sizeof base);
-    snprintf(path, size, "%s/debug.log", base);
-}
-
 static void print_debug_line(void *context, const char *line) {
     (void)context;
     if (debugger) gdb_debug_line(debugger, line);
-    if (debug_to_stderr) fprintf(stderr, "debug: %s\n", line);
-    if (!debug_log) return;
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    char stamp[16];
-    strftime(stamp, sizeof stamp, "%H:%M:%S", &local);
-    fprintf(debug_log, "%s %s\n", stamp, line);
-    fflush(debug_log);
-}
-
-static void start_debug_log(const char *rom_path) {
-    if (!debug_log) {
-        char path[1100], old[1110];
-        debug_log_path(path, sizeof path);
-        struct stat info;
-        if (stat(path, &info) == 0 && info.st_size > DEBUG_LOG_MAX) {
-            snprintf(old, sizeof old, "%s.old", path);
-            rename(path, old);
-        }
-        debug_log = fopen(path, "a");
-        if (!debug_log) return;
-    }
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    char stamp[32];
-    strftime(stamp, sizeof stamp, "%Y-%m-%d %H:%M:%S", &local);
-    fprintf(debug_log, "--- %s %s\n", stamp, file_leaf_name(rom_path));
-    fflush(debug_log);
-}
-
-static void data_folder(char *path, size_t size) {
-    const char *data_home = getenv("XDG_DATA_HOME");
-    const char *home = getenv("HOME") ? getenv("HOME") : ".";
-    if (data_home && data_home[0] == '/') snprintf(path, size, "%s/sh3-emu", data_home);
-#ifdef __APPLE__
-    else snprintf(path, size, "%s/Library/Application Support/sh3-emu", home);
-#else
-    else snprintf(path, size, "%s/.local/share/sh3-emu", home);
-#endif
-    SDL_CreateDirectory(path);
+    debug_log_line(line);
 }
 
 static void snapshot_folder(char *path, size_t size) {
     char base[1024];
-    data_folder(base, sizeof base);
+    app_data_folder(base, sizeof base);
     snprintf(path, size, "%s/snapshots", base);
     SDL_CreateDirectory(path);
 }
@@ -477,7 +282,7 @@ static void prune_backups(const char *path, const char *prefix) {
     size_t prefix_length = strlen(prefix);
     struct dirent *entry;
     while ((entry = readdir(dir)) && count < 256) {
-        if (strncmp(entry->d_name, prefix, prefix_length) || !has_extension(entry->d_name, ".state")) continue;
+        if (strncmp(entry->d_name, prefix, prefix_length) || !file_has_extension(entry->d_name, ".state")) continue;
         names[count] = strdup(entry->d_name);
         if (names[count]) count++;
     }
@@ -528,7 +333,7 @@ static void snapshot_default_name(char *path, size_t size) {
 
 static void state_path(char *path, size_t size, machine_t *machine, const char *rom_path) {
     char base[1024];
-    data_folder(base, sizeof base);
+    app_data_folder(base, sizeof base);
     char rom_name[256];
     snprintf(rom_name, sizeof rom_name, "%s", file_leaf_name(rom_path));
     char *extension = strrchr(rom_name, '.');
@@ -561,19 +366,6 @@ typedef struct {
     char user_agent[256];
 } settings_t;
 
-static void settings_path(char *path, size_t size) {
-    const char *config_home = getenv("XDG_CONFIG_HOME");
-    char base[1024];
-    if (config_home && config_home[0] == '/') snprintf(base, sizeof base, "%s/sh3-emu", config_home);
-#ifdef __APPLE__
-    else data_folder(base, sizeof base);
-#else
-    else snprintf(base, sizeof base, "%s/.config/sh3-emu", getenv("HOME") ? getenv("HOME") : ".");
-#endif
-    SDL_CreateDirectory(base);
-    snprintf(path, size, "%s/sh3emu.ini", base);
-}
-
 static const uint32_t SCALES[] = { 50, 75, 100, 150, 200 };
 #define SCALE_COUNT (int)(sizeof SCALES / sizeof SCALES[0])
 
@@ -594,7 +386,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 static settings_t settings_load(void) {
     settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1, .gdb_port = GDB_DEFAULT_PORT, .serial_tcp_port = SERIAL_TCP_DEFAULT_PORT, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
     char path[1100];
-    settings_path(path, sizeof path);
+    app_settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
     if (!file) return settings;
     char line[1200];
@@ -631,7 +423,7 @@ static settings_t settings_load(void) {
 
 static void settings_save(const settings_t *settings) {
     char path[1100];
-    settings_path(path, sizeof path);
+    app_settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
     fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\nserial_tcp_port=%u\nuser_agent=%s\n", settings->memory,
@@ -640,25 +432,10 @@ static void settings_save(const settings_t *settings) {
     fclose(file);
 }
 
-static void local_address(char *address, size_t size) {
-    snprintf(address, size, "this computer");
-    struct ifaddrs *interfaces;
-    if (getifaddrs(&interfaces) != 0) return;
-    int best = 0;
-    for (struct ifaddrs *at = interfaces; at; at = at->ifa_next) {
-        if (!at->ifa_addr || at->ifa_addr->sa_family != AF_INET || (at->ifa_flags & IFF_LOOPBACK) || !(at->ifa_flags & IFF_UP)) continue;
-        int score = !strncmp(at->ifa_name, "wlan", 4) || !strcmp(at->ifa_name, "en0") ? 2 : 1;
-        if (score <= best) continue;
-        best = score;
-        inet_ntop(AF_INET, &((struct sockaddr_in *)at->ifa_addr)->sin_addr, address, (socklen_t)size);
-    }
-    freeifaddrs(interfaces);
-}
-
 static gdb_t *start_network_gdb(machine_t *machine, uint32_t port, char *notice, size_t size) {
-    gdb_t *gdb = gdb_create(machine, (int)port, true, log_gdb);
+    gdb_t *gdb = gdb_create(machine, (int)port, true, app_log_always);
     char address[64];
-    local_address(address, sizeof address);
+    host_local_address(address, sizeof address);
     if (gdb) snprintf(notice, size, "GDB server at %s:%u", address, port);
     else snprintf(notice, size, "cannot listen for GDB on port %u", port);
     return gdb;
@@ -680,7 +457,7 @@ static const char *serial_choice(machine_t *machine, settings_t *settings, seria
     if (mode == SERIAL_OFF) return "serial cable unplugged";
     if (mode == SERIAL_TCP) {
         char address[64];
-        local_address(address, sizeof address);
+        host_local_address(address, sizeof address);
         snprintf(notice, sizeof notice, "COM1 at %s:%d; the cable connects while a client is attached", address, serial.tcp_port);
         return notice;
     }
@@ -688,63 +465,12 @@ static const char *serial_choice(machine_t *machine, settings_t *settings, seria
     return notice;
 }
 
-static bool confirm_action(SDL_Window *window, const char *title, const char *message, const char *action) {
-    const SDL_MessageBoxButtonData buttons[] = {
-        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel" },
-        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, action },
-    };
-    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_WARNING, window, title, message, (int)(sizeof buttons / sizeof buttons[0]), buttons, NULL };
-    int chosen = 0;
-    return SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1;
-}
-
 static bool confirm_reset(SDL_Window *window, const char *name) {
     char title[160];
     snprintf(title, sizeof title, "Reset %s?", name);
-    return confirm_action(window, title,
-                          "A reset is a cold boot back to the factory state: it clears RAM, including files, settings and installed programs. A backup of the machine goes in Snapshots/Backups first. Soft Reset keeps them.",
-                          "Reset");
-}
-
-static void open_path(const char *path) {
-    char url[4096] = "file://";
-    size_t length = strlen(url);
-    for (const unsigned char *at = (const unsigned char *)path; *at && length + 4 < sizeof url; at++) {
-        if (isalnum(*at) || strchr("/-_.~", *at)) url[length++] = (char)*at;
-        else length += (size_t)snprintf(url + length, sizeof url - length, "%%%02X", *at);
-    }
-    url[length] = 0;
-    SDL_OpenURL(url);
-}
-
-#define REVEAL_CHILDREN_MAX 16
-
-static pid_t reveal_children[REVEAL_CHILDREN_MAX];
-static int reveal_child_count = 0;
-
-static void reap_reveal_children(void) {
-    int kept = 0;
-    for (int i = 0; i < reveal_child_count; i++) {
-        if (waitpid(reveal_children[i], NULL, WNOHANG) == 0) reveal_children[kept++] = reveal_children[i];
-    }
-    reveal_child_count = kept;
-}
-
-static void reveal_file(const char *path) {
-#ifdef __APPLE__
-    extern char **environ;
-    char *arguments[] = { "open", "-R", (char *)path, NULL };
-    pid_t pid;
-    if (posix_spawnp(&pid, "open", NULL, NULL, arguments, environ) != 0) return;
-    if (reveal_child_count < REVEAL_CHILDREN_MAX) reveal_children[reveal_child_count++] = pid;
-    else waitpid(pid, NULL, 0);
-#else
-    char folder[1100];
-    snprintf(folder, sizeof folder, "%s", path);
-    char *slash = strrchr(folder, '/');
-    if (slash && slash != folder) *slash = 0;
-    open_path(folder);
-#endif
+    return host_confirm(window, title,
+                        "A reset is a cold boot back to the factory state: it clears RAM, including files, settings and installed programs. A backup of the machine goes in Snapshots/Backups first. Soft Reset keeps them.",
+                        "Reset");
 }
 
 static void set_title(SDL_Window *window, const char *name, const char *notice, bool paused, bool suspended) {
@@ -764,7 +490,7 @@ typedef struct {
 
 static void rom_folder(char *path, size_t size) {
     char base[1024];
-    data_folder(base, sizeof base);
+    app_data_folder(base, sizeof base);
     snprintf(path, size, "%s/roms", base);
     SDL_CreateDirectory(path);
 }
@@ -861,14 +587,14 @@ static bool no_roms_dialog(void) {
     };
     const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No ROM found", message, 2, buttons, NULL };
     int chosen = 0;
-    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_path(folder);
+    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) host_open_path(folder);
     return false;
 }
 
 #ifdef __ANDROID__
 static void data_subfolder(const char *name, char *path, size_t size) {
     char base[1024];
-    data_folder(base, sizeof base);
+    app_data_folder(base, sizeof base);
     snprintf(path, size, "%s/%s", base, name);
     SDL_CreateDirectory(path);
 }
@@ -960,7 +686,7 @@ static bool first_run_import(void) {
 
 static void machines_folder(char *path, size_t size) {
     char base[1024];
-    data_folder(base, sizeof base);
+    app_data_folder(base, sizeof base);
     snprintf(path, size, "%s/machines", base);
     SDL_CreateDirectory(path);
 }
@@ -1060,13 +786,13 @@ static machine_t *start_machine(const profile_t *profile, uint32_t speed, const 
         *notice = message;
         return NULL;
     }
-    machine_set_log(machine, log_message);
+    machine_set_log(machine, app_log);
     machine_set_memory(machine, profile->memory);
     machine_set_screen(machine, profile->screen);
     machine_set_speed(machine, speed);
     machine_set_host_clock(machine, profile->host_time);
     machine_set_debug_output(machine, print_debug_line, NULL);
-    start_debug_log(rom_path);
+    debug_log_start(rom_path);
     if (state_file) snprintf(state, state_size, "%s", state_file);
     else if (profile->state[0]) snprintf(state, state_size, "%s", profile->state);
     else state_path(state, state_size, machine, rom_path);
@@ -1220,8 +946,8 @@ static bool launch_option(void *context, int option, const char *value, char *er
         if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
         settings->speed = (uint32_t)integer;
         return true;
-    case LAUNCH_VERBOSE: verbose = true; return true;
-    case LAUNCH_DEBUG_OUTPUT: debug_to_stderr = true; return true;
+    case LAUNCH_VERBOSE: app_log_set_verbose(true); return true;
+    case LAUNCH_DEBUG_OUTPUT: debug_log_set_stderr(true); return true;
     case LAUNCH_GDB:
         if (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535) return false;
         launch->gdb_port = (int)integer;
@@ -1330,7 +1056,6 @@ int main(int argc, char **argv) {
 
     view_t *view = view_create(window, renderer, (view_display_t)settings.display, menu_bar_height());
 
-
     if (card && !machine_insert_card(machine, card)) fprintf(stderr, "cannot open card image %s\n", card);
 
     menu_install(window);
@@ -1356,13 +1081,12 @@ int main(int argc, char **argv) {
     static dropped_t dropped;
     picked_t *picked = NULL;
 
-
     if (launch.gdb_process && !launch.gdb_port) {
         fprintf(stderr, "sh3emu: --gdb-process needs --gdb\n");
         return 2;
     }
     if (launch.gdb_port) {
-        debugger = gdb_create(machine, launch.gdb_port, false, log_gdb);
+        debugger = gdb_create(machine, launch.gdb_port, false, app_log_always);
         if (!debugger) {
             fprintf(stderr, "sh3emu: cannot listen for GDB on port %d\n", launch.gdb_port);
             return 1;
@@ -1399,7 +1123,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sh3emu: %s\n", serial_failure);
         settings.serial = SERIAL_OFF;
     }
-    if (launch.agent_socket && !(agent = agent_create(launch.agent_socket, log_gdb))) {
+    if (launch.agent_socket && !(agent = agent_create(launch.agent_socket, app_log_always))) {
         fprintf(stderr, "sh3emu: cannot listen on agent socket %s\n", launch.agent_socket);
         return 1;
     }
@@ -1435,7 +1159,7 @@ int main(int argc, char **argv) {
             case SDL_EVENT_KEY_UP: {
                 bool down = event.type == SDL_EVENT_KEY_DOWN;
                 uint8_t scancode;
-                if (!find_scancode(key_layout, event.key.key, &scancode)) break;
+                if (!input_find_scancode(key_layout, event.key.key, &scancode)) break;
                 if (down) {
                     if (event.key.repeat || (event.key.mod & SDL_KMOD_GUI) || held[scancode]) break;
                     held[scancode] = true;
@@ -1574,7 +1298,7 @@ int main(int argc, char **argv) {
                     }
                     char title[160];
                     snprintf(title, sizeof title, "Delete %s?", picked_profile.name);
-                    if (!confirm_action(window, title, "This removes the machine and its saved state. A backup of the state goes in Snapshots/Backups first.", "Delete")) break;
+                    if (!host_confirm(window, title, "This removes the machine and its saved state. A backup of the state goes in Snapshots/Backups first.", "Delete")) break;
                     backup_file(picked_profile.state);
                     profile_delete(&picked_profile, profiles_folder);
                     char current_id[sizeof current.id];
@@ -1645,7 +1369,7 @@ int main(int argc, char **argv) {
                 set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                 notice_left = NOTICE_SECONDS;
                 break;
-            case MENU_SHOW_STATE: reveal_file(state); break;
+            case MENU_SHOW_STATE: host_reveal_file(state); break;
             case MENU_SAVE_SNAPSHOT: {
                 static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state" } };
                 static char default_snapshot[1200];
@@ -1663,8 +1387,8 @@ int main(int argc, char **argv) {
             case MENU_SHOW_DEBUG_OUTPUT: {
                 char path[1100];
                 debug_log_path(path, sizeof path);
-                if (debug_log) fflush(debug_log);
-                open_path(path);
+                debug_log_flush();
+                host_open_path(path);
                 break;
             }
             case MENU_QUIT:
@@ -1798,7 +1522,7 @@ int main(int argc, char **argv) {
                 settings_save(&settings);
                 serial.options.rapi_port = settings.network_rapi ? (int)settings.rapi_port : 0;
                 char address[64];
-                local_address(address, sizeof address);
+                host_local_address(address, sizeof address);
                 if (settings.network_rapi) snprintf(rapi_notice, sizeof rapi_notice, "RAPI at %s:%u", address, settings.rapi_port);
                 else snprintf(rapi_notice, sizeof rapi_notice, "RAPI over the network off");
                 if (serial.mode == SERIAL_NETWORK) {
@@ -1872,7 +1596,7 @@ int main(int argc, char **argv) {
             } else if (picked->kind == PICK_SAVE_SNAPSHOT) {
                 static char snapshot_notice[1200];
                 char path[1100];
-                snprintf(path, sizeof path, "%s%s", picked->paths[0], has_extension(picked->paths[0], ".state") ? "" : ".state");
+                snprintf(path, sizeof path, "%s%s", picked->paths[0], file_has_extension(picked->paths[0], ".state") ? "" : ".state");
                 bool saved = machine_save(machine, path, (int64_t)time(NULL));
 #ifdef __ANDROID__
                 if (saved && picked->export_uri[0]) {
@@ -1993,7 +1717,7 @@ int main(int argc, char **argv) {
             serial_plug_at = 0;
             machine_serial_connect(machine, true);
         }
-        reap_reveal_children();
+        host_reap_children();
         menu_set_checked(MENU_PAUSE, paused);
         menu_set_checked(MENU_GDB_SERVER, debugger != NULL);
         menu_set_checked(MENU_FULL_BRIGHTNESS, settings.full_brightness != 0);
@@ -2042,7 +1766,6 @@ int main(int argc, char **argv) {
         runner.paused = paused;
         typer_step(&typer, machine);
         scroller_step(&scroller, machine);
-
 
         screen = machine_screen_size(machine);
         if (screen.width != lcd_width() || screen.height != lcd_height()) {
@@ -2098,7 +1821,7 @@ int main(int argc, char **argv) {
     SDL_DestroyMutex(runner.lock);
     free(picked);
     machine_save(machine, state, (int64_t)time(NULL));
-    if (verbose) machine_dump_state(machine);
+    if (app_log_verbose()) machine_dump_state(machine);
     view_destroy(view);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
