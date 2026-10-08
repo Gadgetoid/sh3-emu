@@ -4,14 +4,14 @@
 #include <stdio.h>
 
 typedef struct {
-    bool     inserted;
-    uint8_t  feature, error, sector_count, sector_number, cylinder_low, cylinder_high, drive_head;
-    uint8_t  status, device_control, cor;
-    uint8_t  buffer[512];
+    bool inserted;
+    uint8_t feature, error, sector_count, sector_number, cylinder_low, cylinder_high, drive_head;
+    uint8_t status, device_control, cor;
+    uint8_t buffer[512];
     uint32_t buffer_position;
     uint32_t sectors_left;
-    bool     writing;
-    bool     irq;
+    bool writing;
+    bool irq;
     uint64_t total_sectors;
 } cfcard_t;
 

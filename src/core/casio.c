@@ -144,12 +144,12 @@ static bool unlocked(const casio_t *board) {
 
 static bool asic_modelled(uint32_t offset) {
     switch (offset) {
-        case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case POWER_STATUS: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
-        case TOUCH_PEN_UP: case 0x098u: case 0x09Au: case 0x09Cu:
-        case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: case SERIAL_EDGES: case SERIAL_LINES:
-        case AUDIO_CONTROL: case AUDIO_RUN: case AUDIO_STATUS: case AUDIO_START_LOW: case AUDIO_HIGH: case AUDIO_END_LOW:
-        case AUDIO_NEXT_START_LOW: case AUDIO_NEXT_HIGH: case AUDIO_NEXT_END_LOW: return true;
-        default: return false;
+    case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case POWER_STATUS: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
+    case TOUCH_PEN_UP: case 0x098u: case 0x09Au: case 0x09Cu:
+    case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: case SERIAL_EDGES: case SERIAL_LINES:
+    case AUDIO_CONTROL: case AUDIO_RUN: case AUDIO_STATUS: case AUDIO_START_LOW: case AUDIO_HIGH: case AUDIO_END_LOW:
+    case AUDIO_NEXT_START_LOW: case AUDIO_NEXT_HIGH: case AUDIO_NEXT_END_LOW: return true;
+    default: return false;
     }
 }
 
@@ -190,36 +190,36 @@ static uint16_t asic_vector(const casio_t *board, const casio_host_t *host) {
 
 static uint16_t touch_result(const casio_t *board) {
     switch (board->asic[TOUCH_CHANNEL / 2]) {
-        case TOUCH_CHANNEL_X: return (uint16_t)(TOUCH_RAW_MIN + board->pen_x * TOUCH_RAW_SPAN / CASIO_SCREEN_WIDTH);
-        case TOUCH_CHANNEL_Y: return (uint16_t)(TOUCH_RAW_MIN + board->pen_y * TOUCH_RAW_SPAN / CASIO_SCREEN_HEIGHT);
-        default: return 0;
+    case TOUCH_CHANNEL_X: return (uint16_t)(TOUCH_RAW_MIN + board->pen_x * TOUCH_RAW_SPAN / CASIO_SCREEN_WIDTH);
+    case TOUCH_CHANNEL_Y: return (uint16_t)(TOUCH_RAW_MIN + board->pen_y * TOUCH_RAW_SPAN / CASIO_SCREEN_HEIGHT);
+    default: return 0;
     }
 }
 
 static uint16_t asic_read(casio_t *board, const casio_host_t *host, uint32_t offset) {
     uint16_t stored = board->asic[offset / 2];
     if (offset == SERIAL_EDGES) return (uint16_t)((stored & SERIAL_ENABLES) | board->serial_flags);
-    if (offset - PINS_FIRST <= PINS_LAST - PINS_FIRST) return stored & (uint16_t)~PIN_INPUT;
+    if (offset - PINS_FIRST <= PINS_LAST - PINS_FIRST) return stored & (uint16_t) ~PIN_INPUT;
     if (offset - TOUCH_RESULT_FIRST <= TOUCH_RESULT_LAST - TOUCH_RESULT_FIRST) return touch_result(board);
     switch (offset) {
-        case POWER_STATUS: return stored | POWER_AC;
-        case INT_STATUS: return asic_requests(board, host);
-        case INT_CLEAR: return 0;
-        case AUDIO_STATUS: {
-            uint16_t status = host->audio->status;
-            host->audio->status = 0;
-            return status;
-        }
-        case TOUCH_PEN_UP: return board->pen_down ? 0 : 1;
-        case INT_VECTOR: return asic_vector(board, host);
-        case KEY_COLUMNS: return (uint16_t)~key_columns(board);
-        case LOCK_STATUS: return unlocked(board) ? LOCK_OPEN : 0;
-        case LOCK_LOW: return board->lock_low;
-        case LOCK_HIGH: return board->lock_high;
-        case SERIAL_LINES: return board->dsr ? (uint16_t)(stored | SERIAL_DSR) : (uint16_t)(stored & ~SERIAL_DSR);
-        case SLOT0_STATUS: return card_present(host, 0) ? (uint16_t)(stored & ~SLOT0_EMPTY) : (uint16_t)(stored | SLOT0_EMPTY);
-        case SLOT1_STATUS: return card_present(host, 1) ? (uint16_t)(stored & ~SLOT1_EMPTY) : (uint16_t)(stored | SLOT1_EMPTY);
-        default: return stored;
+    case POWER_STATUS: return stored | POWER_AC;
+    case INT_STATUS: return asic_requests(board, host);
+    case INT_CLEAR: return 0;
+    case AUDIO_STATUS: {
+        uint16_t status = host->audio->status;
+        host->audio->status = 0;
+        return status;
+    }
+    case TOUCH_PEN_UP: return board->pen_down ? 0 : 1;
+    case INT_VECTOR: return asic_vector(board, host);
+    case KEY_COLUMNS: return (uint16_t) ~key_columns(board);
+    case LOCK_STATUS: return unlocked(board) ? LOCK_OPEN : 0;
+    case LOCK_LOW: return board->lock_low;
+    case LOCK_HIGH: return board->lock_high;
+    case SERIAL_LINES: return board->dsr ? (uint16_t)(stored | SERIAL_DSR) : (uint16_t)(stored & ~SERIAL_DSR);
+    case SLOT0_STATUS: return card_present(host, 0) ? (uint16_t)(stored & ~SLOT0_EMPTY) : (uint16_t)(stored | SLOT0_EMPTY);
+    case SLOT1_STATUS: return card_present(host, 1) ? (uint16_t)(stored & ~SLOT1_EMPTY) : (uint16_t)(stored | SLOT1_EMPTY);
+    default: return stored;
     }
 }
 
@@ -228,8 +228,8 @@ static void release_held_keys(casio_t *board) {
         for (uint32_t column = 0; column < 8; column++) {
             uint8_t bit = (uint8_t)(1u << column);
             if ((board->keys_releasing[row] & bit) && board->scans - board->key_pressed_scan[row][column] >= KEY_HOLD_SCANS) {
-                board->keys_releasing[row] &= (uint8_t)~bit;
-                board->keys_down[row] &= (uint8_t)~bit;
+                board->keys_releasing[row] &= (uint8_t) ~bit;
+                board->keys_down[row] &= (uint8_t) ~bit;
             }
         }
     }
@@ -293,36 +293,36 @@ static void audio_advance(casio_t *board, const casio_host_t *host) {
 
 static void asic_write(casio_t *board, const casio_host_t *host, uint32_t offset, uint16_t value) {
     switch (offset) {
-        case AUDIO_RUN:
-            board->asic[offset / 2] = value;
-            if ((value & AUDIO_PLAY) && !host->audio->running) audio_start(board, host);
-            else if (!(value & AUDIO_PLAY)) host->audio->running = false;
-            break;
-        case AUDIO_NEXT_END_LOW: {
-            board->asic[offset / 2] = value;
-            uint32_t high = (uint32_t)board->asic[AUDIO_NEXT_HIGH / 2] << 16;
-            host->audio->next_start = high | board->asic[AUDIO_NEXT_START_LOW / 2];
-            host->audio->next_end = high | value;
-            host->audio->next_armed = true;
-            break;
+    case AUDIO_RUN:
+        board->asic[offset / 2] = value;
+        if ((value & AUDIO_PLAY) && !host->audio->running) audio_start(board, host);
+        else if (!(value & AUDIO_PLAY)) host->audio->running = false;
+        break;
+    case AUDIO_NEXT_END_LOW: {
+        board->asic[offset / 2] = value;
+        uint32_t high = (uint32_t)board->asic[AUDIO_NEXT_HIGH / 2] << 16;
+        host->audio->next_start = high | board->asic[AUDIO_NEXT_START_LOW / 2];
+        host->audio->next_end = high | value;
+        host->audio->next_armed = true;
+        break;
+    }
+    case KEY_ROWS:
+        if (value == FIRST_ROW) {
+            board->scans++;
+            release_held_keys(board);
         }
-        case KEY_ROWS:
-            if (value == FIRST_ROW) {
-                board->scans++;
-                release_held_keys(board);
-            }
-            board->asic[offset / 2] = value;
-            break;
-        case LOCK_LOW: board->lock_low = value; break;
-        case LOCK_HIGH: board->lock_high = value; break;
-        case SERIAL_EDGES:
-            board->serial_flags &= (uint16_t)~value;
-            board->asic[offset / 2] = value & SERIAL_ENABLES;
-            break;
-        case INT_CLEAR:
-            board->latched_requests &= (uint16_t)~value;
-            break;
-        default: board->asic[offset / 2] = value; break;
+        board->asic[offset / 2] = value;
+        break;
+    case LOCK_LOW: board->lock_low = value; break;
+    case LOCK_HIGH: board->lock_high = value; break;
+    case SERIAL_EDGES:
+        board->serial_flags &= (uint16_t) ~value;
+        board->asic[offset / 2] = value & SERIAL_ENABLES;
+        break;
+    case INT_CLEAR:
+        board->latched_requests &= (uint16_t) ~value;
+        break;
+    default: board->asic[offset / 2] = value; break;
     }
 }
 
@@ -344,35 +344,35 @@ static bool timer_access(casio_t *board, const casio_host_t *host, uint32_t pa, 
     if (offset >= CASIO_TIMERS * TIMER_STRIDE) return false;
     casio_timer_t *timer = &board->timers[offset / TIMER_STRIDE];
     switch (offset % TIMER_STRIDE) {
-        case TIMER_COUNT:
-            if (write) timer_restart(timer, host, *value);
-            else *value = timer_count(timer, host);
+    case TIMER_COUNT:
+        if (write) timer_restart(timer, host, *value);
+        else *value = timer_count(timer, host);
+        return true;
+    case TIMER_COMPARE:
+        if (write) timer->compare = *value;
+        else *value = timer->compare;
+        return true;
+    case TIMER_CLEAR:
+        if (write && (*value & 1)) timer_restart(timer, host, 0);
+        if (!write) *value = 0;
+        return true;
+    case TIMER_RUN:
+        if (!write) {
+            *value = (timer->running ? TIMER_RUN_BIT : 0) | (timer->interrupt_enabled ? TIMER_INTERRUPT_BIT : 0);
             return true;
-        case TIMER_COMPARE:
-            if (write) timer->compare = *value;
-            else *value = timer->compare;
-            return true;
-        case TIMER_CLEAR:
-            if (write && (*value & 1)) timer_restart(timer, host, 0);
-            if (!write) *value = 0;
-            return true;
-        case TIMER_RUN:
-            if (!write) {
-                *value = (timer->running ? TIMER_RUN_BIT : 0) | (timer->interrupt_enabled ? TIMER_INTERRUPT_BIT : 0);
-                return true;
-            }
-            if (((*value & TIMER_RUN_BIT) != 0) != timer->running) {
-                timer_restart(timer, host, timer_count(timer, host));
-                timer->running = !timer->running;
-            }
-            timer->interrupt_enabled = (*value & TIMER_INTERRUPT_BIT) != 0;
-            return true;
-        case TIMER_MODE:
-            if (write) timer->mode = (uint16_t)*value;
-            else *value = timer->mode;
-            return true;
-        default:
-            return false;
+        }
+        if (((*value & TIMER_RUN_BIT) != 0) != timer->running) {
+            timer_restart(timer, host, timer_count(timer, host));
+            timer->running = !timer->running;
+        }
+        timer->interrupt_enabled = (*value & TIMER_INTERRUPT_BIT) != 0;
+        return true;
+    case TIMER_MODE:
+        if (write) timer->mode = (uint16_t)*value;
+        else *value = timer->mode;
+        return true;
+    default:
+        return false;
     }
 }
 
@@ -425,18 +425,18 @@ static bool card_access(casio_t *board, const casio_host_t *host, uint32_t pa, i
     }
     cfcard_slot_t *slot = host->card;
     switch (window) {
-        case CARD_ATTRIBUTE:
-            if (write) cfcard_attribute_write(slot, within, size, *value);
-            else *value = cfcard_attribute_read(slot, within, size);
-            break;
-        case CARD_COMMON:
-            if (write) cfcard_common_write(slot, within, size, *value);
-            else *value = cfcard_common_read(slot, within, size);
-            break;
-        default:
-            if (write) cfcard_io_write(slot, within, size, *value);
-            else *value = cfcard_io_read(slot, within, size);
-            break;
+    case CARD_ATTRIBUTE:
+        if (write) cfcard_attribute_write(slot, within, size, *value);
+        else *value = cfcard_attribute_read(slot, within, size);
+        break;
+    case CARD_COMMON:
+        if (write) cfcard_common_write(slot, within, size, *value);
+        else *value = cfcard_common_read(slot, within, size);
+        break;
+    default:
+        if (write) cfcard_io_write(slot, within, size, *value);
+        else *value = cfcard_io_read(slot, within, size);
+        break;
     }
     casio_update(board, host);
     return true;
@@ -513,7 +513,7 @@ void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool 
             release_held_keys(board);
         } else {
             board->keys_down[key->row] |= bit;
-            board->keys_releasing[key->row] &= (uint8_t)~bit;
+            board->keys_releasing[key->row] &= (uint8_t) ~bit;
             board->key_pressed_scan[key->row][key->column] = board->scans;
         }
         casio_update(board, host);

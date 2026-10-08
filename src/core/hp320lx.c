@@ -90,16 +90,16 @@ bool hp320lx_read(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int
     uint32_t *slot = register_slot(board, pa, false);
     uint32_t mask = size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu;
     switch (pa) {
-        case CONTROLLER_COMMAND: *value = 0; return true;
-        case DEBUG_STATUS: *value = DEBUG_TX_READY; return true;
-        case DEBUG_BANK_STATUS: *value = DEBUG_TX_BANK; return true;
-        case LINK_STATUS: {
-            uint32_t *control = register_slot(board, LINK_CONTROL, false);
-            bool strobe = control && (*control & LINK_STROBE);
-            *value = ((slot ? *slot : 0) & ~LINK_READY) | (strobe ? 0 : LINK_READY) | LINK_NO_HOST;
-            return true;
-        }
-        default: break;
+    case CONTROLLER_COMMAND: *value = 0; return true;
+    case DEBUG_STATUS: *value = DEBUG_TX_READY; return true;
+    case DEBUG_BANK_STATUS: *value = DEBUG_TX_BANK; return true;
+    case LINK_STATUS: {
+        uint32_t *control = register_slot(board, LINK_CONTROL, false);
+        bool strobe = control && (*control & LINK_STROBE);
+        *value = ((slot ? *slot : 0) & ~LINK_READY) | (strobe ? 0 : LINK_READY) | LINK_NO_HOST;
+        return true;
+    }
+    default: break;
     }
     *value = slot ? *slot & mask : 0;
     if (host->trace) host->trace(host->context, false, pa, size, *value);
@@ -124,7 +124,7 @@ static void apply_key_events(hp320lx_t *board) {
     if (!idle && board->scans - board->key_changed_scan < KEY_HOLD_SCANS) return;
     const hp320lx_key_event_t *event = &board->key_events[board->key_event_head];
     uint16_t bit = (uint16_t)(1u << event->column);
-    if (event->up) board->keys_down[event->row] &= (uint16_t)~bit;
+    if (event->up) board->keys_down[event->row] &= (uint16_t) ~bit;
     else board->keys_down[event->row] |= bit;
     board->key_event_head = (board->key_event_head + 1) % HP320LX_KEY_EVENTS;
     board->key_event_count--;

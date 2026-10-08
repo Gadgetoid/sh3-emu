@@ -146,10 +146,10 @@ static translate_result_t translate(sh3_cpu_t *cpu, uint32_t va, bool write, uin
     if (!entry) return TRANSLATE_MISS;
     if (!entry->valid) return TRANSLATE_INVALID;
     switch (entry->protection) {
-        case 0: if (!privileged || write) return TRANSLATE_PROTECTION; break;
-        case 1: if (!privileged) return TRANSLATE_PROTECTION; break;
-        case 2: if (write) return TRANSLATE_PROTECTION; break;
-        default: break;
+    case 0: if (!privileged || write) return TRANSLATE_PROTECTION; break;
+    case 1: if (!privileged) return TRANSLATE_PROTECTION; break;
+    case 2: if (write) return TRANSLATE_PROTECTION; break;
+    default: break;
     }
     if (write && !entry->dirty) return TRANSLATE_INITIAL_WRITE;
     uint32_t offset_mask = entry->large ? 0xFFFu : 0x3FFu;
@@ -210,23 +210,23 @@ static void memory_fault(sh3_cpu_t *cpu, translate_result_t result, uint32_t va,
     if (result == TRANSLATE_MISS || result == TRANSLATE_INVALID) choose_replacement(cpu, va);
     uint32_t pc = faulting_pc(cpu);
     switch (result) {
-        case TRANSLATE_ADDRESS:
-            take_exception(cpu, write ? SH3_EXP_ADDRESS_WRITE : SH3_EXP_ADDRESS_READ, VECTOR_GENERAL, pc);
-            break;
-        case TRANSLATE_MISS:
-            take_exception(cpu, write ? SH3_EXP_TLB_MISS_WRITE : SH3_EXP_TLB_MISS_READ, VECTOR_TLB_MISS, pc);
-            break;
-        case TRANSLATE_INVALID:
-            take_exception(cpu, write ? SH3_EXP_TLB_MISS_WRITE : SH3_EXP_TLB_MISS_READ, VECTOR_GENERAL, pc);
-            break;
-        case TRANSLATE_PROTECTION:
-            take_exception(cpu, write ? SH3_EXP_PROTECT_WRITE : SH3_EXP_PROTECT_READ, VECTOR_GENERAL, pc);
-            break;
-        case TRANSLATE_INITIAL_WRITE:
-            take_exception(cpu, SH3_EXP_INITIAL_WRITE, VECTOR_GENERAL, pc);
-            break;
-        default:
-            break;
+    case TRANSLATE_ADDRESS:
+        take_exception(cpu, write ? SH3_EXP_ADDRESS_WRITE : SH3_EXP_ADDRESS_READ, VECTOR_GENERAL, pc);
+        break;
+    case TRANSLATE_MISS:
+        take_exception(cpu, write ? SH3_EXP_TLB_MISS_WRITE : SH3_EXP_TLB_MISS_READ, VECTOR_TLB_MISS, pc);
+        break;
+    case TRANSLATE_INVALID:
+        take_exception(cpu, write ? SH3_EXP_TLB_MISS_WRITE : SH3_EXP_TLB_MISS_READ, VECTOR_GENERAL, pc);
+        break;
+    case TRANSLATE_PROTECTION:
+        take_exception(cpu, write ? SH3_EXP_PROTECT_WRITE : SH3_EXP_PROTECT_READ, VECTOR_GENERAL, pc);
+        break;
+    case TRANSLATE_INITIAL_WRITE:
+        take_exception(cpu, SH3_EXP_INITIAL_WRITE, VECTOR_GENERAL, pc);
+        break;
+    default:
+        break;
     }
 }
 
@@ -279,8 +279,8 @@ static uint32_t tlb_address_field(const sh3_tlb_entry_t *entry) {
 
 static uint32_t tlb_data_field(const sh3_tlb_entry_t *entry) {
     return entry->ppn | (entry->valid ? PTEL_V : 0) | ((uint32_t)entry->protection << PTEL_PR_SHIFT)
-         | (entry->large ? PTEL_SZ : 0) | (entry->cacheable ? PTEL_C : 0)
-         | (entry->dirty ? PTEL_D : 0) | (entry->shared ? PTEL_SH : 0);
+           | (entry->large ? PTEL_SZ : 0) | (entry->cacheable ? PTEL_C : 0)
+           | (entry->dirty ? PTEL_D : 0) | (entry->shared ? PTEL_SH : 0);
 }
 
 bool sh3_control_read(sh3_cpu_t *cpu, uint32_t address, uint32_t *value) {
@@ -294,15 +294,15 @@ bool sh3_control_read(sh3_cpu_t *cpu, uint32_t address, uint32_t *value) {
         return true;
     }
     switch (address & ~3u) {
-        case PTEH_ADDRESS:   *value = cpu->pteh; return true;
-        case PTEL_ADDRESS:   *value = cpu->ptel; return true;
-        case TTB_ADDRESS:    *value = cpu->ttb; return true;
-        case TEA_ADDRESS:    *value = cpu->tea; return true;
-        case MMUCR_ADDRESS:  *value = cpu->mmucr; return true;
-        case TRA_ADDRESS:    *value = cpu->tra; return true;
-        case EXPEVT_ADDRESS: *value = cpu->expevt; return true;
-        case INTEVT_ADDRESS: *value = cpu->intevt; return true;
-        default: return false;
+    case PTEH_ADDRESS:   *value = cpu->pteh; return true;
+    case PTEL_ADDRESS:   *value = cpu->ptel; return true;
+    case TTB_ADDRESS:    *value = cpu->ttb; return true;
+    case TEA_ADDRESS:    *value = cpu->tea; return true;
+    case MMUCR_ADDRESS:  *value = cpu->mmucr; return true;
+    case TRA_ADDRESS:    *value = cpu->tra; return true;
+    case EXPEVT_ADDRESS: *value = cpu->expevt; return true;
+    case INTEVT_ADDRESS: *value = cpu->intevt; return true;
+    default: return false;
     }
 }
 
@@ -340,22 +340,22 @@ bool sh3_control_write(sh3_cpu_t *cpu, uint32_t address, uint32_t value) {
         return true;
     }
     switch (address & ~3u) {
-        case PTEH_ADDRESS: cpu->pteh = value & 0xFFFFFCFFu; return true;
-        case PTEL_ADDRESS: cpu->ptel = value & 0x1FFFFD7Eu; return true;
-        case TTB_ADDRESS:  cpu->ttb = value; return true;
-        case TEA_ADDRESS:  cpu->tea = value; return true;
-        case MMUCR_ADDRESS:
-            if (value & SH3_MMUCR_TF) {
-                for (int set = 0; set < SH3_TLB_SETS; set++)
-                    for (int way = 0; way < SH3_TLB_WAYS; way++) cpu->tlb[set][way].valid = false;
-            }
-            cpu->mmucr = value & (SH3_MMUCR_AT | SH3_MMUCR_IX | SH3_MMUCR_RC | SH3_MMUCR_SV);
-            sh3_flush_translations(cpu);
-            return true;
-        case TRA_ADDRESS:    cpu->tra = value & 0x3FCu; return true;
-        case EXPEVT_ADDRESS: cpu->expevt = value & 0xFFFu; return true;
-        case INTEVT_ADDRESS: cpu->intevt = value & 0xFFFu; return true;
-        default: return false;
+    case PTEH_ADDRESS: cpu->pteh = value & 0xFFFFFCFFu; return true;
+    case PTEL_ADDRESS: cpu->ptel = value & 0x1FFFFD7Eu; return true;
+    case TTB_ADDRESS:  cpu->ttb = value; return true;
+    case TEA_ADDRESS:  cpu->tea = value; return true;
+    case MMUCR_ADDRESS:
+        if (value & SH3_MMUCR_TF) {
+            for (int set = 0; set < SH3_TLB_SETS; set++)
+                for (int way = 0; way < SH3_TLB_WAYS; way++) cpu->tlb[set][way].valid = false;
+        }
+        cpu->mmucr = value & (SH3_MMUCR_AT | SH3_MMUCR_IX | SH3_MMUCR_RC | SH3_MMUCR_SV);
+        sh3_flush_translations(cpu);
+        return true;
+    case TRA_ADDRESS:    cpu->tra = value & 0x3FCu; return true;
+    case EXPEVT_ADDRESS: cpu->expevt = value & 0xFFFu; return true;
+    case INTEVT_ADDRESS: cpu->intevt = value & 0xFFFu; return true;
+    default: return false;
     }
 }
 
@@ -455,21 +455,21 @@ static bool privileged(sh3_cpu_t *cpu) {
 
 static bool is_branch(uint16_t op) {
     switch (op & 0xF000) {
-        case 0xA000: case 0xB000: return true;
-        case 0x8000: {
-            uint32_t sub = (op >> 8) & 15;
-            return sub == 0x9 || sub == 0xB || sub == 0xD || sub == 0xF;
-        }
-        case 0xC000: return ((op >> 8) & 15) == 0x3;
-        case 0x0000: {
-            uint32_t low = op & 0xFF;
-            return low == 0x03 || low == 0x23 || op == 0x000B || op == 0x002B;
-        }
-        case 0x4000: {
-            uint32_t low = op & 0xFF;
-            return low == 0x0B || low == 0x2B;
-        }
-        default: return false;
+    case 0xA000: case 0xB000: return true;
+    case 0x8000: {
+        uint32_t sub = (op >> 8) & 15;
+        return sub == 0x9 || sub == 0xB || sub == 0xD || sub == 0xF;
+    }
+    case 0xC000: return ((op >> 8) & 15) == 0x3;
+    case 0x0000: {
+        uint32_t low = op & 0xFF;
+        return low == 0x03 || low == 0x23 || op == 0x000B || op == 0x002B;
+    }
+    case 0x4000: {
+        uint32_t low = op & 0xFF;
+        return low == 0x0B || low == 0x2B;
+    }
+    default: return false;
     }
 }
 
@@ -611,19 +611,19 @@ static void execute_0(sh3_cpu_t *cpu, uint16_t op) {
             return;
         }
         switch (m) {
-            case 0: if (privileged(cpu)) r[n] = cpu->sr; return;
-            case 1: r[n] = cpu->gbr; return;
-            case 2: if (privileged(cpu)) r[n] = cpu->vbr; return;
-            case 3: if (privileged(cpu)) r[n] = cpu->ssr; return;
-            case 4: if (privileged(cpu)) r[n] = cpu->spc; return;
-            default: illegal_instruction(cpu); return;
+        case 0: if (privileged(cpu)) r[n] = cpu->sr; return;
+        case 1: r[n] = cpu->gbr; return;
+        case 2: if (privileged(cpu)) r[n] = cpu->vbr; return;
+        case 3: if (privileged(cpu)) r[n] = cpu->ssr; return;
+        case 4: if (privileged(cpu)) r[n] = cpu->spc; return;
+        default: illegal_instruction(cpu); return;
         }
     case 0x3:
         switch (m) {
-            case 0x0: { uint32_t target = current_pc + 4 + r[n]; cpu->pr = current_pc + 4; delayed_branch(cpu, target); return; }
-            case 0x2: delayed_branch(cpu, current_pc + 4 + r[n]); return;
-            case 0x8: case 0x9: case 0xA: case 0xB: case 0xC: return;
-            default: illegal_instruction(cpu); return;
+        case 0x0: { uint32_t target = current_pc + 4 + r[n]; cpu->pr = current_pc + 4; delayed_branch(cpu, target); return; }
+        case 0x2: delayed_branch(cpu, current_pc + 4 + r[n]); return;
+        case 0x8: case 0x9: case 0xA: case 0xB: case 0xC: return;
+        default: illegal_instruction(cpu); return;
         }
     case 0x4: store(cpu, r[0] + r[n], 1, r[m]); return;
     case 0x5: store(cpu, r[0] + r[n], 2, r[m]); return;
@@ -632,35 +632,35 @@ static void execute_0(sh3_cpu_t *cpu, uint16_t op) {
     case 0x8:
         if (n) { illegal_instruction(cpu); return; }
         switch (m) {
-            case 0: cpu->sr &= ~SH3_SR_T; return;
-            case 1: cpu->sr |= SH3_SR_T; return;
-            case 2: cpu->mach = cpu->macl = 0; return;
-            case 3: if (privileged(cpu)) load_tlb(cpu); return;
-            case 4: cpu->sr &= ~SH3_SR_S; return;
-            case 5: cpu->sr |= SH3_SR_S; return;
-            default: illegal_instruction(cpu); return;
+        case 0: cpu->sr &= ~SH3_SR_T; return;
+        case 1: cpu->sr |= SH3_SR_T; return;
+        case 2: cpu->mach = cpu->macl = 0; return;
+        case 3: if (privileged(cpu)) load_tlb(cpu); return;
+        case 4: cpu->sr &= ~SH3_SR_S; return;
+        case 5: cpu->sr |= SH3_SR_S; return;
+        default: illegal_instruction(cpu); return;
         }
     case 0x9:
         switch (m) {
-            case 0: if (n) illegal_instruction(cpu); return;
-            case 1: if (n) illegal_instruction(cpu); else cpu->sr &= ~(SH3_SR_M | SH3_SR_Q | SH3_SR_T); return;
-            case 2: r[n] = t_bit(cpu); return;
-            default: illegal_instruction(cpu); return;
+        case 0: if (n) illegal_instruction(cpu); return;
+        case 1: if (n) illegal_instruction(cpu); else cpu->sr &= ~(SH3_SR_M | SH3_SR_Q | SH3_SR_T); return;
+        case 2: r[n] = t_bit(cpu); return;
+        default: illegal_instruction(cpu); return;
         }
     case 0xA:
         switch (m) {
-            case 0: r[n] = cpu->mach; return;
-            case 1: r[n] = cpu->macl; return;
-            case 2: r[n] = cpu->pr; return;
-            default: illegal_instruction(cpu); return;
+        case 0: r[n] = cpu->mach; return;
+        case 1: r[n] = cpu->macl; return;
+        case 2: r[n] = cpu->pr; return;
+        default: illegal_instruction(cpu); return;
         }
     case 0xB:
         if (n) { illegal_instruction(cpu); return; }
         switch (m) {
-            case 0: delayed_branch(cpu, cpu->pr); return;
-            case 1: if (privileged(cpu)) sleep_instruction(cpu); return;
-            case 2: if (privileged(cpu)) return_from_exception(cpu); return;
-            default: illegal_instruction(cpu); return;
+        case 0: delayed_branch(cpu, cpu->pr); return;
+        case 1: if (privileged(cpu)) sleep_instruction(cpu); return;
+        case 2: if (privileged(cpu)) return_from_exception(cpu); return;
+        default: illegal_instruction(cpu); return;
         }
     case 0xC: if (load(cpu, r[0] + r[m], 1, &value)) r[n] = (uint32_t)(int8_t)value; return;
     case 0xD: if (load(cpu, r[0] + r[m], 2, &value)) r[n] = (uint32_t)(int16_t)value; return;

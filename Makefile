@@ -6,8 +6,10 @@ GATEWAYCHECK = $(BUILD)/gateway-check
 PROXYCHECK = proxycheck
 APP       = SH3Emu.app
 BUILD     = build
+UNCRUSTIFY ?= uncrustify
 ROM      ?= rom/nk-hp320lx.bin
 VELO_TOOLCHAIN ?= ../../velo-toolchain
+C_STYLE_SOURCES = $(filter-out src/vendor/%,$(shell git ls-files 'src/**/*.c' 'src/**/*.h' 'tools/*.c'))
 
 .DEFAULT_GOAL := all
 
@@ -137,12 +139,18 @@ debugmgr:
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL) $(PROXYCHECK) $(APP)
 
-.PHONY: all run clean test check app apk apk-push apk-install icons debugmgr sh3-fuzz FORCE
+.PHONY: all run clean test check format format-check app apk apk-push apk-install icons debugmgr sh3-fuzz FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/sh3emu_rapi.d
 
 check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK) $(PROXYCHECK)
 	sh tests/check.sh
+
+format:
+	$(UNCRUSTIFY) -c .uncrustify.cfg --replace --no-backup $(C_STYLE_SOURCES)
+
+format-check:
+	$(UNCRUSTIFY) -c .uncrustify.cfg --check $(C_STYLE_SOURCES)
 	$(GATEWAYCHECK)
 
 test: $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)

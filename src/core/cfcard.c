@@ -120,7 +120,7 @@ void cfcard_sanitize(cfcard_t *card) {
     bool position_valid = transferring ? card->buffer_position < sizeof card->buffer : card->buffer_position <= sizeof card->buffer;
     bool count_valid = card->sectors_left <= ATA_MAX_SECTORS && (!transferring || card->sectors_left > 0);
     if (position_valid && count_valid) return;
-    card->status &= (uint8_t)~ATA_DRQ;
+    card->status &= (uint8_t) ~ATA_DRQ;
     clear_transfer(card);
 }
 
@@ -333,39 +333,39 @@ static void command(cfcard_slot_t *slot, uint8_t value) {
 static uint8_t read_register(cfcard_slot_t *slot, int reg) {
     cfcard_t *card = slot->state;
     switch (reg) {
-        case REG_DATA:
-        case REG_DATA_EVEN:
-        case REG_DATA_ODD: return read_data8(slot);
-        case REG_FEATURE: return card->error;
-        case REG_SECTORS: return card->sector_count;
-        case REG_SECTOR: return card->sector_number;
-        case REG_CYL_LOW: return card->cylinder_low;
-        case REG_CYL_HIGH: return card->cylinder_high;
-        case REG_DRV_HEAD: return card->drive_head;
-        case REG_COMMAND: card->irq = false; return card->status;
-        case REG_DEVCTL: return card->status;
-        default: return 0xFF;
+    case REG_DATA:
+    case REG_DATA_EVEN:
+    case REG_DATA_ODD: return read_data8(slot);
+    case REG_FEATURE: return card->error;
+    case REG_SECTORS: return card->sector_count;
+    case REG_SECTOR: return card->sector_number;
+    case REG_CYL_LOW: return card->cylinder_low;
+    case REG_CYL_HIGH: return card->cylinder_high;
+    case REG_DRV_HEAD: return card->drive_head;
+    case REG_COMMAND: card->irq = false; return card->status;
+    case REG_DEVCTL: return card->status;
+    default: return 0xFF;
     }
 }
 
 static void write_register(cfcard_slot_t *slot, int reg, uint8_t value) {
     cfcard_t *card = slot->state;
     switch (reg) {
-        case REG_DATA:
-        case REG_DATA_EVEN:
-        case REG_DATA_ODD: write_data8(slot, value); return;
-        case REG_FEATURE: card->feature = value; return;
-        case REG_SECTORS: card->sector_count = value; return;
-        case REG_SECTOR: card->sector_number = value; return;
-        case REG_CYL_LOW: card->cylinder_low = value; return;
-        case REG_CYL_HIGH: card->cylinder_high = value; return;
-        case REG_DRV_HEAD: card->drive_head = value; return;
-        case REG_COMMAND: command(slot, value); return;
-        case REG_DEVCTL:
-            if ((value & DEVCTL_SRST) && !(card->device_control & DEVCTL_SRST)) power_on_state(slot);
-            card->device_control = value;
-            return;
-        default: return;
+    case REG_DATA:
+    case REG_DATA_EVEN:
+    case REG_DATA_ODD: write_data8(slot, value); return;
+    case REG_FEATURE: card->feature = value; return;
+    case REG_SECTORS: card->sector_count = value; return;
+    case REG_SECTOR: card->sector_number = value; return;
+    case REG_CYL_LOW: card->cylinder_low = value; return;
+    case REG_CYL_HIGH: card->cylinder_high = value; return;
+    case REG_DRV_HEAD: card->drive_head = value; return;
+    case REG_COMMAND: command(slot, value); return;
+    case REG_DEVCTL:
+        if ((value & DEVCTL_SRST) && !(card->device_control & DEVCTL_SRST)) power_on_state(slot);
+        card->device_control = value;
+        return;
+    default: return;
     }
 }
 

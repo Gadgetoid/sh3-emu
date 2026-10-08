@@ -15,7 +15,9 @@
 #include "util/options.h"
 #include "util/png.h"
 
-static void log_stderr(const char *message) { fputs(message, stderr); }
+static void log_stderr(const char *message) {
+    fputs(message, stderr);
+}
 
 static volatile sig_atomic_t stop_requested = 0;
 
@@ -112,36 +114,36 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 
 typedef struct {
     const char *rom_path;
-    double   seconds;
+    double seconds;
     const char *png, *pgm, *load, *save, *wav, *card, *agent_socket, *gdb_process;
-    int      png_cell, png_backlight, gdb_port;
-    bool     trace_pc, host_time, trace_exceptions, debug_output, seconds_given;
-    double   key_times[32];
-    uint8_t  key_codes[32][4];
-    int      key_lengths[32];
-    int      key_count;
-    double   tap_times[32];
-    int      tap_x[32], tap_y[32];
-    double   tap_hold[32];
-    int      tap_count;
-    double   type_times[16];
+    int png_cell, png_backlight, gdb_port;
+    bool trace_pc, host_time, trace_exceptions, debug_output, seconds_given;
+    double key_times[32];
+    uint8_t key_codes[32][4];
+    int key_lengths[32];
+    int key_count;
+    double tap_times[32];
+    int tap_x[32], tap_y[32];
+    double tap_hold[32];
+    int tap_count;
+    double type_times[16];
     const char *type_strings[16];
-    int      type_count;
-    double   power_times[8];
-    int      power_count;
-    double   backlight_times[8];
-    int      backlight_count;
-    double   soft_reset_at, realtime, net_at, replug_at, cable_at;
-    double   send_times[8];
+    int type_count;
+    double power_times[8];
+    int power_count;
+    double backlight_times[8];
+    int backlight_count;
+    double soft_reset_at, realtime, net_at, replug_at, cable_at;
+    double send_times[8];
     const char *send_text[8];
-    int      send_count;
-    bool     net, pty;
+    int send_count;
+    bool net, pty;
     const char *rapi_socket;
     const char *user_agent;
     const char *dictionary;
-    int      rapi_port, tcp_port;
+    int rapi_port, tcp_port;
     uint32_t watches[MACHINE_WATCH_MAX];
-    int      watch_count;
+    int watch_count;
     uint32_t memory, speed;
 } run_t;
 

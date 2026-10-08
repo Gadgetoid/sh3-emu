@@ -35,33 +35,33 @@ typedef void (*hp320lx_line_fn)(void *context, const char *line);
 
 typedef struct {
     hp320lx_trace_fn trace;
-    hp320lx_line_fn  debug_line;
+    hp320lx_line_fn debug_line;
     void            *context;
 } hp320lx_host_t;
 
 typedef struct {
     uint8_t row, column;
-    bool    up;
+    bool up;
 } hp320lx_key_event_t;
 
 typedef struct {
     uint32_t address[HP320LX_REGISTERS];
     uint32_t value[HP320LX_REGISTERS];
     uint32_t count;
-    char     line[256];
-    int      line_length;
+    char line[256];
+    int line_length;
     uint16_t keys_down[HP320LX_KEY_ROWS];
     hp320lx_key_event_t key_events[HP320LX_KEY_EVENTS];
     uint32_t key_event_head, key_event_count;
     uint32_t scans, key_changed_scan;
-    uint8_t  rows_driven;
-    bool     pen_down;
+    uint8_t rows_driven;
+    bool pen_down;
     uint16_t pen_x, pen_y;
 } hp320lx_t;
 
 typedef struct {
     uint16_t channel_a, channel_b;
-    bool     pen_interrupt;
+    bool pen_interrupt;
 } hp320lx_touch_t;
 
 bool hp320lx_detect(const uint8_t *image, size_t size);

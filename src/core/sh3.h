@@ -40,23 +40,23 @@ enum {
 typedef struct {
     uint32_t vpn;
     uint32_t ppn;
-    uint8_t  asid;
-    uint8_t  protection;
-    bool     valid;
-    bool     dirty;
-    bool     cacheable;
-    bool     shared;
-    bool     large;
+    uint8_t asid;
+    uint8_t protection;
+    bool valid;
+    bool dirty;
+    bool cacheable;
+    bool shared;
+    bool large;
 } sh3_tlb_entry_t;
 
 typedef struct {
     void    *context;
-    bool   (*read)(void *context, uint32_t pa, int size, uint32_t *value);
-    bool   (*write)(void *context, uint32_t pa, int size, uint32_t value);
+    bool (*read)(void *context, uint32_t pa, int size, uint32_t *value);
+    bool (*write)(void *context, uint32_t pa, int size, uint32_t value);
     uint8_t *(*fetch_page)(void *context, uint32_t pa);
     uint8_t  *dram;
-    uint32_t  dram_base;
-    uint32_t  dram_size;
+    uint32_t dram_base;
+    uint32_t dram_size;
 } sh3_bus_t;
 
 #define SH3_WATCH_MAX 8
@@ -75,15 +75,15 @@ typedef struct {
 
 typedef struct {
     void    *context;
-    bool   (*before)(void *context, uint32_t pc);
-    bool   (*access)(void *context, uint32_t va, int size, bool write);
-    void   (*exception)(void *context, uint32_t code, uint32_t pc, bool user);
+    bool (*before)(void *context, uint32_t pc);
+    bool (*access)(void *context, uint32_t va, int size, bool write);
+    void (*exception)(void *context, uint32_t code, uint32_t pc, bool user);
     uint32_t filter[128];
     uint32_t pc;
-    bool     every;
-    bool     data;
-    bool     stop;
-    bool     undo;
+    bool every;
+    bool data;
+    bool stop;
+    bool undo;
 } sh3_debug_t;
 
 typedef struct sh3_cpu sh3_cpu_t;
@@ -100,26 +100,26 @@ struct sh3_cpu {
     uint32_t interrupt_level;
     uint32_t interrupt_code;
     uint32_t interrupt_source, intevt2;
-    bool     standby_wakes_blocked;
-    bool     sleeping;
-    bool     in_slot;
+    bool standby_wakes_blocked;
+    bool sleeping;
+    bool in_slot;
     uint64_t cycles;
     uint32_t speed;
     uint32_t speed_count;
     uint64_t exceptions[64];
-    bool     fault;
-    bool     yield;
+    bool fault;
+    bool yield;
     sh3_bus_t bus;
     sh3_page_cache_t read_cache[SH3_PAGE_CACHE];
     sh3_page_cache_t write_cache[SH3_PAGE_CACHE];
     sh3_fetch_cache_t fetch_cache[SH3_FETCH_CACHE];
     uint32_t watch[SH3_WATCH_MAX];
-    int      watch_count;
+    int watch_count;
     uint32_t watch_filter[128];
-    void   (*on_watch)(void *context, uint32_t pc);
-    void   (*on_interrupt)(void *context, uint32_t code);
+    void (*on_watch)(void *context, uint32_t pc);
+    void (*on_interrupt)(void *context, uint32_t code);
     sh3_debug_t *debug;
-    bool   (*on_trapa)(void *context, uint32_t number);
+    bool (*on_trapa)(void *context, uint32_t number);
 };
 
 void sh3_reset(sh3_cpu_t *cpu);

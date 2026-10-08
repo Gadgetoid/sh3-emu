@@ -159,12 +159,12 @@ void sh7709_reset(sh7709_t *chip) {
 
 static uint32_t timer_hz(const sh7709_t *chip, const sh7709_timer_t *timer) {
     switch (timer->control & TCR_TPSC) {
-        case 0: return chip->peripheral_hz / 4;
-        case 1: return chip->peripheral_hz / 16;
-        case 2: return chip->peripheral_hz / 64;
-        case 3: return chip->peripheral_hz / 256;
-        case 4: return RTC_OUTPUT_HZ;
-        default: return 0;
+    case 0: return chip->peripheral_hz / 4;
+    case 1: return chip->peripheral_hz / 16;
+    case 2: return chip->peripheral_hz / 64;
+    case 3: return chip->peripheral_hz / 256;
+    case 4: return RTC_OUTPUT_HZ;
+    default: return 0;
     }
 }
 
@@ -252,13 +252,13 @@ static void rtc_second(sh7709_t *chip) {
 
 static uint32_t periodic_ticks(const sh7709_t *chip) {
     switch ((chip->rtc_control2 & RCR2_PES) >> 4) {
-        case 1: case 2: return 1;
-        case 3: return 4;
-        case 4: return 16;
-        case 5: return 32;
-        case 6: return 64;
-        case 7: return 128;
-        default: return 0;
+    case 1: case 2: return 1;
+    case 3: return 4;
+    case 4: return 16;
+    case 5: return 32;
+    case 6: return 64;
+    case 7: return 128;
+    default: return 0;
     }
 }
 
@@ -516,7 +516,7 @@ void sh7709_set_irq(sh7709_t *chip, int line, bool asserted) {
     else chip->irq_lines &= ~bit;
     if (sense == ICR1_LEVEL) {
         if (pin_low) chip->irr0 |= (uint8_t)bit;
-        else chip->irr0 &= (uint8_t)~bit;
+        else chip->irr0 &= (uint8_t) ~bit;
     } else if (changed && pin_low == (sense == ICR1_FALLING)) {
         chip->irr0 |= (uint8_t)bit;
     }
@@ -608,74 +608,74 @@ uint32_t sh7709_timer_count(sh7709_t *chip, int index) {
 
 static uint32_t sci_read(sh7709_serial_t *sci, uint32_t offset) {
     switch (offset) {
-        case 0x0: return sci->mode;
-        case 0x2: return sci->bit_rate;
-        case 0x4: return sci->control;
-        case 0x6: return sci->transmit;
-        case 0x8: return sci->status;
-        case 0xA: return sci->receive;
-        default: return 0;
+    case 0x0: return sci->mode;
+    case 0x2: return sci->bit_rate;
+    case 0x4: return sci->control;
+    case 0x6: return sci->transmit;
+    case 0x8: return sci->status;
+    case 0xA: return sci->receive;
+    default: return 0;
     }
 }
 
 static void sci_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     sh7709_serial_t *sci = &chip->sci;
     switch (offset) {
-        case 0x0: sci->mode = (uint8_t)value; break;
-        case 0x2: sci->bit_rate = (uint8_t)value; break;
-        case 0x4: sci->control = (uint8_t)value; break;
-        case 0x6: sci->transmit = (uint8_t)value; break;
-        case 0x8: {
-            uint8_t cleared = (uint8_t)(sci->status & ~value & (SCI_TDRE | SCI_RDRF | SCI_ORER | SCI_FER | SCI_PER));
-            sci->status &= (uint8_t)~cleared;
-            if (cleared & SCI_TDRE) {
-                if (chip->transmit) chip->transmit(chip->transmit_context, 0, sci->transmit);
-                sci->status |= SCI_TDRE | SCI_TEND;
-            }
-            if ((cleared & SCI_RDRF) && sci->received_count) {
-                sci->receive = serial_pop(sci);
-                sci->status |= SCI_RDRF;
-            }
-            break;
+    case 0x0: sci->mode = (uint8_t)value; break;
+    case 0x2: sci->bit_rate = (uint8_t)value; break;
+    case 0x4: sci->control = (uint8_t)value; break;
+    case 0x6: sci->transmit = (uint8_t)value; break;
+    case 0x8: {
+        uint8_t cleared = (uint8_t)(sci->status & ~value & (SCI_TDRE | SCI_RDRF | SCI_ORER | SCI_FER | SCI_PER));
+        sci->status &= (uint8_t) ~cleared;
+        if (cleared & SCI_TDRE) {
+            if (chip->transmit) chip->transmit(chip->transmit_context, 0, sci->transmit);
+            sci->status |= SCI_TDRE | SCI_TEND;
         }
-        default: break;
+        if ((cleared & SCI_RDRF) && sci->received_count) {
+            sci->receive = serial_pop(sci);
+            sci->status |= SCI_RDRF;
+        }
+        break;
+    }
+    default: break;
     }
 }
 
 static uint32_t scif_read(sh7709_serial_t *scif, uint32_t offset) {
     switch (offset) {
-        case 0x0: return scif->mode;
-        case 0x2: return scif->bit_rate;
-        case 0x4: return scif->control;
-        case 0x8: return scif->status;
-        case 0xA: {
-            uint8_t byte = serial_pop(scif);
-            if (!scif->received_count) scif->status &= (uint8_t)~(SCIF_RDF | SCIF_DR);
-            return byte;
-        }
-        case 0xE: return scif->received_count & 0x1F;
-        default: return 0;
+    case 0x0: return scif->mode;
+    case 0x2: return scif->bit_rate;
+    case 0x4: return scif->control;
+    case 0x8: return scif->status;
+    case 0xA: {
+        uint8_t byte = serial_pop(scif);
+        if (!scif->received_count) scif->status &= (uint8_t) ~(SCIF_RDF | SCIF_DR);
+        return byte;
+    }
+    case 0xE: return scif->received_count & 0x1F;
+    default: return 0;
     }
 }
 
 static void scif_write(sh7709_t *chip, int port, uint32_t offset, uint32_t value) {
     sh7709_serial_t *scif = &chip->scif[port];
     switch (offset) {
-        case 0x0: scif->mode = (uint8_t)value; break;
-        case 0x2: scif->bit_rate = (uint8_t)value; break;
-        case 0x4: scif->control = (uint8_t)value; break;
-        case 0x6:
-            if (chip->transmit) chip->transmit(chip->transmit_context, port + 1, (uint8_t)value);
-            scif->status |= SCIF_TEND | SCIF_TDFE;
-            break;
-        case 0x8:
-            scif->status &= (uint8_t)(value | SCIF_TEND | SCIF_TDFE);
-            if (scif->received_count) scif->status |= SCIF_RDF | SCIF_DR;
-            break;
-        case 0xC:
-            if (value & 2) { scif->received_count = 0; scif->status &= (uint8_t)~(SCIF_RDF | SCIF_DR); }
-            break;
-        default: break;
+    case 0x0: scif->mode = (uint8_t)value; break;
+    case 0x2: scif->bit_rate = (uint8_t)value; break;
+    case 0x4: scif->control = (uint8_t)value; break;
+    case 0x6:
+        if (chip->transmit) chip->transmit(chip->transmit_context, port + 1, (uint8_t)value);
+        scif->status |= SCIF_TEND | SCIF_TDFE;
+        break;
+    case 0x8:
+        scif->status &= (uint8_t)(value | SCIF_TEND | SCIF_TDFE);
+        if (scif->received_count) scif->status |= SCIF_RDF | SCIF_DR;
+        break;
+    case 0xC:
+        if (value & 2) { scif->received_count = 0; scif->status &= (uint8_t) ~(SCIF_RDF | SCIF_DR); }
+        break;
+    default: break;
     }
 }
 
@@ -687,10 +687,10 @@ static uint32_t tmu_read(sh7709_t *chip, uint32_t offset) {
     int index = (int)(offset - 0x4) / 0xC;
     sh7709_timer_t *timer = &chip->timer[index];
     switch ((offset - 0x4) % 0xC) {
-        case 0x0: return timer->constant;
-        case 0x4: sh7709_advance(chip); return timer->count;
-        case 0x8: sh7709_advance(chip); return timer->control;
-        default: return 0;
+    case 0x0: return timer->constant;
+    case 0x4: sh7709_advance(chip); return timer->count;
+    case 0x8: sh7709_advance(chip); return timer->control;
+    default: return 0;
     }
 }
 
@@ -707,10 +707,10 @@ static void tmu_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     int index = (int)(offset - 0x4) / 0xC;
     sh7709_timer_t *timer = &chip->timer[index];
     switch ((offset - 0x4) % 0xC) {
-        case 0x0: timer->constant = value; break;
-        case 0x4: timer->count = value; break;
-        case 0x8: timer->control = (uint16_t)((value & ~TCR_UNF) | (timer->control & value & TCR_UNF)); break;
-        default: break;
+    case 0x0: timer->constant = value; break;
+    case 0x4: timer->count = value; break;
+    case 0x8: timer->control = (uint16_t)((value & ~TCR_UNF) | (timer->control & value & TCR_UNF)); break;
+    default: break;
     }
 }
 
@@ -743,19 +743,19 @@ static void rtc_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
 
 static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     switch (offset) {
-        case 0x000: *value = chip->cpu->intevt2; return true;
-        case 0x004: *value = chip->irr0; return true;
-        case 0x006: *value = chip->irr1; return true;
-        case 0x008: *value = chip->irr2; return true;
-        case 0x010: *value = chip->icr1; return true;
-        case 0x012: *value = chip->icr2; return true;
-        case 0x014: *value = chip->pinter; return true;
-        case 0x016: *value = chip->priority[2]; return true;
-        case 0x018: *value = chip->priority[3]; return true;
-        case 0x01A: *value = chip->priority[4]; return true;
-        case 0x0B0: *value = chip->ccr2; return true;
-        case 0x0E0: case 0x0F0: *value = PCC_NO_CARD; return true;
-        default: break;
+    case 0x000: *value = chip->cpu->intevt2; return true;
+    case 0x004: *value = chip->irr0; return true;
+    case 0x006: *value = chip->irr1; return true;
+    case 0x008: *value = chip->irr2; return true;
+    case 0x010: *value = chip->icr1; return true;
+    case 0x012: *value = chip->icr2; return true;
+    case 0x014: *value = chip->pinter; return true;
+    case 0x016: *value = chip->priority[2]; return true;
+    case 0x018: *value = chip->priority[3]; return true;
+    case 0x01A: *value = chip->priority[4]; return true;
+    case 0x0B0: *value = chip->ccr2; return true;
+    case 0x0E0: case 0x0F0: *value = PCC_NO_CARD; return true;
+    default: break;
     }
     if (offset >= 0x080 && offset < 0x090) {
         uint16_t sample = chip->adc_data[(offset - 0x080) / 4];
@@ -776,15 +776,15 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
         return true;
     }
     switch (offset) {
-        case DMAOR: *value = chip->dma_operation; return true;
-        case CMSTR: *value = chip->cmt_start; return true;
-        case CMCSR: sh7709_advance(chip); *value = chip->cmt_control; return true;
-        case CMCNT: sh7709_advance(chip); *value = chip->cmt_count; return true;
-        case CMCOR: *value = chip->cmt_constant; return true;
-        case DADR0: *value = chip->dac[0]; return true;
-        case DADR1: *value = chip->dac[1]; return true;
-        case DACR: *value = chip->dac_control; return true;
-        default: break;
+    case DMAOR: *value = chip->dma_operation; return true;
+    case CMSTR: *value = chip->cmt_start; return true;
+    case CMCSR: sh7709_advance(chip); *value = chip->cmt_control; return true;
+    case CMCNT: sh7709_advance(chip); *value = chip->cmt_count; return true;
+    case CMCOR: *value = chip->cmt_constant; return true;
+    case DADR0: *value = chip->dac[0]; return true;
+    case DADR1: *value = chip->dac[1]; return true;
+    case DACR: *value = chip->dac_control; return true;
+    default: break;
     }
     if (offset >= 0x0E0 && offset < 0x100) { *value = chip->pcc[(offset - 0x0E0) / 2]; return true; }
     if (offset >= 0x100 && offset < 0x140) {
@@ -807,17 +807,17 @@ static uint32_t level_sensed(const sh7709_t *chip) {
 
 static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     switch (offset) {
-        case 0x004: chip->irr0 &= (uint8_t)(value | ((chip->irq_lines ^ chip->irq_active_high) & level_sensed(chip))); return true;
-        case 0x006: chip->irr1 &= (uint8_t)value; return true;
-        case 0x008: chip->irr2 &= (uint8_t)value; return true;
-        case 0x010: chip->icr1 = (uint16_t)value; return true;
-        case 0x012: chip->icr2 = (uint16_t)value; return true;
-        case 0x014: chip->pinter = (uint16_t)value; return true;
-        case 0x016: chip->priority[2] = (uint16_t)value; return true;
-        case 0x018: chip->priority[3] = (uint16_t)value; return true;
-        case 0x01A: chip->priority[4] = (uint16_t)value; return true;
-        case 0x0B0: chip->ccr2 = value; return true;
-        default: break;
+    case 0x004: chip->irr0 &= (uint8_t)(value | ((chip->irq_lines ^ chip->irq_active_high) & level_sensed(chip))); return true;
+    case 0x006: chip->irr1 &= (uint8_t)value; return true;
+    case 0x008: chip->irr2 &= (uint8_t)value; return true;
+    case 0x010: chip->icr1 = (uint16_t)value; return true;
+    case 0x012: chip->icr2 = (uint16_t)value; return true;
+    case 0x014: chip->pinter = (uint16_t)value; return true;
+    case 0x016: chip->priority[2] = (uint16_t)value; return true;
+    case 0x018: chip->priority[3] = (uint16_t)value; return true;
+    case 0x01A: chip->priority[4] = (uint16_t)value; return true;
+    case 0x0B0: chip->ccr2 = value; return true;
+    default: break;
     }
     if (offset == 0x090) {
         uint8_t flag = chip->adc_control & ADCSR_ADF & (uint8_t)value;
@@ -831,46 +831,46 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
         sh7709_advance(chip);
         int channel = (int)((offset - DMA_BASE) / DMA_STRIDE);
         switch (offset & 0xC) {
-            case 0x0: chip->dma_source[channel] = value; break;
-            case 0x4: chip->dma_dest[channel] = value; break;
-            case 0x8: chip->dma_count[channel] = value & DMA_COUNT_MASK; break;
-            default: {
-                uint32_t done = chip->dma_control[channel] & value & CHCR_TE;
-                chip->dma_control[channel] = (value & ~CHCR_TE) | done;
-                break;
-            }
+        case 0x0: chip->dma_source[channel] = value; break;
+        case 0x4: chip->dma_dest[channel] = value; break;
+        case 0x8: chip->dma_count[channel] = value & DMA_COUNT_MASK; break;
+        default: {
+            uint32_t done = chip->dma_control[channel] & value & CHCR_TE;
+            chip->dma_control[channel] = (value & ~CHCR_TE) | done;
+            break;
+        }
         }
         sh7709_update_interrupts(chip);
         return true;
     }
     switch (offset) {
-        case DMAOR: {
-            sh7709_advance(chip);
-            uint16_t flags = chip->dma_operation & (uint16_t)value & (DMAOR_NMIF | DMAOR_AE);
-            chip->dma_operation = (uint16_t)((value & ~(uint32_t)(DMAOR_NMIF | DMAOR_AE)) | flags);
-            return true;
-        }
-        case CMSTR:
-            sh7709_advance(chip);
-            chip->cmt_start = (uint16_t)value;
-            return true;
-        case CMCSR: {
-            sh7709_advance(chip);
-            uint16_t flag = chip->cmt_control & (uint16_t)value & CMCSR_CMF;
-            chip->cmt_control = (uint16_t)((value & ~(uint32_t)CMCSR_CMF) | flag);
-            return true;
-        }
-        case CMCNT: sh7709_advance(chip); chip->cmt_count = (uint16_t)value; return true;
-        case CMCOR: sh7709_advance(chip); chip->cmt_constant = (uint16_t)value; return true;
-        case DADR0:
-        case DADR1: {
-            int channel = offset == DADR1;
-            chip->dac[channel] = (uint8_t)value;
-            if (chip->dac_written) chip->dac_written(chip->transmit_context, channel, (uint8_t)value, chip->transfer_cycle ? chip->transfer_cycle : chip->cpu->cycles);
-            return true;
-        }
-        case DACR: chip->dac_control = (uint8_t)value; return true;
-        default: break;
+    case DMAOR: {
+        sh7709_advance(chip);
+        uint16_t flags = chip->dma_operation & (uint16_t)value & (DMAOR_NMIF | DMAOR_AE);
+        chip->dma_operation = (uint16_t)((value & ~(uint32_t)(DMAOR_NMIF | DMAOR_AE)) | flags);
+        return true;
+    }
+    case CMSTR:
+        sh7709_advance(chip);
+        chip->cmt_start = (uint16_t)value;
+        return true;
+    case CMCSR: {
+        sh7709_advance(chip);
+        uint16_t flag = chip->cmt_control & (uint16_t)value & CMCSR_CMF;
+        chip->cmt_control = (uint16_t)((value & ~(uint32_t)CMCSR_CMF) | flag);
+        return true;
+    }
+    case CMCNT: sh7709_advance(chip); chip->cmt_count = (uint16_t)value; return true;
+    case CMCOR: sh7709_advance(chip); chip->cmt_constant = (uint16_t)value; return true;
+    case DADR0:
+    case DADR1: {
+        int channel = offset == DADR1;
+        chip->dac[channel] = (uint8_t)value;
+        if (chip->dac_written) chip->dac_written(chip->transmit_context, channel, (uint8_t)value, chip->transfer_cycle ? chip->transfer_cycle : chip->cpu->cycles);
+        return true;
+    }
+    case DACR: chip->dac_control = (uint8_t)value; return true;
+    default: break;
     }
     if (offset >= 0x0E0 && offset < 0x100) { chip->pcc[(offset - 0x0E0) / 2] = (uint8_t)value; return true; }
     if (offset >= 0x100 && offset < 0x140) {
@@ -907,13 +907,13 @@ bool sh7709_read(sh7709_t *chip, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     switch (pa) {
-        case CPG_BASE + 0x0: *value = chip->frqcr; return true;
-        case CPG_BASE + 0x2: *value = chip->stbcr; return true;
-        case CPG_BASE + 0x4: *value = chip->watchdog_count; return true;
-        case CPG_BASE + 0x6: *value = chip->watchdog_control; return true;
-        case CPG_BASE + 0x8: *value = chip->stbcr2; return true;
-        case CCR_ADDRESS: *value = chip->ccr; return true;
-        default: break;
+    case CPG_BASE + 0x0: *value = chip->frqcr; return true;
+    case CPG_BASE + 0x2: *value = chip->stbcr; return true;
+    case CPG_BASE + 0x4: *value = chip->watchdog_count; return true;
+    case CPG_BASE + 0x6: *value = chip->watchdog_control; return true;
+    case CPG_BASE + 0x8: *value = chip->stbcr2; return true;
+    case CCR_ADDRESS: *value = chip->ccr; return true;
+    default: break;
     }
     if (pa >= 0xFFFFFF00u) { *value = 0; return true; }
     return false;
@@ -940,13 +940,13 @@ bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
         chip->bsc[(pa - BSC_BASE) / 2] = (uint16_t)value;
     } else {
         switch (pa) {
-            case CPG_BASE + 0x0: chip->frqcr = (uint16_t)value; break;
-            case CPG_BASE + 0x2: chip->stbcr = (uint8_t)value; break;
-            case CPG_BASE + 0x4: if ((value >> 8) == 0x5A) chip->watchdog_count = value & 0xFF; break;
-            case CPG_BASE + 0x6: if ((value >> 8) == 0xA5) chip->watchdog_control = value & 0xFF; break;
-            case CPG_BASE + 0x8: chip->stbcr2 = (uint8_t)value; break;
-            case CCR_ADDRESS: chip->ccr = value & 0x2F; break;
-            default: if (pa < 0xFFFFFF00u) return false; break;
+        case CPG_BASE + 0x0: chip->frqcr = (uint16_t)value; break;
+        case CPG_BASE + 0x2: chip->stbcr = (uint8_t)value; break;
+        case CPG_BASE + 0x4: if ((value >> 8) == 0x5A) chip->watchdog_count = value & 0xFF; break;
+        case CPG_BASE + 0x6: if ((value >> 8) == 0xA5) chip->watchdog_control = value & 0xFF; break;
+        case CPG_BASE + 0x8: chip->stbcr2 = (uint8_t)value; break;
+        case CCR_ADDRESS: chip->ccr = value & 0x2F; break;
+        default: if (pa < 0xFFFFFF00u) return false; break;
         }
     }
     sh7709_update_interrupts(chip);

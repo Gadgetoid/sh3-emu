@@ -14,13 +14,13 @@
 typedef struct {
     sh3_cpu_t cpu;
     uint8_t  *ram;
-    bool      exited;
-    int       exit_code;
-    bool      trace;
-    bool      stop_on_exception;
-    bool      faulted;
-    uint32_t  fault_code;
-    uint32_t  fault_pc;
+    bool exited;
+    int exit_code;
+    bool trace;
+    bool stop_on_exception;
+    bool faulted;
+    uint32_t fault_code;
+    uint32_t fault_pc;
 } runner_t;
 
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
@@ -47,23 +47,23 @@ static bool on_trapa(void *context, uint32_t number) {
     sh3_cpu_t *cpu = &runner->cpu;
     if (number != LINUX_TRAPA) return false;
     switch (cpu->r[3]) {
-        case SYSCALL_EXIT:
-            runner->exited = true;
-            runner->exit_code = (int)cpu->r[4];
-            cpu->yield = true;
-            return true;
-        case SYSCALL_WRITE: {
-            uint32_t address = cpu->r[5], length = cpu->r[6];
-            if (address >= RAM_SIZE || length > RAM_SIZE - address) { cpu->r[0] = (uint32_t)-14; return true; }
-            fflush(stdout);
-            ssize_t written = write((int)cpu->r[4], runner->ram + address, length);
-            cpu->r[0] = (uint32_t)written;
-            return true;
-        }
-        default:
-            fprintf(stderr, "unsupported syscall %u\n", cpu->r[3]);
-            cpu->r[0] = (uint32_t)-38;
-            return true;
+    case SYSCALL_EXIT:
+        runner->exited = true;
+        runner->exit_code = (int)cpu->r[4];
+        cpu->yield = true;
+        return true;
+    case SYSCALL_WRITE: {
+        uint32_t address = cpu->r[5], length = cpu->r[6];
+        if (address >= RAM_SIZE || length > RAM_SIZE - address) { cpu->r[0] = (uint32_t)-14; return true; }
+        fflush(stdout);
+        ssize_t written = write((int)cpu->r[4], runner->ram + address, length);
+        cpu->r[0] = (uint32_t)written;
+        return true;
+    }
+    default:
+        fprintf(stderr, "unsupported syscall %u\n", cpu->r[3]);
+        cpu->r[0] = (uint32_t)-38;
+        return true;
     }
 }
 

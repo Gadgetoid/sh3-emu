@@ -18,13 +18,13 @@ typedef struct {
 } sh7709_timer_t;
 
 typedef struct {
-    uint8_t  mode;
-    uint8_t  bit_rate;
-    uint8_t  control;
-    uint8_t  transmit;
-    uint8_t  status;
-    uint8_t  receive;
-    uint8_t  received[64];
+    uint8_t mode;
+    uint8_t bit_rate;
+    uint8_t control;
+    uint8_t transmit;
+    uint8_t status;
+    uint8_t receive;
+    uint8_t received[64];
     uint32_t received_head;
     uint32_t received_count;
 } sh7709_serial_t;
@@ -44,22 +44,22 @@ typedef struct {
 
     uint16_t icr0, icr1, icr2, pinter;
     uint16_t priority[5];
-    uint8_t  irr0, irr1, irr2;
+    uint8_t irr0, irr1, irr2;
     uint32_t irl_level;
     uint32_t irq_lines;
     uint32_t irq_active_high;
     uint32_t extra_level, extra_code;
-    bool     nmi;
+    bool nmi;
 
-    uint8_t  timer_start;
-    uint8_t  timer_output;
+    uint8_t timer_start;
+    uint8_t timer_output;
     uint32_t timer_capture;
     sh7709_timer_t timer[3];
 
-    uint8_t  rtc_64hz;
-    uint8_t  rtc_counter[7];
-    uint8_t  rtc_alarm[6];
-    uint8_t  rtc_control1, rtc_control2;
+    uint8_t rtc_64hz;
+    uint8_t rtc_counter[7];
+    uint8_t rtc_alarm[6];
+    uint8_t rtc_control1, rtc_control2;
     uint64_t rtc_remainder;
 
     sh7709_serial_t sci;
@@ -75,22 +75,22 @@ typedef struct {
     uint16_t cmt_start, cmt_control, cmt_count, cmt_constant;
     uint64_t cmt_remainder;
     uint64_t transfer_cycle;
-    uint8_t  dac[2], dac_control;
+    uint8_t dac[2], dac_control;
 
     uint16_t bsc[16];
     uint16_t refresh_count;
     uint16_t refresh_control;
     uint16_t refresh_constant;
     uint16_t frqcr;
-    uint8_t  stbcr, stbcr2;
+    uint8_t stbcr, stbcr2;
     uint16_t watchdog_count, watchdog_control;
     uint32_t ccr, ccr2;
     uint16_t ports[64];
-    uint8_t  pcc[16];
+    uint8_t pcc[16];
     uint32_t scif_alias, scif_alias_priority;
     uint16_t port_input_mask[64], port_input[64];
 
-    uint8_t  adc_control, adc_config;
+    uint8_t adc_control, adc_config;
     uint16_t adc_data[4];
     uint16_t adc_input[4];
     uint64_t adc_done;

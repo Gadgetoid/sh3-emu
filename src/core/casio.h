@@ -26,20 +26,20 @@ typedef struct {
     uint32_t start, end, next_start, next_end;
     uint64_t ends_at;
     uint16_t status;
-    bool     running, next_armed;
+    bool running, next_armed;
 } casio_audio_t;
 
 typedef struct {
-    casio_trace_fn     trace;
-    casio_cycles_fn    cycles;
+    casio_trace_fn trace;
+    casio_cycles_fn cycles;
     casio_interrupt_fn irl;
     casio_interrupt_fn onchip;
-    uint32_t           cpu_hz;
-    uint32_t           timer_hz;
+    uint32_t cpu_hz;
+    uint32_t timer_hz;
     cfcard_slot_t     *card;
     casio_audio_t     *audio;
-    casio_memory_fn    read_memory;
-    casio_samples_fn   samples;
+    casio_memory_fn read_memory;
+    casio_samples_fn samples;
     void              *context;
 } casio_host_t;
 
@@ -47,24 +47,24 @@ typedef struct {
     uint32_t count, compare;
     uint64_t started;
     uint16_t mode;
-    bool     running, interrupt_enabled;
+    bool running, interrupt_enabled;
 } casio_timer_t;
 
 typedef struct {
     uint16_t asic[CASIO_ASIC_WORDS];
-    uint8_t  vram[CASIO_VRAM_SIZE];
+    uint8_t vram[CASIO_VRAM_SIZE];
     casio_timer_t timers[CASIO_TIMERS];
     uint16_t lock_low, lock_high;
     uint16_t onchip[0x40];
     uint16_t onchip_extra;
     uint16_t onchip_priority;
-    uint8_t  keys_down[CASIO_KEY_ROWS];
-    uint8_t  keys_releasing[CASIO_KEY_ROWS];
+    uint8_t keys_down[CASIO_KEY_ROWS];
+    uint8_t keys_releasing[CASIO_KEY_ROWS];
     uint32_t key_pressed_scan[CASIO_KEY_ROWS][8];
     uint32_t scans;
-    bool     powered_on;
-    bool     pen_down;
-    bool     dsr;
+    bool powered_on;
+    bool pen_down;
+    bool dsr;
     uint16_t serial_flags;
     uint16_t pen_x, pen_y;
     uint16_t latched_requests;

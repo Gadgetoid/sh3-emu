@@ -57,72 +57,72 @@
 
 typedef struct {
     uint32_t page, pa;
-    bool     write;
+    bool write;
 } mailbox_page_t;
 
 typedef struct {
-    char     line[256];
-    int      length;
+    char line[256];
+    int length;
 } debug_line_t;
 
 struct machine {
     sh3_cpu_t cpu;
-    sh7709_t  chip;
+    sh7709_t chip;
     uint8_t  *dram;
-    uint32_t  dram_size;
-    uint32_t  dram_size_next;
+    uint32_t dram_size;
+    uint32_t dram_size_next;
     uint8_t  *image;
-    size_t    image_size;
-    uint32_t  entry;
-    uint64_t  rom_hash;
-    bool      casio;
-    bool      hp;
+    size_t image_size;
+    uint32_t entry;
+    uint64_t rom_hash;
+    bool casio;
+    bool hp;
     hp320lx_t hp_board;
-    bool      hp_on_key;
+    bool hp_on_key;
     hp320lx_host_t hp_host;
     uint8_t  *flash;
-    casio_t   casio_board;
+    casio_t casio_board;
     casio_host_t casio_host;
     casio_audio_t casio_audio;
     debug_line_t sci_line;
 
-    cfcard_t  card;
+    cfcard_t card;
     cfcard_slot_t card_slot;
-    char      card_path[CARD_PATH_MAX];
+    char card_path[CARD_PATH_MAX];
     uint8_t  *dictionary;
-    int16_t   audio[AUDIO_RING];
-    uint32_t  audio_head, audio_count;
-    uint64_t  audio_clock, audio_last;
-    int16_t   audio_level;
-    uint32_t  audio_phase;
-    size_t    dictionary_size;
-    char      pending_card[CARD_PATH_MAX];
-    uint64_t  pending_card_at;
-    bool      serial_connected;
-    uint8_t   serial_rx[SERIAL_FIFO], serial_tx[SERIAL_FIFO];
-    uint32_t  serial_rx_head, serial_rx_count, serial_tx_count;
-    uint64_t  serial_tick_at;
-    uint64_t  run_target;
-    uint64_t  spin_window;
-    uint32_t  spin_reads;
+    int16_t audio[AUDIO_RING];
+    uint32_t audio_head, audio_count;
+    uint64_t audio_clock, audio_last;
+    int16_t audio_level;
+    uint32_t audio_phase;
+    size_t dictionary_size;
+    char pending_card[CARD_PATH_MAX];
+    uint64_t pending_card_at;
+    bool serial_connected;
+    uint8_t serial_rx[SERIAL_FIFO], serial_tx[SERIAL_FIFO];
+    uint32_t serial_rx_head, serial_rx_count, serial_tx_count;
+    uint64_t serial_tick_at;
+    uint64_t run_target;
+    uint64_t spin_window;
+    uint32_t spin_reads;
 
     mailbox_t mailbox;
-    uint32_t  mailbox_fault_va;
-    int       mailbox_fault_tries;
-    uint32_t  mailbox_pc;
-    uint64_t  agent_poll_at;
+    uint32_t mailbox_fault_va;
+    int mailbox_fault_tries;
+    uint32_t mailbox_pc;
+    uint64_t agent_poll_at;
     mailbox_page_t mailbox_pages[MAILBOX_PAGES];
-    int       mailbox_page_count;
+    int mailbox_page_count;
 
     machine_log_fn log;
     sh3_debug_t exception_debug;
     machine_debug_fn debug_sink;
     void     *debug_context;
-    uint32_t  unknown_logged;
-    uint64_t  unknown_seen[UNKNOWN_SEEN];
-    bool      host_clock;
-    uint32_t  watch[MACHINE_WATCH_MAX];
-    int       watch_count;
+    uint32_t unknown_logged;
+    uint64_t unknown_seen[UNKNOWN_SEEN];
+    bool host_clock;
+    uint32_t watch[MACHINE_WATCH_MAX];
+    int watch_count;
 };
 
 static void machine_logf(machine_t *m, const char *format, ...) {
@@ -530,7 +530,9 @@ static bool on_trapa(void *context, uint32_t number) {
     return true;
 }
 
-mailbox_t *machine_mailbox(machine_t *m) { return &m->mailbox; }
+mailbox_t *machine_mailbox(machine_t *m) {
+    return &m->mailbox;
+}
 
 static void on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
@@ -545,7 +547,9 @@ static void trace_exception(void *context, uint32_t code, uint32_t pc, bool user
     machine_logf(m, "exception %03X at %08X user=%d tea=%08X pr=%08X r15=%08X\n", code, pc, user, m->cpu.tea, m->cpu.pr, m->cpu.r[15]);
 }
 
-static bool never_stop(void *context, uint32_t pc) { (void)context; (void)pc; return false; }
+static bool never_stop(void *context, uint32_t pc) {
+    (void)context; (void)pc; return false;
+}
 
 void machine_trace_exceptions(machine_t *m, bool enabled) {
     m->exception_debug = (sh3_debug_t){ .context = m, .before = never_stop, .exception = trace_exception };
@@ -649,7 +653,9 @@ void machine_destroy(machine_t *m) {
     free(m);
 }
 
-void machine_set_log(machine_t *m, machine_log_fn log) { m->log = log; }
+void machine_set_log(machine_t *m, machine_log_fn log) {
+    m->log = log;
+}
 
 static void pending_card_event(machine_t *m);
 
@@ -684,7 +690,9 @@ void machine_run(machine_t *m, uint64_t cycles) {
     sh7709_advance(&m->chip);
 }
 
-sh3_cpu_t *machine_cpu(machine_t *m) { return &m->cpu; }
+sh3_cpu_t *machine_cpu(machine_t *m) {
+    return &m->cpu;
+}
 
 bool machine_read_physical(machine_t *m, uint32_t pa, uint8_t *data, uint32_t length) {
     pa &= AREA_MASK;
@@ -704,20 +712,28 @@ bool machine_write_physical(machine_t *m, uint32_t pa, const uint8_t *data, uint
     return true;
 }
 
-uint64_t machine_cycles(machine_t *m) { return m->cpu.cycles; }
+uint64_t machine_cycles(machine_t *m) {
+    return m->cpu.cycles;
+}
 
 bool machine_agent_running(machine_t *m) {
     return m->agent_poll_at && m->cpu.cycles < m->agent_poll_at + MACHINE_CLOCK_HZ / 2;
 }
-uint32_t machine_pc(machine_t *m) { return m->cpu.pc; }
+uint32_t machine_pc(machine_t *m) {
+    return m->cpu.pc;
+}
 
-bool machine_lcd_enabled(machine_t *m) { return !machine_suspended(m); }
+bool machine_lcd_enabled(machine_t *m) {
+    return !machine_suspended(m);
+}
 bool machine_backlight(machine_t *m) {
     if (m->casio) return machine_lcd_enabled(m) && casio_backlight(&m->casio_board);
     return machine_lcd_enabled(m) && !(m->chip.ports[HP320LX_BACKLIGHT_PORT] & HP320LX_BACKLIGHT_OFF);
 }
 
-uint32_t machine_backlight_colour(machine_t *m) { return m->hp ? HP320LX_BACKLIGHT_COLOUR : CASIO_BACKLIGHT_COLOUR; }
+uint32_t machine_backlight_colour(machine_t *m) {
+    return m->hp ? HP320LX_BACKLIGHT_COLOUR : CASIO_BACKLIGHT_COLOUR;
+}
 
 void machine_backlight_button(machine_t *m, bool down) {
     machine_key(m, SCANCODE_BACKLIGHT, !down);
@@ -728,14 +744,18 @@ screen_size_t machine_screen_size(machine_t *m) {
     return (screen_size_t){ HP320LX_SCREEN_WIDTH, HP320LX_SCREEN_HEIGHT };
 }
 
-screen_size_t machine_screen_next(machine_t *m) { return machine_screen_size(m); }
+screen_size_t machine_screen_next(machine_t *m) {
+    return machine_screen_size(m);
+}
 
 bool machine_screen_supported(machine_t *m, screen_size_t size) {
     screen_size_t stock = machine_screen_size(m);
     return size.width == stock.width && size.height == stock.height;
 }
 
-bool machine_set_screen(machine_t *m, screen_size_t size) { return machine_screen_supported(m, size); }
+bool machine_set_screen(machine_t *m, screen_size_t size) {
+    return machine_screen_supported(m, size);
+}
 
 int machine_screen_palette(machine_t *m, uint32_t *palette) {
     (void)m;
@@ -823,7 +843,9 @@ void machine_eject_card(machine_t *m) {
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
 }
 
-bool machine_card_inserted(machine_t *m) { return m->card.inserted; }
+bool machine_card_inserted(machine_t *m) {
+    return m->card.inserted;
+}
 
 void machine_serial_connect(machine_t *m, bool connected) {
     m->serial_connected = connected;
@@ -831,7 +853,9 @@ void machine_serial_connect(machine_t *m, bool connected) {
     set_serial_lines(m);
 }
 
-bool machine_serial_connected(machine_t *m) { return m->serial_connected; }
+bool machine_serial_connected(machine_t *m) {
+    return m->serial_connected;
+}
 
 bool machine_serial_dtr(machine_t *m) {
     if (m->hp) return !(m->chip.ports[HP320LX_SERIAL_CONTROL_PORT] & HP320LX_SERIAL_DTR);
@@ -843,7 +867,9 @@ uint32_t machine_serial_baud(machine_t *m) {
     return sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF);
 }
 
-size_t machine_serial_space(machine_t *m) { return SERIAL_FIFO - m->serial_rx_count; }
+size_t machine_serial_space(machine_t *m) {
+    return SERIAL_FIFO - m->serial_rx_count;
+}
 
 size_t machine_serial_send(machine_t *m, const uint8_t *data, size_t length) {
     size_t accepted = 0;
@@ -862,9 +888,13 @@ size_t machine_serial_take(machine_t *m, uint8_t *out, size_t max) {
     return count;
 }
 
-void machine_reset(machine_t *m) { reset_machine(m, false); }
+void machine_reset(machine_t *m) {
+    reset_machine(m, false);
+}
 
-bool machine_has_dictionary_slot(machine_t *m) { return m->casio; }
+bool machine_has_dictionary_slot(machine_t *m) {
+    return m->casio;
+}
 
 bool machine_mount_dictionary(machine_t *m, const char *path) {
     if (!m->casio) return false;
@@ -886,9 +916,13 @@ void machine_unmount_dictionary(machine_t *m) {
     m->dictionary_size = 0;
 }
 
-bool machine_dictionary_mounted(machine_t *m) { return m->dictionary != NULL; }
+bool machine_dictionary_mounted(machine_t *m) {
+    return m->dictionary != NULL;
+}
 
-void machine_soft_reset(machine_t *m) { reset_machine(m, true); }
+void machine_soft_reset(machine_t *m) {
+    reset_machine(m, true);
+}
 
 bool machine_watch_pc(machine_t *m, uint32_t va) {
     if (m->watch_count >= MACHINE_WATCH_MAX) return false;
@@ -904,11 +938,21 @@ void machine_set_memory(machine_t *m, uint32_t megabytes) {
     if (m->dram_size_next != m->dram_size) machine_reset(m);
 }
 
-uint32_t machine_memory(machine_t *m) { return m->dram_size >> 20; }
-uint32_t machine_memory_next(machine_t *m) { return m->dram_size_next >> 20; }
-void machine_set_speed(machine_t *m, uint32_t multiplier) { m->cpu.speed = multiplier ? multiplier : 1; }
-uint32_t machine_speed(machine_t *m) { return m->cpu.speed ? m->cpu.speed : 1; }
-uint64_t machine_rom_hash(machine_t *m) { return m->rom_hash; }
+uint32_t machine_memory(machine_t *m) {
+    return m->dram_size >> 20;
+}
+uint32_t machine_memory_next(machine_t *m) {
+    return m->dram_size_next >> 20;
+}
+void machine_set_speed(machine_t *m, uint32_t multiplier) {
+    m->cpu.speed = multiplier ? multiplier : 1;
+}
+uint32_t machine_speed(machine_t *m) {
+    return m->cpu.speed ? m->cpu.speed : 1;
+}
+uint64_t machine_rom_hash(machine_t *m) {
+    return m->rom_hash;
+}
 void machine_power_button(machine_t *m, bool down) {
     if (m->hp && down && machine_suspended(m)) hp320lx_woken(&m->hp_board);
     if (m->hp) sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
@@ -929,12 +973,14 @@ int machine_rom_system(machine_t *m) {
 
 const char *machine_board_name(int board) {
     switch (board) {
-        case MACHINE_BOARD_CASIO: return "Casio A-51";
-        case MACHINE_BOARD_HP: return "HP 320LX";
-        default: return "Unknown";
+    case MACHINE_BOARD_CASIO: return "Casio A-51";
+    case MACHINE_BOARD_HP: return "HP 320LX";
+    default: return "Unknown";
     }
 }
-key_layout_t machine_key_layout(machine_t *m) { (void)m; return KEY_LAYOUT_ROM; }
+key_layout_t machine_key_layout(machine_t *m) {
+    (void)m; return KEY_LAYOUT_ROM;
+}
 
 void machine_set_host_clock(machine_t *m, bool enabled) {
     m->host_clock = enabled;
