@@ -59,7 +59,7 @@ typedef struct {
     uint32_t dram_size;
 } sh3_bus_t;
 
-#define SH3_WATCH_MAX 8
+#define SH3_WATCH_MAX 24
 #define SH3_PAGE_CACHE 256
 #define SH3_FETCH_CACHE 64
 

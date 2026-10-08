@@ -3,6 +3,7 @@ HEADLESS  = headless
 SH3RUN    = sh3-run
 RAPI_TOOL = sh3emu-rapi
 GATEWAYCHECK = $(BUILD)/gateway-check
+ACCELCHECK = $(BUILD)/accel-check
 PROXYCHECK = proxycheck
 APP       = SH3Emu.app
 BUILD     = build
@@ -75,6 +76,9 @@ $(BUILD)/libmain.so: $(OBJ_APP)
 $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS) $(NET_LIBS)
 
+$(ACCELCHECK): $(BUILD)/src/core/sh3.o $(BUILD)/src/core/accel.o $(BUILD)/src/core/lz.o $(BUILD)/src/core/lzw.o $(BUILD)/src/util/file.o $(BUILD)/tools/accel_check.o
+	$(CC) -o $@ $^ -lz
+
 $(GATEWAYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
@@ -141,7 +145,7 @@ clean:
 
 .PHONY: all run clean test check format format-check app apk apk-push apk-install icons debugmgr sh3-fuzz FORCE
 
--include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/sh3emu_rapi.d
+-include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/accel_check.d $(BUILD)/tools/sh3emu_rapi.d
 
 check: $(HEADLESS) $(SH3RUN) $(GATEWAYCHECK) $(PROXYCHECK)
 	sh tests/check.sh

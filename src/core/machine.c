@@ -559,19 +559,11 @@ static const uint8_t *accel_rom(void *context, uint32_t pa, uint32_t length) {
     return pa < FLASH_SIZE && length <= FLASH_SIZE - pa ? m->flash + pa : NULL;
 }
 
-static bool run_codec(machine_t *m, uint32_t pc) {
-    accel_memory_t memory = { m, accel_map };
-    bool decode = pc == m->accel.decode_va;
-    if (m->accel.system == 1) return decode ? accel_ce1_decode(&m->cpu, &memory) : accel_ce1_encode(&m->cpu, &memory);
-    return decode ? accel_ce2_decode(&m->cpu, &memory) : accel_ce2_encode(&m->cpu, &memory);
-}
-
 static bool on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
-    if (m->accel.system && (pc == m->accel.decode_va || pc == m->accel.encode_va)) return m->optimisations && run_codec(m, pc);
-    if (m->accel.fill_va && pc == m->accel.fill_va) {
+    if (accel_hooked(&m->accel, pc)) {
         accel_memory_t memory = { m, accel_map };
-        return m->optimisations && accel_fill32(&m->cpu, &memory);
+        return m->optimisations && accel_call(&m->accel, &m->cpu, &memory, pc);
     }
     machine_logf(m, "watch: pc %08X r4=%08X r5=%08X r6=%08X r7=%08X pr=%08X\n", pc, m->cpu.r[4], m->cpu.r[5], m->cpu.r[6], m->cpu.r[7], m->cpu.pr);
     return false;
@@ -580,10 +572,7 @@ static bool on_watch(void *context, uint32_t pc) {
 static void sync_watches(machine_t *m) {
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     m->cpu.watch_count = m->watch_count;
-    if (!m->accel.system) return;
-    m->cpu.watch[m->cpu.watch_count++] = m->accel.decode_va;
-    m->cpu.watch[m->cpu.watch_count++] = m->accel.encode_va;
-    if (m->accel.fill_va) m->cpu.watch[m->cpu.watch_count++] = m->accel.fill_va;
+    for (int i = 0; i < m->accel.count && m->cpu.watch_count < SH3_WATCH_MAX; i++) m->cpu.watch[m->cpu.watch_count++] = m->accel.hooks[i].va;
 }
 
 static void trace_exception(void *context, uint32_t code, uint32_t pc, bool user) {

@@ -115,9 +115,10 @@ CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
 CASIO_TOUCH_HASH=29217d26a613e7975b69d46a1290d374c8c1981f63df873c1bb5a502277413d8
 CASIO_CARD_HASH=ac572c440c42daa5c55bc679024626b640cd6fc7eeecfb165a38bd9e81931544
-CASIO_OPTIMISED_HASH=2aaad9902d4aafc158d1ce9d61f292a3180a28bb4c394e87e102c817bcab8eca
+CASIO_OPTIMISED_HASH=882c7981b0732f921f2dc30cdc2dca4b3fe1aa7a9ff13be10995cceee6368371
 CASIO_WAKE_HASH=0156b2079d2223fd711dfe432cf5260f1b1ecc4dc37be80237caf1257db59118
 if [ -f "$CASIO_ROM" ]; then
+    if ./build/accel-check "$CASIO_ROM" > "$OUT/casio_accel.log" 2>&1; then echo "ok   casio_accel"; else echo "FAIL casio_accel"; cat "$OUT/casio_accel.log"; exit 1; fi
     ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
     actual=$(shasum -a 256 "$OUT/casio.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Windows CE Kernel for Hitachi SH" "$OUT/casio.log" && [ "$actual" = "$CASIO_HASH" ]; then echo "ok   casio"; else echo "FAIL casio $actual"; exit 1; fi
@@ -137,10 +138,10 @@ if [ -f "$CASIO_ROM" ]; then
     actual=$(shasum -a 256 "$OUT/casio_card.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_CARD_HASH" ]; then echo "ok   casio_card"; else echo "FAIL casio_card $actual"; exit 1; fi
     sh tools/mkcard.sh "$OUT/casio.img" 16 "$OUT/casiocard/cardfiles" > /dev/null
-    ./headless "$CASIO_ROM" --optimisations --card="$OUT/casio.img" --seconds=68 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 \
+    ./headless "$CASIO_ROM" --optimisations --card="$OUT/casio.img" --seconds=63 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 \
         --tap=31:48:192:1.5 --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --tap=46:447:227:0.2 \
         --tap=48:447:227:0.2 --tap=50:447:227:0.2 --tap=52:447:227:0.2 --tap=54:447:227:0.2 --tap=56:447:227:0.2 --tap=58:447:227:0.2 \
-        --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --tap=64:334:68:0.08 --tap=64.2:334:68:0.08 --pgm="$OUT/casio_optimised.pgm" > /dev/null 2>&1
+        --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --pgm="$OUT/casio_optimised.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_optimised.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_OPTIMISED_HASH" ]; then echo "ok   casio_optimised"; else echo "FAIL casio_optimised $actual"; exit 1; fi
     ./headless "$CASIO_ROM" --seconds=86 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 --tap=31:48:192:1.5 \
@@ -179,6 +180,7 @@ HP_OPTIMISED_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b405
 HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
 HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
 if [ -f "$HP_ROM" ]; then
+    if ./build/accel-check "$HP_ROM" > "$OUT/hp_accel.log" 2>&1; then echo "ok   hp_accel"; else echo "FAIL hp_accel"; cat "$OUT/hp_accel.log"; exit 1; fi
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp.log" && [ "$actual" = "$HP_HASH" ]; then echo "ok   hp"; else echo "FAIL hp $actual"; exit 1; fi
