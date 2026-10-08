@@ -1,5 +1,8 @@
 #include "core/optimiser.h"
 
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define AREA_MASK         0x1FFFFFFFu
@@ -69,6 +72,11 @@ static const uint32_t WCSLEN_CODE[] = {
     0x61536543u, 0x21186111u, 0x75028D02u, 0x0009AFF9u, 0x45213548u, 0x000B75FFu,
 };
 
+static const uint32_t GPE_BLT_CODE[] = {
+    0x2F862FE6u, 0x2FA62F96u, 0x2FC62FB6u, 0x4F222FD6u, 0x1F596943u, 0x3F1C916Bu,
+    0x916A6EF3u, 0x4F1E3F18u, 0xE8009064u, 0x521A01EEu, 0x622CE01Du, 0x501A0F24u,
+};
+
 static const uint32_t EXPORT_CE2_CODE[] = {
     0x2F962F86u, 0x2FB62FA6u, 0x2FD62FC6u, 0x68434F22u, 0x7FEC1F58u, 0x048EE07Cu,
     0x8B012448u, 0xE000A033u, 0x0D8EE050u, 0x3D4C018Eu, 0xEA0052D8u, 0x1F24321Cu,
@@ -116,6 +124,7 @@ static const hook_spec_t HP_HOOKS[] = {
     { 0x800106A0u, CODE(PURGE_CODE), native_return_zero, true, 0, false },
     { 0x01FDE218u, CODE(RANGE_CE2_CODE), native_range_lookup, false, 0, false },
     { 0x800145A4u, CODE(EXPORT_CE2_CODE), native_export_lookup, true, 0x8001447Cu, false },
+    { 0x017B443Cu, CODE(GPE_BLT_CODE), native_gpe_blt, false, 0, false },
 };
 
 static const uint32_t HP_POLLS[] = { TICK_COUNTER_PA };
@@ -147,6 +156,7 @@ void optimiser_init(optimiser_t *optimiser, optimiser_rom_fn rom, void *rom_cont
 }
 
 bool optimiser_hooked(const optimiser_t *optimiser, uint32_t pc) {
+    if (optimiser->verify && optimiser->verify->pending && optimiser->verify->return_pc == pc) return true;
     for (int i = 0; i < optimiser->hook_count; i++) {
         if (optimiser->hooks[i].va == pc) return true;
     }
@@ -170,7 +180,50 @@ static bool sh3_arguments(const optimiser_t *optimiser, const sh3_cpu_t *cpu, ui
     return true;
 }
 
+static void verify_log(optimiser_verify_t *verify, const char *format, ...) {
+    char message[256];
+    va_list arguments;
+    va_start(arguments, format);
+    vsnprintf(message, sizeof message, format, arguments);
+    va_end(arguments);
+    if (verify->log) verify->log(verify->log_context, message);
+}
+
+static void verify_start(optimiser_t *optimiser, const optimiser_hook_t *hook, const sh3_cpu_t *cpu, const uint32_t *arguments) {
+    optimiser_verify_t *verify = optimiser->verify;
+    verify->shadow = (native_shadow_t){ optimiser->memory, verify->pages, 0, OPTIMISER_SHADOW_PAGES };
+    native_memory_t shadow_memory = { &verify->shadow, native_shadow_map };
+    native_result_t result = { 0, false };
+    if (!hook->run(&shadow_memory, arguments, &result) || result.call_next) return;
+    verify->pending = true;
+    verify->hook_va = hook->va;
+    verify->return_pc = cpu->pr;
+    verify->stack = cpu->r[15];
+    verify->value = result.value;
+    verify->check_value = !hook->no_result;
+    memcpy(verify->arguments, arguments, sizeof verify->arguments);
+}
+
+static void verify_finish(optimiser_verify_t *verify, const sh3_cpu_t *cpu) {
+    uint32_t va;
+    verify->pending = false;
+    verify->checked++;
+    const uint32_t *arguments = verify->arguments;
+    if (verify->check_value && cpu->r[0] != verify->value) {
+        verify->differed++;
+        verify_log(verify, "optimiser: %08X(%08X %08X %08X %08X %08X %08X) returned %08X, native %08X\n", verify->hook_va, arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5], cpu->r[0], verify->value);
+    } else if (native_shadow_differs(&verify->shadow, &va)) {
+        verify->differed++;
+        verify_log(verify, "optimiser: %08X(%08X %08X %08X %08X %08X %08X) memory differs at %08X\n", verify->hook_va, arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5], va);
+    }
+}
+
 bool optimiser_call(optimiser_t *optimiser, sh3_cpu_t *cpu, uint32_t pc) {
+    optimiser_verify_t *verify = optimiser->verify;
+    if (verify && verify->pending && verify->return_pc == pc) {
+        if (verify->stack == cpu->r[15]) verify_finish(verify, cpu);
+        if (!optimiser_hooked(optimiser, pc)) return false;
+    }
     for (int i = 0; i < optimiser->hook_count; i++) {
         optimiser_hook_t *hook = &optimiser->hooks[i];
         if (hook->va != pc) continue;
@@ -182,7 +235,12 @@ bool optimiser_call(optimiser_t *optimiser, sh3_cpu_t *cpu, uint32_t pc) {
         }
         uint32_t arguments[NATIVE_ARGUMENTS];
         native_result_t result = { 0, false };
-        if (hook->state != OPTIMISER_MATCHED || !sh3_arguments(optimiser, cpu, arguments) || !hook->run(&optimiser->memory, arguments, &result)) return false;
+        if (hook->state != OPTIMISER_MATCHED || !sh3_arguments(optimiser, cpu, arguments)) return false;
+        if (verify) {
+            if (!verify->pending) verify_start(optimiser, hook, cpu, arguments);
+            return false;
+        }
+        if (!hook->run(&optimiser->memory, arguments, &result)) return false;
         if (result.call_next && !hook->next) return false;
         if (result.call_next) {
             cpu->r[4] = arguments[0];
@@ -212,4 +270,19 @@ bool optimiser_polled(optimiser_t *optimiser, uint32_t pa, uint64_t cycles) {
         return true;
     }
     return false;
+}
+
+bool optimiser_set_verify(optimiser_t *optimiser, bool verify, optimiser_log_fn log, void *log_context) {
+    free(optimiser->verify);
+    optimiser->verify = NULL;
+    if (!verify) return true;
+    optimiser->verify = calloc(1, sizeof *optimiser->verify);
+    if (!optimiser->verify) return false;
+    optimiser->verify->log = log;
+    optimiser->verify->log_context = log_context;
+    return true;
+}
+
+uint32_t optimiser_return_watch(const optimiser_t *optimiser) {
+    return optimiser->verify && optimiser->verify->pending ? optimiser->verify->return_pc : 0;
 }

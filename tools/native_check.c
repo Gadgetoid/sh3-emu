@@ -28,6 +28,13 @@
 #define RUN_CYCLES    5000000u
 #define TRIALS        4000
 #define CODE_WORDS    24
+#define BLT_PARMS     DATA_VA
+#define BLT_SURFACES  (DATA_VA + 0x100u)
+#define BLT_RECTS     (DATA_VA + 0x180u)
+#define BLT_LOOKUP    (DATA_VA + 0x200u)
+#define BLT_DRIVER    (DATA_VA + 0x600u)
+#define BLT_BUFFERS   (DATA_VA + 0x1000u)
+#define BLT_BUFFER_SIZE 0x6000u
 
 static uint8_t *ram;
 static const uint8_t *rom;
@@ -67,7 +74,7 @@ static const uint8_t *rom_at(void *context, uint32_t pa, uint32_t length) {
     return pa < rom_size && length <= rom_size - pa ? rom + pa : NULL;
 }
 
-typedef enum { KIND_OTHER, KIND_FILL, KIND_STRCMP, KIND_PURGE, KIND_WIDEN, KIND_RANGE, KIND_WCSLEN, KIND_EXPORT } kind_t;
+typedef enum { KIND_OTHER, KIND_FILL, KIND_STRCMP, KIND_PURGE, KIND_WIDEN, KIND_RANGE, KIND_WCSLEN, KIND_EXPORT, KIND_BLT } kind_t;
 
 static kind_t kind_of(native_fn run) {
     if (run == native_fill32) return KIND_FILL;
@@ -77,6 +84,7 @@ static kind_t kind_of(native_fn run) {
     if (run == native_range_lookup) return KIND_RANGE;
     if (run == native_wcslen) return KIND_WCSLEN;
     if (run == native_export_lookup) return KIND_EXPORT;
+    if (run == native_gpe_blt) return KIND_BLT;
     return KIND_OTHER;
 }
 
@@ -134,6 +142,78 @@ static void put32(uint32_t va, uint32_t value) {
 static void random_string(uint32_t va, int length, int alphabet) {
     for (int i = 0; i < length; i++) ram[va + (uint32_t)i] = (uint8_t)(1 + rand() % alphabet);
     ram[va + (uint32_t)length] = 0;
+}
+
+typedef struct {
+    int32_t width, height, stride;
+    uint32_t format, buffer;
+} blt_surface_t;
+
+static blt_surface_t random_surface(uint32_t va, uint32_t base) {
+    static const uint32_t format_bits[] = { 1, 2, 4, 8, 16 };
+    blt_surface_t surface = { 1 + rand() % 64, 1 + rand() % 32, 0, (uint32_t)(rand() % 5), base };
+    int32_t stride = (int32_t)((((uint32_t)surface.width * format_bits[surface.format] + 31) / 32) * 4);
+    if (rand() % 2) {
+        surface.stride = -stride;
+        surface.buffer = base + (uint32_t)((surface.height - 1) * stride);
+    } else {
+        surface.stride = stride;
+    }
+    put32(va, random_word());
+    put32(va + 4, surface.buffer);
+    put32(va + 8, (uint32_t)surface.stride);
+    put32(va + 12, surface.format);
+    put32(va + 16, 0);
+    put32(va + 20, 0);
+    put32(va + 24, (uint32_t)surface.width);
+    put32(va + 28, (uint32_t)surface.height);
+    return surface;
+}
+
+static void put_rect(uint32_t va, int32_t left, int32_t top, int32_t right, int32_t bottom) {
+    put32(va, (uint32_t)left);
+    put32(va + 4, (uint32_t)top);
+    put32(va + 8, (uint32_t)right);
+    put32(va + 12, (uint32_t)bottom);
+}
+
+static void prepare_blt(sh3_cpu_t *cpu, int trial) {
+    for (uint32_t i = 0; i < 2 * BLT_BUFFER_SIZE; i++) ram[BLT_BUFFERS + i] = (uint8_t)rand();
+    memset(ram + BLT_DRIVER, 0, 0x400);
+    blt_surface_t destination = random_surface(BLT_SURFACES, BLT_BUFFERS);
+    bool same = trial % 5 == 0;
+    blt_surface_t source = same ? destination : random_surface(BLT_SURFACES + 0x40, BLT_BUFFERS + BLT_BUFFER_SIZE);
+    int32_t width = 1 + rand() % (destination.width < source.width ? destination.width : source.width);
+    int32_t height = 1 + rand() % (destination.height < source.height ? destination.height : source.height);
+    int32_t destination_x = rand() % (destination.width - width + 1), destination_y = rand() % (destination.height - height + 1);
+    int32_t source_x = rand() % (source.width - width + 1), source_y = rand() % (source.height - height + 1);
+    put_rect(BLT_RECTS, destination_x, destination_y, destination_x + width, destination_y + height);
+    put_rect(BLT_RECTS + 16, source_x, source_y, source_x + width, source_y + height);
+    put_rect(BLT_RECTS + 32, destination_x - rand() % 3, destination_y - rand() % 3, destination_x + width + rand() % 3, destination_y + height + rand() % 3);
+    uint32_t low = (uint32_t)(rand() % 16), rop3 = trial % 11 ? low | low << 4 : (uint32_t)(rand() % 256);
+    bool lookup = source.format != destination.format || rand() % 2;
+    uint32_t lookup_mask = (1u << (1u << destination.format)) - 1;
+    for (uint32_t i = 0; i < 256; i++) put32(BLT_LOOKUP + i * 4, trial % 7 ? random_word() & lookup_mask : random_word());
+    put32(BLT_PARMS, random_word());
+    put32(BLT_PARMS + 4, BLT_SURFACES);
+    put32(BLT_PARMS + 8, same ? BLT_SURFACES : BLT_SURFACES + 0x40);
+    put32(BLT_PARMS + 12, 0);
+    put32(BLT_PARMS + 16, 0);
+    put32(BLT_PARMS + 20, BLT_RECTS);
+    put32(BLT_PARMS + 24, BLT_RECTS + 16);
+    put32(BLT_PARMS + 28, trial % 4 ? 0 : BLT_RECTS + 32);
+    put32(BLT_PARMS + 32, random_word());
+    put32(BLT_PARMS + 36, 0);
+    put32(BLT_PARMS + 40, rop3 | rop3 << 8);
+    put32(BLT_PARMS + 44, 0);
+    put32(BLT_PARMS + 48, 0);
+    put32(BLT_PARMS + 52, !same || source_x >= destination_x);
+    put32(BLT_PARMS + 56, !same || source_y >= destination_y);
+    put32(BLT_PARMS + 60, lookup ? BLT_LOOKUP : 0);
+    put32(BLT_PARMS + 64, 0);
+    put32(BLT_PARMS + 68, 0);
+    cpu->r[4] = BLT_DRIVER;
+    cpu->r[5] = BLT_PARMS;
 }
 
 static void prepare(kind_t kind, sh3_cpu_t *cpu, int trial) {
@@ -200,6 +280,9 @@ static void prepare(kind_t kind, sh3_cpu_t *cpu, int trial) {
         cpu->r[5] = SOURCE_VA;
         break;
     }
+    case KIND_BLT:
+        prepare_blt(cpu, trial);
+        break;
     case KIND_FILL:
         cpu->r[4] = TARGET_VA;
         cpu->r[5] = random_word();
@@ -211,7 +294,7 @@ static void prepare(kind_t kind, sh3_cpu_t *cpu, int trial) {
 }
 
 static const char *kind_name(kind_t kind) {
-    static const char *names[] = { "other", "fill", "strcmp", "purge", "widen", "range", "wcslen", "export" };
+    static const char *names[] = { "other", "fill", "strcmp", "purge", "widen", "range", "wcslen", "export", "blt" };
     return names[kind];
 }
 
@@ -255,6 +338,11 @@ static int check_hook(optimiser_t *optimiser, int index) {
         }
         if (!same_result(&guest, &native, guest_data) && failures++ < 3) {
             printf("  %s trial %d: guest r0 %08X sr %08X, native r0 %08X sr %08X\n", kind_name(kind), trial, guest.r[0], guest.sr, native.r[0], native.sr);
+            for (uint32_t o = 0; o < DATA_SIZE; o++) if (guest_data[o] != ram[DATA_VA + o]) { printf("    data +%04X guest %02X native %02X before %02X pc %08X %08X\n", o, guest_data[o], ram[DATA_VA + o], data_before[o], guest.pc, native.pc); break; }
+            for (int r = 8; r < 16; r++) if (guest.r[r] != native.r[r]) printf("    r%d %08X %08X\n", r, guest.r[r], native.r[r]);
+            uint32_t *pp = (uint32_t *)(data_before); printf("    rop %08X lookup %08X clip %08X xp %u yp %u\n", pp[10], pp[15], pp[7], pp[13], pp[14]);
+            uint32_t *sd = (uint32_t *)(data_before + 0x100); printf("    dst buf %08X stride %d fmt %u w %u h %u; src buf %08X stride %d fmt %u w %u h %u\n", sd[1], sd[2], sd[3], sd[6], sd[7], sd[9], sd[10], sd[11], sd[14], sd[15]);
+            uint32_t *rr = (uint32_t *)(data_before + 0x180); printf("    dst %d,%d-%d,%d src %d,%d-%d,%d\n", rr[0], rr[1], rr[2], rr[3], rr[4], rr[5], rr[6], rr[7]);
         }
     }
     printf("%-8s %08X: %d trials, %d declined, %d differ\n", kind_name(kind), hook->va, TRIALS, declined, failures);

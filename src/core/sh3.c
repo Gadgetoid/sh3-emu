@@ -1032,10 +1032,14 @@ static void take_interrupt(sh3_cpu_t *cpu) {
     cpu->pc = cpu->vbr + VECTOR_INTERRUPT;
 }
 
-void sh3_run(sh3_cpu_t *cpu, uint64_t until_cycle) {
-    cpu->yield = false;
+void sh3_watches_changed(sh3_cpu_t *cpu) {
     memset(cpu->watch_filter, 0, sizeof cpu->watch_filter);
     for (int w = 0; w < cpu->watch_count; w++) cpu->watch_filter[watch_bit(cpu->watch[w]) >> 5] |= 1u << (watch_bit(cpu->watch[w]) & 31);
+}
+
+void sh3_run(sh3_cpu_t *cpu, uint64_t until_cycle) {
+    cpu->yield = false;
+    sh3_watches_changed(cpu);
     uint32_t speed = cpu->speed ? cpu->speed : 1;
     while (cpu->cycles < until_cycle && !cpu->yield) {
         if (cpu->sleeping) {

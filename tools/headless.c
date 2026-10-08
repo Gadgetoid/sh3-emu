@@ -117,7 +117,7 @@ typedef struct {
     double seconds;
     const char *png, *pgm, *load, *save, *wav, *card, *agent_socket, *gdb_process;
     int png_cell, png_backlight, gdb_port;
-    bool trace_pc, host_time, optimisations, trace_exceptions, debug_output, seconds_given;
+    bool trace_pc, host_time, optimisations, verify_optimisations, trace_exceptions, debug_output, seconds_given;
     double key_times[32];
     uint8_t key_codes[32][4];
     int key_lengths[32];
@@ -148,7 +148,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -174,6 +174,7 @@ static const option_t OPTIONS[] = {
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for agent clients", 0 },
     [OPT_OPTIMISATIONS] = { "optimisations", NULL, "run CE's ROM compression natively and skip busy-waits on the clock", 0 },
+    [OPT_VERIFY_OPTIMISATIONS] = { "verify-optimisations", NULL, "run CE's own code for each optimisation, and report where the native version would differ", 0 },
     [OPT_HOST_TIME] = { "host-time", NULL, "set the clock from this computer at a cold boot", 0 },
     [OPT_HEADING_INPUT] = { NULL, NULL, "Input, at emulated times in seconds", 0 },
     [OPT_TAP] = { "tap", "SECONDS:X:Y[:HOLD]", "hold the pen at a screen position, for 0.5 s by default (0.08 for double taps)", 32 },
@@ -249,6 +250,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         return !value || (option_number(value, &run->realtime) && run->realtime > 0);
     case OPT_HOST_TIME: run->host_time = true; return true;
     case OPT_OPTIMISATIONS: run->optimisations = true; return true;
+    case OPT_VERIFY_OPTIMISATIONS: run->optimisations = run->verify_optimisations = true; return true;
     case OPT_TAP: {
         int n = run->tap_count;
         if (!option_timed(value, &run->tap_times[n], &rest)) return false;
@@ -386,6 +388,7 @@ int main(int argc, char **argv) {
     if (run.memory) machine_set_memory(machine, run.memory);
     if (run.speed) machine_set_speed(machine, run.speed);
     machine_set_optimisations(machine, run.optimisations);
+    if (run.verify_optimisations && !machine_set_verify_optimisations(machine, true)) { fprintf(stderr, "cannot verify optimisations\n"); return 1; }
     machine_set_host_clock(machine, run.host_time);
     print_debug_output = run.debug_output;
     if (run.debug_output || run.gdb_port) machine_set_debug_output(machine, print_debug_line, NULL);
@@ -526,6 +529,11 @@ int main(int argc, char **argv) {
         fwrite(&bits, 2, 1, wav_file); fwrite("data", 1, 4, wav_file); fwrite(&data, 4, 1, wav_file);
         fclose(wav_file);
         fprintf(stderr, "wav: %zu samples at %u Hz\n", wav_samples, rate);
+    }
+    if (run.verify_optimisations) {
+        uint32_t checked, differed;
+        machine_optimiser_verified(machine, &checked, &differed);
+        fprintf(stderr, "optimiser: %u calls checked, %u differed\n", checked, differed);
     }
     if (run.save && !machine_save(machine, run.save, 0)) { fprintf(stderr, "cannot save state %s\n", run.save); return 1; }
     if (run.pgm) {

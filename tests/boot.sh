@@ -144,6 +144,8 @@ if [ -f "$CASIO_ROM" ]; then
         --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --pgm="$OUT/casio_optimised.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_optimised.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_OPTIMISED_HASH" ]; then echo "ok   casio_optimised"; else echo "FAIL casio_optimised $actual"; exit 1; fi
+    ./headless "$CASIO_ROM" --verify-optimisations --seconds=20 > "$OUT/casio_verify.log" 2>&1
+    if grep -q "^optimiser: [1-9][0-9]* calls checked, 0 differed$" "$OUT/casio_verify.log"; then echo "ok   casio_verify"; else echo "FAIL casio_verify"; grep "^optimiser" "$OUT/casio_verify.log" | tail -5; exit 1; fi
     ./headless "$CASIO_ROM" --seconds=86 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 --tap=31:48:192:1.5 \
         --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --tap=46:447:227:0.2 --tap=48:447:227:0.2 \
         --tap=50:447:227:0.2 --tap=52:447:227:0.2 --tap=54:447:227:0.2 --tap=56:447:227:0.2 --tap=58:447:227:0.2 \
@@ -195,6 +197,9 @@ if [ -f "$HP_ROM" ]; then
         --tap=33:512:192:1.5 --tap=36:512:48:1.5 --key=38:5A --tap=42:216:47:0.2 --pgm="$OUT/hp_optimised.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/hp_optimised.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_OPTIMISED_HASH" ]; then echo "ok   hp_optimised"; else echo "FAIL hp_optimised $actual"; exit 1; fi
+    ./headless "$HP_ROM" --verify-optimisations --seconds=45 --key=20.5:5A --key=22:5A --tap=24:320:120:1.5 --tap=27:128:48:1.5 --tap=30:128:192:1.5 \
+        --tap=33:512:192:1.5 --tap=36:512:48:1.5 --key=38:5A --tap=42:216:47:0.2 > "$OUT/hp_verify.log" 2>&1
+    if grep -q "^optimiser: [1-9][0-9]* calls checked, 0 differed$" "$OUT/hp_verify.log"; then echo "ok   hp_verify"; else echo "FAIL hp_verify"; grep "^optimiser" "$OUT/hp_verify.log" | tail -5; exit 1; fi
     ./headless "$HP_ROM" --seconds=32 --key=20:9F --key=21:3C --key=25:5A --key=28:9F --trace-pc --pgm="$OUT/hp_wake.pgm" > "$OUT/hp_wake.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp_wake.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_WAKE_HASH" ] && grep -q "^t=2[2-4].* lcd=0" "$OUT/hp_wake.log"; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi

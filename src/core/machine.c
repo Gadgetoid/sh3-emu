@@ -541,9 +541,17 @@ static const uint8_t *optimiser_rom(void *context, uint32_t pa, uint32_t length)
     return pa < FLASH_SIZE && length <= FLASH_SIZE - pa ? m->flash + pa : NULL;
 }
 
+static void sync_watches(machine_t *m);
+
 static bool on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
-    if (optimiser_hooked(&m->optimiser, pc)) return m->optimisations && optimiser_call(&m->optimiser, &m->cpu, pc);
+    if (optimiser_hooked(&m->optimiser, pc)) {
+        if (!m->optimisations) return false;
+        uint32_t watching = optimiser_return_watch(&m->optimiser);
+        bool handled = optimiser_call(&m->optimiser, &m->cpu, pc);
+        if (optimiser_return_watch(&m->optimiser) != watching) sync_watches(m);
+        return handled;
+    }
     machine_logf(m, "watch: pc %08X r4=%08X r5=%08X r6=%08X r7=%08X pr=%08X\n", pc, m->cpu.r[4], m->cpu.r[5], m->cpu.r[6], m->cpu.r[7], m->cpu.pr);
     return false;
 }
@@ -552,6 +560,9 @@ static void sync_watches(machine_t *m) {
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     m->cpu.watch_count = m->watch_count;
     for (int i = 0; i < m->optimiser.hook_count && m->cpu.watch_count < SH3_WATCH_MAX; i++) m->cpu.watch[m->cpu.watch_count++] = m->optimiser.hooks[i].va;
+    uint32_t return_watch = optimiser_return_watch(&m->optimiser);
+    if (return_watch && m->cpu.watch_count < SH3_WATCH_MAX) m->cpu.watch[m->cpu.watch_count++] = return_watch;
+    sh3_watches_changed(&m->cpu);
 }
 
 static void trace_exception(void *context, uint32_t code, uint32_t pc, bool user) {
@@ -662,6 +673,7 @@ void machine_destroy(machine_t *m) {
     if (!m) return;
     mailbox_clear(&m->mailbox);
     cfcard_eject(&m->card_slot);
+    optimiser_set_verify(&m->optimiser, false, NULL, NULL);
     free(m->dram);
     free(m->dictionary);
     free(m->flash);
@@ -972,6 +984,16 @@ void machine_set_optimisations(machine_t *m, bool optimisations) {
 bool machine_optimisations(machine_t *m) {
     return m->optimisations;
 }
+static void optimiser_log(void *context, const char *message) {
+    machine_logf(context, "%s", message);
+}
+bool machine_set_verify_optimisations(machine_t *m, bool verify) {
+    return optimiser_set_verify(&m->optimiser, verify, optimiser_log, m);
+}
+void machine_optimiser_verified(machine_t *m, uint32_t *checked, uint32_t *differed) {
+    *checked = m->optimiser.verify ? m->optimiser.verify->checked : 0;
+    *differed = m->optimiser.verify ? m->optimiser.verify->differed : 0;
+}
 uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
 }
@@ -1161,6 +1183,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.on_trapa = on_trapa;
     mailbox_clear(&m->mailbox);
     m->cpu.on_interrupt = m->casio ? casio_nmi_taken : NULL;
+    if (m->optimiser.verify) m->optimiser.verify->pending = false;
     sync_watches(m);
     m->chip.cpu = &m->cpu;
     cfcard_sanitize(&m->card);
