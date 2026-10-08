@@ -233,6 +233,7 @@ static int check_hook(optimiser_t *optimiser, int index) {
     for (int trial = 0; trial < TRIALS; trial++) {
         srand((unsigned)(trial * 7919 + index));
         start(&guest, hook->va);
+        guest.r[0] = random_word();
         prepare(kind, &guest, trial);
         native = guest;
         memcpy(data_before, ram + DATA_VA, DATA_SIZE);

@@ -82,6 +82,7 @@ typedef struct {
     native_fn run;
     bool in_rom;
     uint32_t next;
+    bool no_result;
 } hook_spec_t;
 
 typedef struct {
@@ -96,25 +97,25 @@ typedef struct {
 #define COUNT(table) (int)(sizeof(table) / sizeof((table)[0]))
 
 static const hook_spec_t CASIO_HOOKS[] = {
-    { 0x8001F53Cu, CODE(CE1_DECODE_CODE), native_ce1_decode, true, 0 },
-    { 0x8001F7DCu, CODE(CE1_ENCODE_CODE), native_ce1_encode, true, 0 },
-    { 0x800221ECu, CODE(STRCMP_CODE), native_strcmp, true, 0 },
-    { 0x8000E5BCu, CODE(PURGE_CODE), native_return_zero, true, 0 },
-    { 0x8001CE58u, CODE(WIDEN_CODE), native_widen, true, 0 },
-    { 0x01FECC6Cu, CODE(RANGE_CE1_CODE), native_range_lookup, false, 0 },
-    { 0x01FF31BCu, CODE(WCSLEN_CODE), native_wcslen, false, 0 },
+    { 0x8001F53Cu, CODE(CE1_DECODE_CODE), native_ce1_decode, true, 0, false },
+    { 0x8001F7DCu, CODE(CE1_ENCODE_CODE), native_ce1_encode, true, 0, false },
+    { 0x800221ECu, CODE(STRCMP_CODE), native_strcmp, true, 0, false },
+    { 0x8000E5BCu, CODE(PURGE_CODE), native_return_zero, true, 0, false },
+    { 0x8001CE58u, CODE(WIDEN_CODE), native_widen, true, 0, true },
+    { 0x01FECC6Cu, CODE(RANGE_CE1_CODE), native_range_lookup, false, 0, false },
+    { 0x01FF31BCu, CODE(WCSLEN_CODE), native_wcslen, false, 0, false },
 };
 
 static const uint32_t CASIO_POLLS[] = { TICK_COUNTER_PA, CASIO_LINK_STATUS };
 
 static const hook_spec_t HP_HOOKS[] = {
-    { 0x80027540u, CODE(CE2_DECODE_CODE), native_ce2_decode, true, 0 },
-    { 0x800273A4u, CODE(CE2_ENCODE_CODE), native_ce2_encode, true, 0 },
-    { 0x8000C39Cu, CODE(FILL_CODE), native_fill32, true, 0 },
-    { 0x8002A14Cu, CODE(STRCMP_CODE), native_strcmp, true, 0 },
-    { 0x800106A0u, CODE(PURGE_CODE), native_return_zero, true, 0 },
-    { 0x01FDE218u, CODE(RANGE_CE2_CODE), native_range_lookup, false, 0 },
-    { 0x800145A4u, CODE(EXPORT_CE2_CODE), native_export_lookup, true, 0x8001447Cu },
+    { 0x80027540u, CODE(CE2_DECODE_CODE), native_ce2_decode, true, 0, false },
+    { 0x800273A4u, CODE(CE2_ENCODE_CODE), native_ce2_encode, true, 0, false },
+    { 0x8000C39Cu, CODE(FILL_CODE), native_fill32, true, 0, true },
+    { 0x8002A14Cu, CODE(STRCMP_CODE), native_strcmp, true, 0, false },
+    { 0x800106A0u, CODE(PURGE_CODE), native_return_zero, true, 0, false },
+    { 0x01FDE218u, CODE(RANGE_CE2_CODE), native_range_lookup, false, 0, false },
+    { 0x800145A4u, CODE(EXPORT_CE2_CODE), native_export_lookup, true, 0x8001447Cu, false },
 };
 
 static const uint32_t HP_POLLS[] = { TICK_COUNTER_PA };
@@ -138,7 +139,7 @@ void optimiser_init(optimiser_t *optimiser, optimiser_rom_fn rom, void *rom_cont
         for (int i = 0; i < profile->hook_count && optimiser->hook_count < OPTIMISER_HOOKS_MAX; i++) {
             const hook_spec_t *spec = &profile->hooks[i];
             if (spec->in_rom && !in_rom(rom, rom_context, spec)) continue;
-            optimiser->hooks[optimiser->hook_count++] = (optimiser_hook_t){ spec->va, spec->code, spec->words, spec->run, spec->next, spec->in_rom ? OPTIMISER_MATCHED : OPTIMISER_UNCHECKED };
+            optimiser->hooks[optimiser->hook_count++] = (optimiser_hook_t){ spec->va, spec->code, spec->words, spec->run, spec->next, spec->no_result, spec->in_rom ? OPTIMISER_MATCHED : OPTIMISER_UNCHECKED };
         }
         for (int i = 0; i < profile->poll_count && optimiser->poll_count < OPTIMISER_POLLS_MAX; i++) optimiser->polls[optimiser->poll_count++] = (optimiser_poll_t){ profile->polls[i], 0, 0 };
         return;
@@ -188,7 +189,7 @@ bool optimiser_call(optimiser_t *optimiser, sh3_cpu_t *cpu, uint32_t pc) {
             cpu->r[5] = result.value;
             cpu->pc = hook->next;
         } else {
-            cpu->r[0] = result.value;
+            if (!hook->no_result) cpu->r[0] = result.value;
             cpu->pc = cpu->pr;
         }
         return true;
