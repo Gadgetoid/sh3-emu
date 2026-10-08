@@ -10,6 +10,8 @@
 #define CE2_DECODE_VA 0x80027540u
 #define CE2_ENCODE_VA 0x800273A4u
 #define STACK_ARGUMENT 16u
+#define FILL_VA       0x8000C39Cu
+#define FILL_MAX      0x4000000u
 #define CE2_DATA_MAX  0x4000u
 #define CODEC_MAX     0x2000u
 #define PAGE          0x400u
@@ -42,6 +44,10 @@ static const uint32_t CE2_ENCODE_CODE[] = {
     0x0009A07Bu, 0x6583D045u, 0x64B3400Bu, 0x0009A001u, 0xE101DC40u, 0x89043910u,
 };
 
+static const uint32_t FILL_CODE[] = {
+    0x68532F86u, 0x89052668u, 0x74046143u, 0x76FC2182u, 0x0009AFF8u, 0x68F6000Bu,
+};
+
 static void codec_return(sh3_cpu_t *cpu, uint32_t value) {
     cpu->r[0] = value;
     cpu->pc = cpu->pr;
@@ -55,15 +61,16 @@ static bool code_matches(accel_rom_fn rom, void *context, uint32_t va, const uin
 bool accel_find(accel_rom_fn rom, void *context, accel_hooks_t *hooks) {
     if (code_matches(rom, context, CE1_DECODE_VA, CE1_DECODE_CODE, sizeof CE1_DECODE_CODE / 4) &&
         code_matches(rom, context, CE1_ENCODE_VA, CE1_ENCODE_CODE, sizeof CE1_ENCODE_CODE / 4)) {
-        *hooks = (accel_hooks_t){ 1, CE1_DECODE_VA, CE1_ENCODE_VA };
+        *hooks = (accel_hooks_t){ 1, CE1_DECODE_VA, CE1_ENCODE_VA, 0 };
         return true;
     }
     if (code_matches(rom, context, CE2_DECODE_VA, CE2_DECODE_CODE, sizeof CE2_DECODE_CODE / 4) &&
         code_matches(rom, context, CE2_ENCODE_VA, CE2_ENCODE_CODE, sizeof CE2_ENCODE_CODE / 4)) {
-        *hooks = (accel_hooks_t){ 2, CE2_DECODE_VA, CE2_ENCODE_VA };
+        *hooks = (accel_hooks_t){ 2, CE2_DECODE_VA, CE2_ENCODE_VA, 0 };
+        if (code_matches(rom, context, FILL_VA, FILL_CODE, sizeof FILL_CODE / 4)) hooks->fill_va = FILL_VA;
         return true;
     }
-    *hooks = (accel_hooks_t){ 0, 0, 0 };
+    *hooks = (accel_hooks_t){ 0, 0, 0, 0 };
     return false;
 }
 
@@ -216,5 +223,24 @@ bool accel_ce2_encode(sh3_cpu_t *cpu, const accel_memory_t *memory) {
     if (!guest_writable(memory, destination, (uint32_t)produced)) return false;
     guest_write(memory, destination, output, (uint32_t)produced);
     codec_return(cpu, (uint32_t)produced);
+    return true;
+}
+
+bool accel_fill32(sh3_cpu_t *cpu, const accel_memory_t *memory) {
+    uint32_t destination = cpu->r[4], value = cpu->r[5], length = cpu->r[6];
+    if ((destination & 3) || (length & 3) || length > FILL_MAX) return false;
+    if (!guest_writable(memory, destination, length)) return false;
+    uint8_t word[4] = { (uint8_t)value, (uint8_t)(value >> 8), (uint8_t)(value >> 16), (uint8_t)(value >> 24) };
+    for (uint32_t at = destination; at < destination + length;) {
+        uint32_t chunk = PAGE - (at & (PAGE - 1));
+        if (chunk > destination + length - at) chunk = destination + length - at;
+        uint8_t *host = memory->map(memory->context, at, true);
+        for (uint32_t i = 0; i < chunk; i += 4) memcpy(host + i, word, 4);
+        at += chunk;
+    }
+    if (length) cpu->r[1] = destination + length - 4;
+    cpu->r[4] = destination + length;
+    cpu->r[6] = 0;
+    cpu->pc = cpu->pr;
     return true;
 }

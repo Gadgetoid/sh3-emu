@@ -43,6 +43,7 @@
 #define AUDIO_GAP_CYCLES   (MACHINE_CLOCK_HZ / 20)
 #define AUDIO_CHANNEL      1
 #define TICK_COUNTER_PA    0xFFFFFE98u
+#define CASIO_LINK_STATUS_PA 0x10000122u
 #define SPIN_READS         16u
 #define SPIN_WINDOW        (MACHINE_CLOCK_HZ / 1000)
 #define DICTIONARY_MAX     (8u << 20)
@@ -66,6 +67,11 @@ typedef struct {
     char line[256];
     int length;
 } debug_line_t;
+
+typedef struct {
+    uint64_t window;
+    uint32_t reads;
+} spin_t;
 
 struct machine {
     sh3_cpu_t cpu;
@@ -105,8 +111,7 @@ struct machine {
     uint32_t serial_rx_head, serial_rx_count, serial_tx_count;
     uint64_t serial_tick_at;
     uint64_t run_target;
-    uint64_t spin_window;
-    uint32_t spin_reads;
+    spin_t tick_spin, link_spin;
     bool optimisations;
     accel_hooks_t accel;
     ce_t accel_ce;
@@ -245,15 +250,15 @@ static void serial_tick_event(machine_t *m) {
 
 static uint64_t next_event(machine_t *m);
 
-static void stall_tick_spin(machine_t *m) {
+static void stall_spin(machine_t *m, spin_t *spin) {
     uint64_t window = m->cpu.cycles / SPIN_WINDOW;
-    if (window != m->spin_window) {
-        m->spin_window = window;
-        m->spin_reads = 0;
+    if (window != spin->window) {
+        spin->window = window;
+        spin->reads = 0;
         return;
     }
-    if (++m->spin_reads < SPIN_READS) return;
-    m->spin_reads = 0;
+    if (++spin->reads < SPIN_READS) return;
+    spin->reads = 0;
     uint64_t when = (window + 1) * SPIN_WINDOW;
     uint64_t limit = next_event(m);
     if (limit < when) when = limit;
@@ -264,7 +269,7 @@ static void stall_tick_spin(machine_t *m) {
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
-        if (pa == TICK_COUNTER_PA && m->optimisations) stall_tick_spin(m);
+        if (pa == TICK_COUNTER_PA && m->optimisations) stall_spin(m, &m->tick_spin);
         if (sh7709_read(&m->chip, pa, size, value)) return true;
         if (m->casio && casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         if (m->casio && pa < P4_ROUTINES_END) {
@@ -286,6 +291,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     if (m->casio && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (pa == CASIO_LINK_STATUS_PA && m->optimisations) stall_spin(m, &m->link_spin);
         if (casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         note_unknown(m, "read ", pa, size, 0);
         *value = 0;
@@ -563,6 +569,10 @@ static bool run_codec(machine_t *m, uint32_t pc) {
 static bool on_watch(void *context, uint32_t pc) {
     machine_t *m = context;
     if (m->accel.system && (pc == m->accel.decode_va || pc == m->accel.encode_va)) return m->optimisations && run_codec(m, pc);
+    if (m->accel.fill_va && pc == m->accel.fill_va) {
+        accel_memory_t memory = { m, accel_map };
+        return m->optimisations && accel_fill32(&m->cpu, &memory);
+    }
     machine_logf(m, "watch: pc %08X r4=%08X r5=%08X r6=%08X r7=%08X pr=%08X\n", pc, m->cpu.r[4], m->cpu.r[5], m->cpu.r[6], m->cpu.r[7], m->cpu.pr);
     return false;
 }
@@ -573,6 +583,7 @@ static void sync_watches(machine_t *m) {
     if (!m->accel.system) return;
     m->cpu.watch[m->cpu.watch_count++] = m->accel.decode_va;
     m->cpu.watch[m->cpu.watch_count++] = m->accel.encode_va;
+    if (m->accel.fill_va) m->cpu.watch[m->cpu.watch_count++] = m->accel.fill_va;
 }
 
 static void trace_exception(void *context, uint32_t code, uint32_t pc, bool user) {
