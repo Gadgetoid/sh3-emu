@@ -18,7 +18,7 @@ No ROMs are included. Put them in the `roms` folder of the data folder (see GUI)
 
 | Machine | ROM | CE | Working |
 |---|---|---|---|
-| Casio Cassiopeia A-51 | a raw dump of its flash | 1.01 (Japanese) | desktop, keyboard, touch, backlight, PC Card, serial, dictionary ROM |
+| Casio Cassiopeia A-51 | a raw dump of its flash | 1.01 (Japanese) | desktop, keyboard, touch, sound, backlight, suspend and resume, PC Card, serial, dictionary ROM |
 | HP 320LX | a raw dump of its flash | 2.0 | setup wizard, keyboard, touch, sound, backlight, suspend and resume, serial |
 
 ## Running
@@ -119,6 +119,8 @@ In `sh3emu`, Machine > GDB Server listens on port 1234 (`gdb_port` in `sh3emu.in
 
 A ROM image without `hplib.dll` runs on the Casio Cassiopeia A-51: the Japanese Windows CE 1.01 H/PC. The image is mapped as flash at physical 0 and the CPU starts at the reset vector, as on the device. The one tested is `nk-a51-ce1.01.bin` (sha256 `d9fad038ec4f3349a0e3767244fb40122d9e2088c9269e2fdc838a11f5192d3b`), the device's 16 MB flash from 0 to the ROM header's `physlast` (the whole 16 MB also runs); `make test` uses it from `rom/nk-a51-ce1.01.bin` (or `CASIO_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard and on to the desktop, with the keyboard, the touch panel and the PC Card slot working: `--card` puts a CompactFlash card image in the slot, which CE mounts as `\Storage Card`. The AC adapter is reported as plugged in, so CE doesn't ask before using a card on battery. A cold boot waits in standby for the ON key, as the device does after its batteries go in; the emulator presses it.
 
+Sound comes from the board ASIC's own audio engine, not the SH-3's DMA and D/A as on the HP: `audio.dll` gives it two 2 KB buffers in DRAM at 0x0C006800, of 4-byte frames whose low halfword is the sample, at 8000, 11025 or 22050 Hz (ASIC 0x100 bits 5-4), with the current and next buffer at 0x170-0x17C, run at 0x160 bit 0, and a status at 0x164 and ASIC interrupt vector 12 at each switch. The ON key is the CPU's NMI: pressing it while running sets CE's power key flag and CE suspends, and pressing it in standby wakes it. Machine > Power Button or `--power` presses it; Start > サスペンド suspends too.
+
 ```
 ./headless rom/nk-a51-ce1.01.bin --seconds=20 --debug-output --png=wizard.png
 ./headless rom/nk-a51-ce1.01.bin --seconds=47 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 --tap=31:48:192:1.5 \
@@ -166,7 +168,7 @@ The keyboard is an 8x11 matrix scanned by the OAL through the CPU's ports. PS/2 
 
 Guest time is the instruction count at 58.98 MHz. When CE spins reading the tick timer's counter, as GetTickCount does while gwes animates a window, the emulator skips ahead to the next millisecond, so busy waits cost the host little at any CPU speed. The peripheral clock is 10 MHz on the Casio A-51 and 11.0592 MHz on the HP 320LX, which give both kernels their 25 ms tick and the HP's serial driver its exact baud rates.
 
-Not yet: sound on the Casio A-51, the IR port, the HP 320LX's PC Card slot, cards other than CompactFlash, and suspend on the Casio A-51.
+Not yet: the IR port, the HP 320LX's PC Card slot, and cards other than CompactFlash.
 
 ## GUI
 

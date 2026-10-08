@@ -492,7 +492,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     }
     sh3_set_interrupt(chip->cpu, best.level, best.code);
     chip->cpu->interrupt_source = best.source;
-    chip->cpu->standby_wakes_blocked = chip->variant == SH7709 && (chip->stbcr & STBCR_STBY);
+    chip->cpu->standby_wakes_blocked = (chip->stbcr & STBCR_STBY) != 0;
 }
 
 void sh7709_set_irl(sh7709_t *chip, uint32_t level) {

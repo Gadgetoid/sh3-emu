@@ -15,6 +15,7 @@
 #include "util/file.h"
 
 #define DRAM_PA            0x0C000000u
+#define NMI_CODE           0x1C0u
 #define DRAM_DEFAULT_SIZE  (16u << 20)
 #define DRAM_AREA_SIZE     (64u << 20)
 #define AREA_MASK          0x1FFFFFFFu
@@ -82,6 +83,7 @@ struct machine {
     uint8_t  *flash;
     casio_t   casio_board;
     casio_host_t casio_host;
+    casio_audio_t casio_audio;
     debug_line_t sci_line;
 
     cfcard_t  card;
@@ -92,6 +94,7 @@ struct machine {
     uint32_t  audio_head, audio_count;
     uint64_t  audio_clock, audio_last;
     int16_t   audio_level;
+    uint32_t  audio_phase;
     size_t    dictionary_size;
     char      pending_card[CARD_PATH_MAX];
     uint64_t  pending_card_at;
@@ -165,6 +168,15 @@ static void casio_trace(void *context, bool write, uint32_t pa, int size, uint32
 static void hp_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
     note_unknown(context, write ? "write board" : "read  board", pa, size, value);
 }
+
+static bool casio_read_memory(void *context, uint32_t pa, uint8_t *data, uint32_t length) {
+    machine_t *m = context;
+    if (pa - DRAM_PA >= DRAM_AREA_SIZE) return false;
+    for (uint32_t i = 0; i < length; i++) data[i] = m->dram[(pa - DRAM_PA + i) % m->dram_size];
+    return true;
+}
+
+static void casio_samples(void *context, const int16_t *samples, uint32_t count, uint32_t rate);
 
 static uint64_t casio_cycles(void *context) {
     return ((machine_t *)context)->cpu.cycles;
@@ -378,6 +390,13 @@ static void hp_dac_written(void *context, int channel, uint8_t value, uint64_t c
     m->audio_last = cycle;
 }
 
+static void casio_samples(void *context, const int16_t *samples, uint32_t count, uint32_t rate) {
+    machine_t *m = context;
+    for (uint32_t i = 0; i < count; i++) {
+        for (m->audio_phase += AUDIO_RATE; m->audio_phase >= rate; m->audio_phase -= rate) audio_push(m, samples[i]);
+    }
+}
+
 size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate) {
     size_t count = m->audio_count < max ? m->audio_count : max;
     for (size_t i = 0; i < count; i++) samples[i] = m->audio[(m->audio_head + i) % AUDIO_RING];
@@ -387,7 +406,14 @@ size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate)
     return count;
 }
 
-static void casio_power_key(machine_t *m) {
+static void casio_nmi_taken(void *context, uint32_t code) {
+    machine_t *m = context;
+    if (code != NMI_CODE) return;
+    m->chip.nmi = false;
+    sh7709_update_interrupts(&m->chip);
+}
+
+static void casio_first_wake(machine_t *m) {
     if (m->casio_board.powered_on || !m->cpu.sleeping || !(m->chip.stbcr & STBCR_STANDBY)) return;
     m->casio_board.powered_on = true;
     m->cpu.sleeping = false;
@@ -545,6 +571,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
+    m->cpu.on_interrupt = m->casio ? casio_nmi_taken : NULL;
     uint64_t cycles = m->cpu.cycles;
     sh3_reset(&m->cpu);
     if (keep_ram) {
@@ -567,6 +594,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     }
     if (m->casio) sh7709_set_scif_alias(&m->chip, CASIO_SCIF_PA, 0);
     casio_reset(&m->casio_board);
+    memset(&m->casio_audio, 0, sizeof m->casio_audio);
     hp320lx_reset(&m->hp_board);
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
@@ -578,6 +606,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->chip.transmit_context = m;
     m->audio_count = 0;
     m->audio_last = 0;
+    m->audio_phase = 0;
     if (m->hp) {
         m->chip.dac_written = hp_dac_written;
         m->chip.ports_written = hp_ports_written;
@@ -598,7 +627,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->hp = hp320lx_detect(rom, rom_size);
     m->casio = !m->hp;
     m->hp_host = (hp320lx_host_t){ hp_trace, board_debug_line, m };
-    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, m };
+    m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
     if (!load_flash(m, error, error_size)) {
         machine_destroy(m);
@@ -644,7 +673,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
         serial_tick_event(m);
         if (m->casio) {
             casio_update(&m->casio_board, &m->casio_host);
-            casio_power_key(m);
+            casio_first_wake(m);
         }
         uint64_t next = next_event(m);
         uint64_t until = next < target ? next : target;
@@ -755,6 +784,7 @@ void machine_touch(machine_t *m, bool down, int x, int y) {
     }
 }
 bool machine_suspended(machine_t *m) {
+    if (m->casio && (m->cpu.sr & SH3_SR_IMASK) != SH3_SR_IMASK) return false;
     return m->cpu.sleeping && (m->chip.stbcr & STBCR_STANDBY);
 }
 
@@ -882,7 +912,15 @@ uint64_t machine_rom_hash(machine_t *m) { return m->rom_hash; }
 void machine_power_button(machine_t *m, bool down) {
     if (m->hp && down && machine_suspended(m)) hp320lx_woken(&m->hp_board);
     if (m->hp) sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
-    if (m->casio && down) casio_power_key(m);
+    if (!m->casio) return;
+    casio_power_key(&m->casio_board, down);
+    if (!down) return;
+    if (!m->casio_board.powered_on) {
+        casio_first_wake(m);
+        return;
+    }
+    m->chip.nmi = true;
+    sh7709_update_interrupts(&m->chip);
 }
 
 int machine_rom_system(machine_t *m) {
@@ -922,7 +960,7 @@ void machine_dump_state(machine_t *m) {
 }
 
 #define STATE_FIELDS(X) \
-    X(cpu, m->cpu) X(chip, m->chip) X(card, m->card) X(card_path, m->card_path) X(casio_board, m->casio_board) X(hp_board, m->hp_board)
+    X(cpu, m->cpu) X(chip, m->chip) X(card, m->card) X(card_path, m->card_path) X(casio_board, m->casio_board) X(casio_audio, m->casio_audio) X(hp_board, m->hp_board)
 
 static bool write_bytes(gzFile file, const void *data, uint32_t size) {
     return size == 0 || gzwrite(file, data, size) == (int)size;
@@ -1054,7 +1092,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
     mailbox_clear(&m->mailbox);
-    m->cpu.on_interrupt = NULL;
+    m->cpu.on_interrupt = m->casio ? casio_nmi_taken : NULL;
     m->cpu.watch_count = m->watch_count;
     memcpy(m->cpu.watch, m->watch, sizeof m->watch);
     m->chip.cpu = &m->cpu;

@@ -19,6 +19,15 @@
 typedef void (*casio_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef uint64_t (*casio_cycles_fn)(void *context);
 typedef void (*casio_interrupt_fn)(void *context, uint32_t level, uint32_t code);
+typedef bool (*casio_memory_fn)(void *context, uint32_t pa, uint8_t *data, uint32_t length);
+typedef void (*casio_samples_fn)(void *context, const int16_t *samples, uint32_t count, uint32_t rate);
+
+typedef struct {
+    uint32_t start, end, next_start, next_end;
+    uint64_t ends_at;
+    uint16_t status;
+    bool     running, next_armed;
+} casio_audio_t;
 
 typedef struct {
     casio_trace_fn     trace;
@@ -28,6 +37,9 @@ typedef struct {
     uint32_t           cpu_hz;
     uint32_t           timer_hz;
     cfcard_slot_t     *card;
+    casio_audio_t     *audio;
+    casio_memory_fn    read_memory;
+    casio_samples_fn   samples;
     void              *context;
 } casio_host_t;
 
@@ -67,6 +79,7 @@ void casio_key(casio_t *board, const casio_host_t *host, uint8_t scancode, bool 
 void casio_serial_line(casio_t *board, const casio_host_t *host, bool dsr);
 uint32_t casio_serial_baud(const casio_t *board);
 bool casio_backlight(const casio_t *board);
+void casio_power_key(casio_t *board, bool down);
 uint32_t casio_scif_priority(const casio_t *board);
 void casio_card_changed(casio_t *board, const casio_host_t *host);
 void casio_touch(casio_t *board, const casio_host_t *host, bool down, int x, int y);

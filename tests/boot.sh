@@ -98,6 +98,7 @@ CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
 CASIO_TOUCH_HASH=29217d26a613e7975b69d46a1290d374c8c1981f63df873c1bb5a502277413d8
 CASIO_CARD_HASH=ac572c440c42daa5c55bc679024626b640cd6fc7eeecfb165a38bd9e81931544
+CASIO_WAKE_HASH=0156b2079d2223fd711dfe432cf5260f1b1ecc4dc37be80237caf1257db59118
 if [ -f "$CASIO_ROM" ]; then
     ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
     actual=$(shasum -a 256 "$OUT/casio.pgm" | cut -d' ' -f1)
@@ -117,6 +118,16 @@ if [ -f "$CASIO_ROM" ]; then
         --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --tap=64:334:68:0.08 --tap=64.2:334:68:0.08 --pgm="$OUT/casio_card.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_card.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_CARD_HASH" ]; then echo "ok   casio_card"; else echo "FAIL casio_card $actual"; exit 1; fi
+    ./headless "$CASIO_ROM" --seconds=86 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 --tap=31:48:192:1.5 \
+        --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --tap=46:447:227:0.2 --tap=48:447:227:0.2 \
+        --tap=50:447:227:0.2 --tap=52:447:227:0.2 --tap=54:447:227:0.2 --tap=56:447:227:0.2 --tap=58:447:227:0.2 \
+        --power=62 --power=67 --power=73 --power=78 --tap=82:25:232:0.2 --trace-pc --pgm="$OUT/casio_wake.pgm" > "$OUT/casio_wake.log" 2>&1
+    actual=$(shasum -a 256 "$OUT/casio_wake.pgm" | cut -d' ' -f1)
+    changes=$(grep "^t=" "$OUT/casio_wake.log" | sed 's/.* lcd=\([01]\).*/\1/' | uniq | tr -d '\n')
+    if [ "$actual" = "$CASIO_WAKE_HASH" ] && [ "$changes" = 10101 ]; then echo "ok   casio_wake"; else echo "FAIL casio_wake $actual $changes"; exit 1; fi
+    ./headless "$CASIO_ROM" --seconds=12 --wav="$OUT/casio_sound.wav" > /dev/null 2>&1
+    CASIO_SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 0.75 < len(a) / 22050 < 0.82 and max(map(abs, a)) > 2000 else 1)'
+    if python3 -c "$CASIO_SOUND" "$OUT/casio_sound.wav"; then echo "ok   casio_sound"; else echo "FAIL casio_sound"; exit 1; fi
     if ./headless "$CASIO_ROM" --seconds=22 --backlight=20 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   casio_backlight"; else echo "FAIL casio_backlight"; exit 1; fi
     gdb_check casio_gdb "$CASIO_ROM"
     cable_check casio_cable "$CASIO_ROM" 22

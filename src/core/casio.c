@@ -1,5 +1,6 @@
 #include "core/casio.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #define ASIC_PA         0x10000000u
@@ -74,11 +75,32 @@
 #define SERIAL_LINES    0x234u
 #define SERIAL_DSR      0x0004u
 #define SCIF_PRIORITY_SHIFT 4
+#define AUDIO_CONTROL   0x100u
+#define AUDIO_RATE_SHIFT 4
+#define AUDIO_RATE_MASK 0x3u
+#define AUDIO_RUN       0x160u
+#define AUDIO_PLAY      0x0001u
+#define AUDIO_STATUS    0x164u
+#define AUDIO_SWITCHED  0x0001u
+#define AUDIO_ENDED     0x0002u
+#define AUDIO_START_LOW 0x170u
+#define AUDIO_HIGH      0x172u
+#define AUDIO_END_LOW   0x174u
+#define AUDIO_NEXT_START_LOW 0x178u
+#define AUDIO_NEXT_HIGH 0x17Au
+#define AUDIO_NEXT_END_LOW 0x17Cu
+#define AUDIO_INTERRUPT 0x0020u
+#define AUDIO_VECTOR    12u
+#define AUDIO_FRAME_WORDS 2u
+#define AUDIO_FRAMES_MAX 0x4000u
+#define PHYSICAL_MASK   0x1FFFFFFFu
 
 #define ONCHIP_PA       0xFFFFFE00u
 #define ONCHIP_SIZE     0x80u
 #define ONCHIP_EXTRA_PA 0xFFFFD000u
 #define ONCHIP_PRIORITY_PA 0xFFFFFEE6u
+#define POWER_KEY_PA    0xFFFFFE04u
+#define POWER_KEY_HELD  0x0002u
 #define TIMER_PA        0xFFFFFE20u
 #define TIMER_STRIDE    0x20u
 #define TIMER_COUNT     0x00u
@@ -124,7 +146,9 @@ static bool asic_modelled(uint32_t offset) {
     switch (offset) {
         case LOCK_STATUS: case LOCK_LOW: case LOCK_HIGH: case POWER_STATUS: case INT_STATUS: case INT_CLEAR: case INT_MASK: case INT_VECTOR:
         case TOUCH_PEN_UP: case 0x098u: case 0x09Au: case 0x09Cu:
-        case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: case SERIAL_EDGES: case SERIAL_LINES: return true;
+        case KEY_ROWS: case KEY_COLUMNS: case SLOT0_STATUS: case SLOT1_STATUS: case SERIAL_EDGES: case SERIAL_LINES:
+        case AUDIO_CONTROL: case AUDIO_RUN: case AUDIO_STATUS: case AUDIO_START_LOW: case AUDIO_HIGH: case AUDIO_END_LOW:
+        case AUDIO_NEXT_START_LOW: case AUDIO_NEXT_HIGH: case AUDIO_NEXT_END_LOW: return true;
         default: return false;
     }
 }
@@ -160,6 +184,7 @@ static uint16_t asic_vector(const casio_t *board, const casio_host_t *host) {
     if (active & TOUCH_INTERRUPT) return TOUCH_VECTOR;
     if (active & CARD_CHANGE_INTERRUPT) return CARD_CHANGE_VECTOR;
     if (active & SERIAL_INTERRUPT) return SERIAL_VECTOR;
+    if (active & AUDIO_INTERRUPT) return AUDIO_VECTOR;
     return 0;
 }
 
@@ -180,6 +205,11 @@ static uint16_t asic_read(casio_t *board, const casio_host_t *host, uint32_t off
         case POWER_STATUS: return stored | POWER_AC;
         case INT_STATUS: return asic_requests(board, host);
         case INT_CLEAR: return 0;
+        case AUDIO_STATUS: {
+            uint16_t status = host->audio->status;
+            host->audio->status = 0;
+            return status;
+        }
         case TOUCH_PEN_UP: return board->pen_down ? 0 : 1;
         case INT_VECTOR: return asic_vector(board, host);
         case KEY_COLUMNS: return (uint16_t)~key_columns(board);
@@ -205,8 +235,77 @@ static void release_held_keys(casio_t *board) {
     }
 }
 
-static void asic_write(casio_t *board, uint32_t offset, uint16_t value) {
+static uint32_t audio_rate(const casio_t *board) {
+    static const uint32_t rates[] = { 8000, 22050, 11025, 11025 };
+    return rates[(board->asic[AUDIO_CONTROL / 2] >> AUDIO_RATE_SHIFT) & AUDIO_RATE_MASK];
+}
+
+static uint32_t audio_frames(uint32_t start, uint32_t end) {
+    return end >= start ? (end - start + 1) / AUDIO_FRAME_WORDS : 0;
+}
+
+static uint64_t audio_duration(const casio_t *board, const casio_host_t *host, uint32_t start, uint32_t end) {
+    uint64_t frames = audio_frames(start, end);
+    return frames ? frames * host->cpu_hz / audio_rate(board) : 1;
+}
+
+static void audio_start(casio_t *board, const casio_host_t *host) {
+    casio_audio_t *audio = host->audio;
+    uint32_t high = (uint32_t)board->asic[AUDIO_HIGH / 2] << 16;
+    audio->start = high | board->asic[AUDIO_START_LOW / 2];
+    audio->end = high | board->asic[AUDIO_END_LOW / 2];
+    audio->running = true;
+    audio->ends_at = host->cycles(host->context) + audio_duration(board, host, audio->start, audio->end);
+}
+
+static void audio_play_buffer(const casio_t *board, const casio_host_t *host) {
+    const casio_audio_t *audio = host->audio;
+    uint32_t frames = audio_frames(audio->start, audio->end);
+    if (!frames || frames > AUDIO_FRAMES_MAX || !host->read_memory || !host->samples) return;
+    uint32_t length = frames * AUDIO_FRAME_WORDS * 2;
+    uint8_t *data = malloc(length);
+    int16_t *samples = malloc(frames * sizeof *samples);
+    if (data && samples && host->read_memory(host->context, (audio->start << 1) & PHYSICAL_MASK, data, length)) {
+        for (uint32_t i = 0; i < frames; i++) samples[i] = (int16_t)(data[i * 4] | data[i * 4 + 1] << 8);
+        host->samples(host->context, samples, frames, audio_rate(board));
+    }
+    free(data);
+    free(samples);
+}
+
+static void audio_advance(casio_t *board, const casio_host_t *host) {
+    casio_audio_t *audio = host->audio;
+    while (audio->running && host->cycles(host->context) >= audio->ends_at) {
+        audio_play_buffer(board, host);
+        if (audio->next_armed) {
+            audio->start = audio->next_start;
+            audio->end = audio->next_end;
+            audio->next_armed = false;
+            audio->status |= AUDIO_SWITCHED;
+            audio->ends_at += audio_duration(board, host, audio->start, audio->end);
+        } else {
+            audio->running = false;
+            audio->status |= AUDIO_ENDED;
+        }
+        board->latched_requests |= AUDIO_INTERRUPT;
+    }
+}
+
+static void asic_write(casio_t *board, const casio_host_t *host, uint32_t offset, uint16_t value) {
     switch (offset) {
+        case AUDIO_RUN:
+            board->asic[offset / 2] = value;
+            if ((value & AUDIO_PLAY) && !host->audio->running) audio_start(board, host);
+            else if (!(value & AUDIO_PLAY)) host->audio->running = false;
+            break;
+        case AUDIO_NEXT_END_LOW: {
+            board->asic[offset / 2] = value;
+            uint32_t high = (uint32_t)board->asic[AUDIO_NEXT_HIGH / 2] << 16;
+            host->audio->next_start = high | board->asic[AUDIO_NEXT_START_LOW / 2];
+            host->audio->next_end = high | value;
+            host->audio->next_armed = true;
+            break;
+        }
         case KEY_ROWS:
             if (value == FIRST_ROW) {
                 board->scans++;
@@ -366,10 +465,10 @@ bool casio_write(casio_t *board, const casio_host_t *host, uint32_t pa, int size
         uint16_t old = asic_read(board, host, offset);
         value = (pa & 1) ? (old & 0x00FFu) | (value & 0xFFu) << 8 : (old & 0xFF00u) | (value & 0xFFu);
     }
-    asic_write(board, offset, (uint16_t)value);
-    if (size == 4) asic_write(board, offset + 2, (uint16_t)(value >> 16));
+    asic_write(board, host, offset, (uint16_t)value);
+    if (size == 4) asic_write(board, host, offset + 2, (uint16_t)(value >> 16));
     if (!asic_modelled(offset) && host->trace) host->trace(host->context, true, pa, size, value);
-    if (offset == INT_MASK || offset == INT_CLEAR || offset == KEY_ROWS || offset == SERIAL_EDGES) casio_update(board, host);
+    if (offset == INT_MASK || offset == INT_CLEAR || offset == KEY_ROWS || offset == SERIAL_EDGES || offset == AUDIO_RUN) casio_update(board, host);
     return true;
 }
 
@@ -378,6 +477,7 @@ static bool timer_pending(const casio_timer_t *timer, const casio_host_t *host) 
 }
 
 void casio_update(casio_t *board, const casio_host_t *host) {
+    audio_advance(board, host);
     uint32_t level = 0, code = 0;
     for (int index = 0; index < CASIO_TIMERS; index++) {
         uint32_t priority = (board->onchip_priority >> (12 - 4 * index)) & 15;
@@ -399,6 +499,7 @@ uint64_t casio_next_event(const casio_t *board, const casio_host_t *host) {
         uint64_t cycle = (tick * host->cpu_hz + host->timer_hz - 1) / host->timer_hz;
         if (cycle < next) next = cycle;
     }
+    if (host->audio->running && host->audio->ends_at < next) next = host->audio->ends_at;
     return next;
 }
 
@@ -461,6 +562,11 @@ uint32_t casio_scif_priority(const casio_t *board) {
 void casio_card_changed(casio_t *board, const casio_host_t *host) {
     board->latched_requests |= CARD_CHANGE_INTERRUPT;
     casio_update(board, host);
+}
+
+void casio_power_key(casio_t *board, bool down) {
+    uint16_t *status = &board->onchip[(POWER_KEY_PA - ONCHIP_PA) / 2];
+    *status = down ? (uint16_t)(*status | POWER_KEY_HELD) : (uint16_t)(*status & ~POWER_KEY_HELD);
 }
 
 bool casio_backlight(const casio_t *board) {
