@@ -449,7 +449,7 @@ int main(int argc, char **argv) {
             serial_link_open(&serial, SERIAL_NETWORK, NULL);
             run.net_at = run.replug_at + 2;
         }
-        advance(machine, slice);
+        advance(machine, total - done < slice ? total - done : slice);
         pace(machine, run.realtime, wall_start, cycles_start);
         if (wav_file) {
             uint32_t rate;
