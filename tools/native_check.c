@@ -18,6 +18,13 @@
 #define OTHER_VA      (DATA_VA + 0x2000u)
 #define TABLE_VA      (DATA_VA + 0x4000u)
 #define TARGET_VA     (DATA_VA + 0x8000u)
+#define MODULE_VA     (DATA_VA + 0xC000u)
+#define EXPORTS_RVA   0xE000u
+#define FUNCTIONS_RVA 0xD000u
+#define ORDINALS_RVA  0xD400u
+#define NAME_LIST_RVA 0xD800u
+#define NAMES_RVA     0x1000u
+#define NAME_SLOT     16u
 #define RUN_CYCLES    5000000u
 #define TRIALS        4000
 #define CODE_WORDS    24
@@ -60,7 +67,7 @@ static const uint8_t *rom_at(void *context, uint32_t pa, uint32_t length) {
     return pa < rom_size && length <= rom_size - pa ? rom + pa : NULL;
 }
 
-typedef enum { KIND_OTHER, KIND_FILL, KIND_STRCMP, KIND_PURGE, KIND_WIDEN, KIND_RANGE, KIND_WCSLEN } kind_t;
+typedef enum { KIND_OTHER, KIND_FILL, KIND_STRCMP, KIND_PURGE, KIND_WIDEN, KIND_RANGE, KIND_WCSLEN, KIND_EXPORT } kind_t;
 
 static kind_t kind_of(native_fn run) {
     if (run == native_fill32) return KIND_FILL;
@@ -69,6 +76,7 @@ static kind_t kind_of(native_fn run) {
     if (run == native_widen) return KIND_WIDEN;
     if (run == native_range_lookup) return KIND_RANGE;
     if (run == native_wcslen) return KIND_WCSLEN;
+    if (run == native_export_lookup) return KIND_EXPORT;
     return KIND_OTHER;
 }
 
@@ -118,6 +126,11 @@ static void put16(uint32_t va, uint32_t value) {
     ram[va + 1] = (uint8_t)(value >> 8);
 }
 
+static void put32(uint32_t va, uint32_t value) {
+    put16(va, value);
+    put16(va + 2, value >> 16);
+}
+
 static void random_string(uint32_t va, int length, int alphabet) {
     for (int i = 0; i < length; i++) ram[va + (uint32_t)i] = (uint8_t)(1 + rand() % alphabet);
     ram[va + (uint32_t)length] = 0;
@@ -164,6 +177,29 @@ static void prepare(kind_t kind, sh3_cpu_t *cpu, int trial) {
         cpu->r[6] = trial % 7 ? random_word() % (next + 20) : random_word();
         break;
     }
+    case KIND_EXPORT: {
+        int count = rand() % 60, functions = count + rand() % 4 - 2, chosen = rand() % (count + 2);
+        put32(MODULE_VA + 80, DATA_VA);
+        put32(MODULE_VA + 124, trial % 17 ? EXPORTS_RVA : 0);
+        put32(MODULE_VA + 128, 40);
+        put32(DATA_VA + EXPORTS_RVA + 20, (uint32_t)(functions < 0 ? 0 : functions));
+        put32(DATA_VA + EXPORTS_RVA + 24, (uint32_t)count);
+        put32(DATA_VA + EXPORTS_RVA + 28, FUNCTIONS_RVA);
+        put32(DATA_VA + EXPORTS_RVA + 32, NAME_LIST_RVA);
+        put32(DATA_VA + EXPORTS_RVA + 36, ORDINALS_RVA);
+        for (int i = 0; i < count; i++) {
+            uint32_t name = NAMES_RVA + (uint32_t)i * NAME_SLOT;
+            random_string(DATA_VA + name, 1 + rand() % (NAME_SLOT - 2), 3);
+            put32(DATA_VA + NAME_LIST_RVA + (uint32_t)i * 4, name);
+            put16(DATA_VA + ORDINALS_RVA + (uint32_t)i * 2, (uint32_t)(rand() % 64));
+        }
+        for (int i = 0; i < 64; i++) put32(DATA_VA + FUNCTIONS_RVA + (uint32_t)i * 4, 0x100u + random_word() % 0xE00u);
+        if (chosen < count) memcpy(ram + SOURCE_VA, ram + DATA_VA + NAMES_RVA + (uint32_t)chosen * NAME_SLOT, NAME_SLOT);
+        else random_string(SOURCE_VA, 1 + rand() % 12, 3);
+        cpu->r[4] = MODULE_VA;
+        cpu->r[5] = SOURCE_VA;
+        break;
+    }
     case KIND_FILL:
         cpu->r[4] = TARGET_VA;
         cpu->r[5] = random_word();
@@ -175,7 +211,7 @@ static void prepare(kind_t kind, sh3_cpu_t *cpu, int trial) {
 }
 
 static const char *kind_name(kind_t kind) {
-    static const char *names[] = { "other", "fill", "strcmp", "purge", "widen", "range", "wcslen" };
+    static const char *names[] = { "other", "fill", "strcmp", "purge", "widen", "range", "wcslen", "export" };
     return names[kind];
 }
 
@@ -206,6 +242,15 @@ static int check_hook(optimiser_t *optimiser, int index) {
         if (!optimiser_call(optimiser, &native, hook->va)) {
             declined++;
             continue;
+        }
+        if (native.pc != RETURN_VA) {
+            sh3_cpu_t *saved = malloc(sizeof guest);
+            memcpy(saved, &guest, sizeof guest);
+            guest = native;
+            sh3_run(&guest, RUN_CYCLES);
+            native = guest;
+            memcpy(&guest, saved, sizeof guest);
+            free(saved);
         }
         if (!same_result(&guest, &native, guest_data) && failures++ < 3) {
             printf("  %s trial %d: guest r0 %08X sr %08X, native r0 %08X sr %08X\n", kind_name(kind), trial, guest.r[0], guest.sr, native.r[0], native.sr);
