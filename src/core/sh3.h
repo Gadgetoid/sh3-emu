@@ -116,7 +116,7 @@ struct sh3_cpu {
     uint32_t watch[SH3_WATCH_MAX];
     int watch_count;
     uint32_t watch_filter[128];
-    void (*on_watch)(void *context, uint32_t pc);
+    bool (*on_watch)(void *context, uint32_t pc);
     void (*on_interrupt)(void *context, uint32_t code);
     sh3_debug_t *debug;
     bool (*on_trapa)(void *context, uint32_t number);

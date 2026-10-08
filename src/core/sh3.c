@@ -67,7 +67,7 @@ void sh3_reset(sh3_cpu_t *cpu) {
     uint32_t speed = cpu->speed;
     sh3_debug_t *debug = cpu->debug;
     bool (*on_trapa)(void *, uint32_t) = cpu->on_trapa;
-    void (*on_watch)(void *, uint32_t) = cpu->on_watch;
+    bool (*on_watch)(void *, uint32_t) = cpu->on_watch;
     void (*on_interrupt)(void *, uint32_t) = cpu->on_interrupt;
     memset(cpu, 0, sizeof *cpu);
     cpu->bus = bus;
@@ -1016,9 +1016,10 @@ void sh3_run(sh3_cpu_t *cpu, uint64_t until_cycle) {
         uint16_t op;
         if (!fetch(cpu, current_pc, &op)) continue;
         uint32_t bit = watch_bit(current_pc);
-        for (int w = 0; (cpu->watch_filter[bit >> 5] >> (bit & 31) & 1) && w < cpu->watch_count; w++)
-            if (current_pc == cpu->watch[w]) cpu->on_watch(cpu->bus.context, current_pc);
-        if (cpu->fault) continue;
+        bool handled = false;
+        for (int w = 0; (cpu->watch_filter[bit >> 5] >> (bit & 31) & 1) && w < cpu->watch_count && !handled; w++)
+            if (current_pc == cpu->watch[w]) handled = cpu->on_watch(cpu->bus.context, current_pc);
+        if (cpu->fault || handled) continue;
         if (cpu->debug) {
             if (debug_stops_before(cpu, current_pc)) {
                 cpu->debug->stop = true;

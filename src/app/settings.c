@@ -28,7 +28,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 }
 
 settings_t settings_load(void) {
-    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1, .gdb_port = GDB_DEFAULT_PORT, .serial_tcp_port = SERIAL_TCP_DEFAULT_PORT, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
+    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .optimisations = SETTINGS_DEFAULT_OPTIMISATIONS, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1, .gdb_port = GDB_DEFAULT_PORT, .serial_tcp_port = SERIAL_TCP_DEFAULT_PORT, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
     char path[1100];
     app_settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -43,6 +43,7 @@ settings_t settings_load(void) {
             screen_parse(size, &settings.screen);
         }
         else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
+        else if (sscanf(line, "optimisations=%u", &value) == 1) settings.optimisations = value != 0;
         else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
         else if (sscanf(line, "scale=%u", &value) == 1 && settings_scale_index(value) >= 0) settings.scale = value;
         else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
@@ -70,8 +71,8 @@ void settings_save(const settings_t *settings) {
     app_settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\nserial_tcp_port=%u\nuser_agent=%s\n", settings->memory,
-            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\noptimisations=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\nserial_tcp_port=%u\nuser_agent=%s\n", settings->memory,
+            settings->screen.width, settings->screen.height, settings->speed, settings->optimisations, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
             settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness, settings->gdb_server, settings->gdb_port, settings->serial_tcp_port, settings->user_agent);
     fclose(file);
 }

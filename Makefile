@@ -57,7 +57,7 @@ else
 SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_link.c
 endif
 
-SRC_MACHINE = src/core/sh3.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
+SRC_MACHINE = src/core/sh3.c src/core/accel.c src/core/lz.c src/core/lzw.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
 SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c src/rapi/debugmgr_images.c
 SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/capture.c src/app/desktop.c src/app/host.c src/app/input.c src/app/launch.c src/app/library.c src/app/log.c src/app/machine_session.c src/app/notices.c src/app/paths.c src/app/picks.c src/app/rom_catalog.c src/app/runner.c src/app/serial_service.c src/app/settings.c src/app/snapshot_store.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c src/frontend/common/dialog.c src/frontend/common/menu_queue.c $(SRC_MENU)
 

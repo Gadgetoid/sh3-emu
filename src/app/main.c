@@ -167,6 +167,7 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
 static bool start_session(app_t *app, machine_session_t *session, const profile_t *profile, const char *state_file, bool fresh,
                           char *notice, size_t notice_size) {
     if (!machine_session_start(session, profile, app->settings.speed, state_file, fresh, &app->snapshots, &app->session_output, notice, notice_size)) return false;
+    machine_set_optimisations(session->machine, app->settings.optimisations != 0);
     debug_log_start(profile->rom);
     return true;
 }
@@ -507,6 +508,11 @@ static void handle_menu(app_t *app, int item, int *switch_to, bool *events_seen)
         machine_set_speed(machine, settings->speed);
         settings_save(settings);
         break;
+    case MENU_OPTIMISATIONS:
+        settings->optimisations = !settings->optimisations;
+        machine_set_optimisations(machine, settings->optimisations != 0);
+        settings_save(settings);
+        break;
     case MENU_INSERT_CARD: {
         static const SDL_DialogFileFilter filters[] = { { "Card images", "img;bin;raw" }, { "All files", "*" } };
         SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_CARD, app->window, filters, 2, NULL, false);
@@ -748,6 +754,7 @@ static void update_menus(app_t *app, bool device_online) {
     menu_set_checked(MENU_SPEED_2, machine_speed(machine) == 2);
     menu_set_checked(MENU_SPEED_4, machine_speed(machine) == 4);
     menu_set_checked(MENU_SPEED_8, machine_speed(machine) == 8);
+    menu_set_checked(MENU_OPTIMISATIONS, machine_optimisations(machine));
 }
 
 static void step_buttons(app_t *app) {

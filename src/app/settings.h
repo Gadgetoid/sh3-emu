@@ -10,11 +10,17 @@
 #define RAPI_DEFAULT_PORT       9990
 #define SERIAL_TCP_DEFAULT_PORT 9991
 #define SETTINGS_SCALE_COUNT    5
+#ifdef __ANDROID__
+#define SETTINGS_DEFAULT_OPTIMISATIONS 1
+#else
+#define SETTINGS_DEFAULT_OPTIMISATIONS 0
+#endif
 
 typedef struct {
     uint32_t memory;
     screen_size_t screen;
     uint32_t speed;
+    uint32_t optimisations;
     uint32_t host_time;
     uint32_t scale;
     uint32_t system;

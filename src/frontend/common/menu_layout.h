@@ -76,6 +76,8 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_SPEED_2, "2x", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SPEED_4, "4x", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_SPEED_8, "8x", 0, 0 },
+    { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
+    { MENU_ENTRY_ITEM, MENU_OPTIMISATIONS, "Optimisations", 0, 0 },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
 #ifndef __ANDROID__

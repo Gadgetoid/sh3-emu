@@ -7,7 +7,9 @@
 #include <time.h>
 #include <zlib.h>
 
+#include "core/accel.h"
 #include "core/casio.h"
+#include "core/ce.h"
 #include "core/hp320lx.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
@@ -105,6 +107,9 @@ struct machine {
     uint64_t run_target;
     uint64_t spin_window;
     uint32_t spin_reads;
+    bool optimisations;
+    accel_hooks_t accel;
+    ce_t accel_ce;
 
     mailbox_t mailbox;
     uint32_t mailbox_fault_va;
@@ -259,7 +264,7 @@ static void stall_tick_spin(machine_t *m) {
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
-        if (pa == TICK_COUNTER_PA) stall_tick_spin(m);
+        if (pa == TICK_COUNTER_PA && m->optimisations) stall_tick_spin(m);
         if (sh7709_read(&m->chip, pa, size, value)) return true;
         if (m->casio && casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         if (m->casio && pa < P4_ROUTINES_END) {
@@ -534,9 +539,40 @@ mailbox_t *machine_mailbox(machine_t *m) {
     return &m->mailbox;
 }
 
-static void on_watch(void *context, uint32_t pc) {
+static uint8_t *accel_map(void *context, uint32_t va, bool write) {
     machine_t *m = context;
+    uint32_t pa;
+    if (!ce_translate_current(&m->accel_ce, va, write, &pa)) return NULL;
+    if (pa - DRAM_PA < DRAM_AREA_SIZE) return m->dram + (pa - DRAM_PA) % m->dram_size;
+    if (!write && pa < FLASH_SIZE) return m->flash + pa;
+    return NULL;
+}
+
+static const uint8_t *accel_rom(void *context, uint32_t pa, uint32_t length) {
+    machine_t *m = context;
+    return pa < FLASH_SIZE && length <= FLASH_SIZE - pa ? m->flash + pa : NULL;
+}
+
+static bool run_codec(machine_t *m, uint32_t pc) {
+    accel_memory_t memory = { m, accel_map };
+    bool decode = pc == m->accel.decode_va;
+    if (m->accel.system == 1) return decode ? accel_ce1_decode(&m->cpu, &memory) : accel_ce1_encode(&m->cpu, &memory);
+    return decode ? accel_ce2_decode(&m->cpu, &memory) : accel_ce2_encode(&m->cpu, &memory);
+}
+
+static bool on_watch(void *context, uint32_t pc) {
+    machine_t *m = context;
+    if (m->accel.system && (pc == m->accel.decode_va || pc == m->accel.encode_va)) return m->optimisations && run_codec(m, pc);
     machine_logf(m, "watch: pc %08X r4=%08X r5=%08X r6=%08X r7=%08X pr=%08X\n", pc, m->cpu.r[4], m->cpu.r[5], m->cpu.r[6], m->cpu.r[7], m->cpu.pr);
+    return false;
+}
+
+static void sync_watches(machine_t *m) {
+    memcpy(m->cpu.watch, m->watch, sizeof m->watch);
+    m->cpu.watch_count = m->watch_count;
+    if (!m->accel.system) return;
+    m->cpu.watch[m->cpu.watch_count++] = m->accel.decode_va;
+    m->cpu.watch[m->cpu.watch_count++] = m->accel.encode_va;
 }
 
 static void trace_exception(void *context, uint32_t code, uint32_t pc, bool user) {
@@ -587,8 +623,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->mailbox_page_count = 0;
     m->agent_poll_at = 0;
     m->cpu.pc = m->entry;
-    m->cpu.watch_count = m->watch_count;
-    memcpy(m->cpu.watch, m->watch, sizeof m->watch);
+    sync_watches(m);
     if (keep_ram) {
         sh7709_reset(&m->chip);
     } else {
@@ -637,6 +672,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
         machine_destroy(m);
         return NULL;
     }
+    accel_find(accel_rom, m, &m->accel);
+    ce_init(&m->accel_ce, m);
     m->dram_size_next = DRAM_DEFAULT_SIZE;
     reset_machine(m, false);
     return m;
@@ -927,8 +964,7 @@ void machine_soft_reset(machine_t *m) {
 bool machine_watch_pc(machine_t *m, uint32_t va) {
     if (m->watch_count >= MACHINE_WATCH_MAX) return false;
     m->watch[m->watch_count++] = va;
-    m->cpu.watch_count = m->watch_count;
-    memcpy(m->cpu.watch, m->watch, sizeof m->watch);
+    sync_watches(m);
     return true;
 }
 
@@ -949,6 +985,12 @@ void machine_set_speed(machine_t *m, uint32_t multiplier) {
 }
 uint32_t machine_speed(machine_t *m) {
     return m->cpu.speed ? m->cpu.speed : 1;
+}
+void machine_set_optimisations(machine_t *m, bool optimisations) {
+    m->optimisations = optimisations;
+}
+bool machine_optimisations(machine_t *m) {
+    return m->optimisations;
 }
 uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
@@ -1139,8 +1181,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.on_trapa = on_trapa;
     mailbox_clear(&m->mailbox);
     m->cpu.on_interrupt = m->casio ? casio_nmi_taken : NULL;
-    m->cpu.watch_count = m->watch_count;
-    memcpy(m->cpu.watch, m->watch, sizeof m->watch);
+    sync_watches(m);
     m->chip.cpu = &m->cpu;
     cfcard_sanitize(&m->card);
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;

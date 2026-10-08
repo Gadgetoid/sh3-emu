@@ -115,6 +115,7 @@ CASIO_HASH=6122ca760147dfd2806e4b32bb8df2c7b0d973b99a4d724c5e50a4fad94851b2
 CASIO_ENTER_HASH=cb4d8287eeb33e024c267b33a87ccf1acc1d2263f76d10996fc178ec45d60781
 CASIO_TOUCH_HASH=29217d26a613e7975b69d46a1290d374c8c1981f63df873c1bb5a502277413d8
 CASIO_CARD_HASH=ac572c440c42daa5c55bc679024626b640cd6fc7eeecfb165a38bd9e81931544
+CASIO_OPTIMISED_HASH=2aaad9902d4aafc158d1ce9d61f292a3180a28bb4c394e87e102c817bcab8eca
 CASIO_WAKE_HASH=0156b2079d2223fd711dfe432cf5260f1b1ecc4dc37be80237caf1257db59118
 if [ -f "$CASIO_ROM" ]; then
     ./headless "$CASIO_ROM" --debug-output --seconds=20 --pgm="$OUT/casio.pgm" > "$OUT/casio.log" 2>&1
@@ -135,6 +136,13 @@ if [ -f "$CASIO_ROM" ]; then
         --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --tap=64:334:68:0.08 --tap=64.2:334:68:0.08 --pgm="$OUT/casio_card.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/casio_card.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$CASIO_CARD_HASH" ]; then echo "ok   casio_card"; else echo "FAIL casio_card $actual"; exit 1; fi
+    sh tools/mkcard.sh "$OUT/casio.img" 16 "$OUT/casiocard/cardfiles" > /dev/null
+    ./headless "$CASIO_ROM" --optimisations --card="$OUT/casio.img" --seconds=68 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 \
+        --tap=31:48:192:1.5 --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --tap=46:447:227:0.2 \
+        --tap=48:447:227:0.2 --tap=50:447:227:0.2 --tap=52:447:227:0.2 --tap=54:447:227:0.2 --tap=56:447:227:0.2 --tap=58:447:227:0.2 \
+        --tap=61:40:30:0.08 --tap=61.2:40:30:0.08 --tap=64:334:68:0.08 --tap=64.2:334:68:0.08 --pgm="$OUT/casio_optimised.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/casio_optimised.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$CASIO_OPTIMISED_HASH" ]; then echo "ok   casio_optimised"; else echo "FAIL casio_optimised $actual"; exit 1; fi
     ./headless "$CASIO_ROM" --seconds=86 --key=20:5A --key=23:5A --tap=25:240:120:1.5 --tap=28:48:48:1.5 --tap=31:48:192:1.5 \
         --tap=34:432:192:1.5 --tap=37:432:48:1.5 --key=40:5A --tap=44:447:227:0.2 --tap=46:447:227:0.2 --tap=48:447:227:0.2 \
         --tap=50:447:227:0.2 --tap=52:447:227:0.2 --tap=54:447:227:0.2 --tap=56:447:227:0.2 --tap=58:447:227:0.2 \
@@ -167,6 +175,7 @@ fi
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
 HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
 HP_TYPE_HASH=471755752e81af0bfb35466b7b263f62133d45399eb2b6b1cd0eff2ec2706f12
+HP_OPTIMISED_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
 HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
 HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
 if [ -f "$HP_ROM" ]; then
@@ -180,6 +189,10 @@ if [ -f "$HP_ROM" ]; then
         --tap=33:512:192:1.5 --tap=36:512:48:1.5 --key=38:5A --tap=42:216:47:0.2 --pgm="$OUT/hp_touch.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/hp_touch.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_TOUCH_HASH" ]; then echo "ok   hp_touch"; else echo "FAIL hp_touch $actual"; exit 1; fi
+    ./headless "$HP_ROM" --optimisations --seconds=45 --key=20.5:5A --key=22:5A --tap=24:320:120:1.5 --tap=27:128:48:1.5 --tap=30:128:192:1.5 \
+        --tap=33:512:192:1.5 --tap=36:512:48:1.5 --key=38:5A --tap=42:216:47:0.2 --pgm="$OUT/hp_optimised.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/hp_optimised.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$HP_OPTIMISED_HASH" ]; then echo "ok   hp_optimised"; else echo "FAIL hp_optimised $actual"; exit 1; fi
     ./headless "$HP_ROM" --seconds=32 --key=20:9F --key=21:3C --key=25:5A --key=28:9F --trace-pc --pgm="$OUT/hp_wake.pgm" > "$OUT/hp_wake.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp_wake.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_WAKE_HASH" ] && grep -q "^t=2[2-4].* lcd=0" "$OUT/hp_wake.log"; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi

@@ -94,15 +94,20 @@ static bool find_process_stride(ce_t *ce) {
     return false;
 }
 
-bool ce_ready(ce_t *ce) {
-    if (ce->kdata && kdata_valid(ce, ce->kdata) && ce->process_stride) return true;
+static bool kdata_ready(ce_t *ce) {
+    if (ce->kdata && kdata_valid(ce, ce->kdata)) return true;
     ce->kdata = 0;
     ce->process_stride = 0;
-    if (!find_kdata(ce) || !find_process_stride(ce)) return false;
+    if (!find_kdata(ce)) return false;
     uint32_t page_size, pfn_mask;
     ce->page_size = kinfo(ce, KINX_PAGESIZE, &page_size) ? page_size : 0x400;
     ce->pfn_mask = kinfo(ce, KINX_PFN_MASK, &pfn_mask) ? pfn_mask : ~(ce->page_size - 1);
     return true;
+}
+
+bool ce_ready(ce_t *ce) {
+    if (!kdata_ready(ce)) return false;
+    return ce->process_stride || find_process_stride(ce);
 }
 
 int ce_current_process(ce_t *ce) {
@@ -117,7 +122,7 @@ int ce_current_process(ce_t *ce) {
 
 static bool section_translate(ce_t *ce, uint32_t va, bool write, uint32_t *pa) {
     uint32_t section, block, page;
-    if (!ce_ready(ce)) return false;
+    if (!kdata_ready(ce)) return false;
     if (!physical_word(ce, ce->kdata + KDATA_SECTIONS + (va >> 25) * 4, &section) || !section) return false;
     if (!kernel_word(ce, section + ((va >> 16) & 0x1FF) * 4, &block) || block <= BLOCK_RESERVED) return false;
     uint32_t index = (va & 0xFFFFu) / ce->page_size;
@@ -131,6 +136,14 @@ static bool tlb_translate(ce_t *ce, uint32_t va, bool write, uint32_t *pa) {
     if (!sh3_translate(machine_cpu(ce->machine), va, write, pa)) return false;
     *pa &= AREA_MASK;
     return true;
+}
+
+bool ce_translate_current(ce_t *ce, uint32_t va, bool write, uint32_t *pa) {
+    if (va >= P1_BASE && va < P3_BASE) {
+        *pa = va & AREA_MASK;
+        return true;
+    }
+    return tlb_translate(ce, va, write, pa) || (va < P3_BASE && section_translate(ce, va, write, pa));
 }
 
 bool ce_translate(ce_t *ce, uint32_t va, int process, bool write, uint32_t *pa) {

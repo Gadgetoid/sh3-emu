@@ -34,6 +34,7 @@ int  ce_current_process(ce_t *ce);
 bool ce_process_name(ce_t *ce, int process, char *name, size_t size);
 int  ce_find_process(ce_t *ce, const char *name);
 bool ce_translate(ce_t *ce, uint32_t va, int process, bool write, uint32_t *pa);
+bool ce_translate_current(ce_t *ce, uint32_t va, bool write, uint32_t *pa);
 bool ce_read(ce_t *ce, uint32_t va, int process, uint8_t *data, uint32_t length);
 bool ce_write(ce_t *ce, uint32_t va, int process, const uint8_t *data, uint32_t length);
 bool ce_read_word(ce_t *ce, uint32_t va, int process, uint32_t *value);

@@ -4,7 +4,7 @@
 #include <string.h>
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED,
+    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED, LAUNCH_OPTIMISATIONS,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_TCP, LAUNCH_USER_AGENT, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
@@ -17,6 +17,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image", 0 },
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
+    [LAUNCH_OPTIMISATIONS] = { "optimisations", "on|off", "run CE's ROM compression natively and skip busy-waits on the clock, and remember that", 0 },
     [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
     [LAUNCH_NET] = { "net", NULL, "plug COM1 into the PPP network (Devices > Serial Port), and remember that", 0 },
     [LAUNCH_TCP] = { "tcp", "[PORT]", "offer COM1 as raw bytes on a TCP port on all interfaces (9991, or PORT, kept in sh3emu.ini), with the cable connected while a client is attached, and remember that", 0 },
@@ -47,6 +48,10 @@ static bool launch_option(void *context, int option, const char *value, char *er
     case LAUNCH_SPEED:
         if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
         settings->speed = (uint32_t)integer;
+        return true;
+    case LAUNCH_OPTIMISATIONS:
+        if (strcmp(value, "on") && strcmp(value, "off")) return false;
+        settings->optimisations = !strcmp(value, "on");
         return true;
     case LAUNCH_VERBOSE: launch->verbose = true; return true;
     case LAUNCH_DEBUG_OUTPUT: launch->debug_output = true; return true;
