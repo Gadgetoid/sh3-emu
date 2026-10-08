@@ -8,12 +8,17 @@
 #include <string.h>
 #include <time.h>
 
+#include "app/capture.h"
 #include "app/desktop.h"
 #include "app/host.h"
 #include "app/input.h"
+#include "app/launch.h"
 #include "app/log.h"
 #include "app/paths.h"
 #include "app/profiles.h"
+#include "app/rom_catalog.h"
+#include "app/settings.h"
+#include "app/snapshot_store.h"
 #include "app/typer.h"
 #include "app/view.h"
 #include "core/agent.h"
@@ -49,16 +54,12 @@
 #define CABLE_BOOT_SECONDS   20
 #define CABLE_RESET_SECONDS  30
 #define SPEED_SETTLE_SECONDS 10
-#define RAPI_DEFAULT_PORT    9990
-#define GDB_DEFAULT_PORT     1234
-#define SERIAL_TCP_DEFAULT_PORT 9991
 #define RUN_HOLD_NS      (4 * SDL_NS_PER_MS)
 #define RUN_SLICE_CYCLES (MACHINE_CLOCK_HZ / 1000)
 #define RUN_MAX_BEHIND   (MACHINE_CLOCK_HZ / 10)
 #define MAX_FRAME_SLICE  0.1
 #define AUTOSAVE_SECONDS 60
 #define BACKUP_SECONDS   600
-#define BACKUP_KEEP      10
 #define NOTICE_SECONDS   2
 #define WINDOW_TITLE     "SH3Emu"
 #define POWER_PRESS_SECONDS 0.2
@@ -68,13 +69,8 @@
 #define PORT_SCAN_MS     2000
 #define ANDROID_UNLIT_LEVEL 0.5f
 
-#ifdef __APPLE__
-#define SCREENSHOT_FOLDER SDL_FOLDER_DESKTOP
-#else
-#define SCREENSHOT_FOLDER SDL_FOLDER_PICTURES
-#endif
-
 static gdb_t *debugger;
+static snapshot_store_t snapshots;
 static agent_t *agent;
 static serial_link_t serial;
 
@@ -240,97 +236,6 @@ static void print_debug_line(void *context, const char *line) {
     debug_log_line(line);
 }
 
-static void snapshot_folder(char *path, size_t size) {
-    char base[1024];
-    app_data_folder(base, sizeof base);
-    snprintf(path, size, "%s/snapshots", base);
-    SDL_CreateDirectory(path);
-}
-
-static void backup_path(const char *state, char *prefix, size_t prefix_size, char *path, size_t size) {
-    char folder[1100];
-    snapshot_folder(folder, sizeof folder);
-    snprintf(folder + strlen(folder), sizeof folder - strlen(folder), "/Backups");
-    SDL_CreateDirectory(folder);
-    char name[256];
-    snprintf(name, sizeof name, "%s", file_leaf_name(state));
-    char *extension = strrchr(name, '.');
-    if (extension && extension != name) *extension = 0;
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    char stamp[64];
-    strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
-    snprintf(prefix, prefix_size, "%s ", name);
-    snprintf(path, size, "%s/%s%s.state", folder, prefix, stamp);
-}
-
-static int compare_name_pointers(const void *a, const void *b) {
-    return strcmp(*(char *const *)a, *(char *const *)b);
-}
-
-static void prune_backups(const char *path, const char *prefix) {
-    char folder[1100];
-    snprintf(folder, sizeof folder, "%s", path);
-    char *slash = strrchr(folder, '/');
-    if (!slash) return;
-    *slash = 0;
-    DIR *dir = opendir(folder);
-    if (!dir) return;
-    char *names[256];
-    int count = 0;
-    size_t prefix_length = strlen(prefix);
-    struct dirent *entry;
-    while ((entry = readdir(dir)) && count < 256) {
-        if (strncmp(entry->d_name, prefix, prefix_length) || !file_has_extension(entry->d_name, ".state")) continue;
-        names[count] = strdup(entry->d_name);
-        if (names[count]) count++;
-    }
-    closedir(dir);
-    qsort(names, (size_t)count, sizeof names[0], compare_name_pointers);
-    for (int i = 0; i < count; i++) {
-        if (i < count - BACKUP_KEEP) {
-            char old[1400];
-            snprintf(old, sizeof old, "%s/%s", folder, names[i]);
-            remove(old);
-        }
-        free(names[i]);
-    }
-}
-
-static bool backup_machine(machine_t *machine, const char *state) {
-    char prefix[300], path[1400];
-    backup_path(state, prefix, sizeof prefix, path, sizeof path);
-    bool saved = machine_save(machine, path, (int64_t)time(NULL));
-    if (saved) prune_backups(path, prefix);
-    return saved;
-}
-
-static bool backup_file(const char *state) {
-    size_t size;
-    uint8_t *contents = file_read(state, &size);
-    if (!contents) return false;
-    char prefix[300], path[1400];
-    backup_path(state, prefix, sizeof prefix, path, sizeof path);
-    FILE *file = fopen(path, "wb");
-    bool written = file && fwrite(contents, 1, size, file) == size;
-    if (file && fclose(file) != 0) written = false;
-    free(contents);
-    if (written) prune_backups(path, prefix);
-    return written;
-}
-
-static void snapshot_default_name(char *path, size_t size) {
-    char folder[1100];
-    snapshot_folder(folder, sizeof folder);
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    char stamp[64];
-    strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
-    snprintf(path, size, "%s/Snapshot %s.state", folder, stamp);
-}
-
 static void state_path(char *path, size_t size, machine_t *machine, const char *rom_path) {
     char base[1024];
     app_data_folder(base, sizeof base);
@@ -344,92 +249,6 @@ static void state_path(char *path, size_t size, machine_t *machine, const char *
     char legacy[1100];
     snprintf(legacy, sizeof legacy, "%s/state.bin", base);
     if (machine_state_matches(machine, legacy)) rename(legacy, path);
-}
-
-typedef struct {
-    uint32_t memory;
-    screen_size_t screen;
-    uint32_t speed;
-    uint32_t host_time;
-    uint32_t scale;
-    uint32_t system;
-    char machine[64];
-    uint32_t display;
-    uint32_t serial;
-    char serial_device[SERIAL_LINK_PORT_NAME];
-    char shared_folder[1024];
-    char dictionary[1024];
-    uint32_t network_rapi, rapi_port;
-    uint32_t full_brightness;
-    uint32_t gdb_server, gdb_port;
-    uint32_t serial_tcp_port;
-    char user_agent[256];
-} settings_t;
-
-static const uint32_t SCALES[] = { 50, 75, 100, 150, 200 };
-#define SCALE_COUNT (int)(sizeof SCALES / sizeof SCALES[0])
-
-static int scale_index(uint32_t scale) {
-    for (int i = 0; i < SCALE_COUNT; i++) {
-        if (SCALES[i] == scale) return i;
-    }
-    return -1;
-}
-
-static void copy_setting(char *destination, size_t size, const char *value) {
-    size_t length = strcspn(value, "\r\n");
-    if (length >= size) length = size - 1;
-    memcpy(destination, value, length);
-    destination[length] = 0;
-}
-
-static settings_t settings_load(void) {
-    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1, .gdb_port = GDB_DEFAULT_PORT, .serial_tcp_port = SERIAL_TCP_DEFAULT_PORT, .user_agent = NET_GATEWAY_DEFAULT_USER_AGENT };
-    char path[1100];
-    app_settings_path(path, sizeof path);
-    FILE *file = fopen(path, "r");
-    if (!file) return settings;
-    char line[1200];
-    unsigned value;
-    while (fgets(line, sizeof line, file)) {
-        if (sscanf(line, "memory=%u", &value) == 1) settings.memory = value;
-        else if (!strncmp(line, "screen=", 7)) {
-            char size[32];
-            copy_setting(size, sizeof size, line + 7);
-            screen_parse(size, &settings.screen);
-        }
-        else if (sscanf(line, "speed=%u", &value) == 1) settings.speed = value;
-        else if (sscanf(line, "host_time=%u", &value) == 1) settings.host_time = value;
-        else if (sscanf(line, "scale=%u", &value) == 1 && scale_index(value) >= 0) settings.scale = value;
-        else if (sscanf(line, "system=%u", &value) == 1) settings.system = value;
-        else if (!strncmp(line, "machine=", 8)) copy_setting(settings.machine, sizeof settings.machine, line + 8);
-        else if (sscanf(line, "display=%u", &value) == 1 && value <= VIEW_SHARP) settings.display = value;
-        else if (sscanf(line, "network=%u", &value) == 1) settings.serial = value ? SERIAL_NETWORK : SERIAL_OFF;
-        else if (sscanf(line, "serial=%u", &value) == 1 && value <= SERIAL_TCP) settings.serial = value;
-        else if (!strncmp(line, "serial_device=", 14)) copy_setting(settings.serial_device, sizeof settings.serial_device, line + 14);
-        else if (!strncmp(line, "shared_folder=", 14)) copy_setting(settings.shared_folder, sizeof settings.shared_folder, line + 14);
-        else if (sscanf(line, "network_rapi=%u", &value) == 1) settings.network_rapi = value != 0;
-        else if (sscanf(line, "rapi_port=%u", &value) == 1 && value > 0 && value < 65536) settings.rapi_port = value;
-        else if (!strncmp(line, "dictionary=", 11)) copy_setting(settings.dictionary, sizeof settings.dictionary, line + 11);
-        else if (sscanf(line, "full_brightness=%u", &value) == 1) settings.full_brightness = value != 0;
-        else if (sscanf(line, "gdb_server=%u", &value) == 1) settings.gdb_server = value != 0;
-        else if (sscanf(line, "gdb_port=%u", &value) == 1 && value > 0 && value < 65536) settings.gdb_port = value;
-        else if (sscanf(line, "serial_tcp_port=%u", &value) == 1 && value > 0 && value < 65536) settings.serial_tcp_port = value;
-        else if (!strncmp(line, "user_agent=", 11)) copy_setting(settings.user_agent, sizeof settings.user_agent, line + 11);
-    }
-    fclose(file);
-    return settings;
-}
-
-static void settings_save(const settings_t *settings) {
-    char path[1100];
-    app_settings_path(path, sizeof path);
-    FILE *file = fopen(path, "w");
-    if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\nserial_tcp_port=%u\nuser_agent=%s\n", settings->memory,
-            settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness, settings->gdb_server, settings->gdb_port, settings->serial_tcp_port, settings->user_agent);
-    fclose(file);
 }
 
 static gdb_t *start_network_gdb(machine_t *machine, uint32_t port, char *notice, size_t size) {
@@ -483,11 +302,6 @@ static void set_title(SDL_Window *window, const char *name, const char *notice, 
     if (strcmp(SDL_GetWindowTitle(window), title)) SDL_SetWindowTitle(window, title);
 }
 
-typedef struct {
-    char path[MACHINE_BOARD_COUNT][1024];
-    size_t size[MACHINE_BOARD_COUNT];
-} rom_set_t;
-
 static void rom_folder(char *path, size_t size) {
     char base[1024];
     app_data_folder(base, sizeof base);
@@ -495,86 +309,12 @@ static void rom_folder(char *path, size_t size) {
     SDL_CreateDirectory(path);
 }
 
-#define ROM_MIN_BYTES   (1024 * 1024)
-#define ROM_MAX_BYTES   (64 * 1024 * 1024)
-#define ROM_PROBE_CACHE 32
 #define CARD_MIN_BYTES  (1024 * 1024)
 
-typedef struct {
-    char path[1024];
-    off_t size;
-    time_t modified;
-    int system;
-    uint32_t screens;
-} rom_probe_t;
-
-static rom_probe_t rom_probes[ROM_PROBE_CACHE];
-static int rom_probe_count = 0;
-static int rom_probe_next = 0;
-
-static int rom_system(const char *path, uint32_t *screens) {
-    *screens = 0;
-    size_t size;
-    uint8_t *rom = file_read(path, &size);
-    if (!rom) return 0;
-    char error[256];
-    machine_t *machine = machine_create(rom, size, error, sizeof error);
-    free(rom);
-    if (!machine) return 0;
-    int system = machine_rom_system(machine);
-    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
-        if (machine_screen_supported(machine, SCREEN_PRESETS[i])) *screens |= 1u << i;
-    }
-    machine_destroy(machine);
-    return system;
-}
-
-static int cached_rom_system(const char *path, const struct stat *info, uint32_t *screens) {
-    rom_probe_t *probe = NULL;
-    for (int i = 0; i < rom_probe_count && !probe; i++) {
-        if (!strcmp(rom_probes[i].path, path)) probe = &rom_probes[i];
-    }
-    if (probe && probe->size == info->st_size && probe->modified == info->st_mtime) {
-        *screens = probe->screens;
-        return probe->system;
-    }
-    if (!probe) {
-        if (rom_probe_count < ROM_PROBE_CACHE) {
-            probe = &rom_probes[rom_probe_count++];
-        } else {
-            probe = &rom_probes[rom_probe_next];
-            rom_probe_next = (rom_probe_next + 1) % ROM_PROBE_CACHE;
-        }
-        snprintf(probe->path, sizeof probe->path, "%s", path);
-    }
-    probe->size = info->st_size;
-    probe->modified = info->st_mtime;
-    probe->system = rom_system(path, &probe->screens);
-    *screens = probe->screens;
-    return probe->system;
-}
-
 static void find_roms(rom_set_t *roms) {
-    memset(roms, 0, sizeof *roms);
     char folder[1100];
     rom_folder(folder, sizeof folder);
-    DIR *dir = opendir(folder);
-    if (!dir) return;
-    struct dirent *entry;
-    while ((entry = readdir(dir))) {
-        if (entry->d_name[0] == '.') continue;
-        char path[sizeof roms->path[0]];
-        if (snprintf(path, sizeof path, "%s/%s", folder, entry->d_name) >= (int)sizeof path) continue;
-        struct stat info;
-        if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < ROM_MIN_BYTES || info.st_size > ROM_MAX_BYTES) continue;
-        uint32_t screens;
-        int system = cached_rom_system(path, &info, &screens);
-        size_t size = (size_t)info.st_size;
-        if (!system || size <= roms->size[system]) continue;
-        memcpy(roms->path[system], path, sizeof path);
-        roms->size[system] = size;
-    }
-    closedir(dir);
+    rom_catalog_find(roms, folder);
 }
 
 static bool no_roms_dialog(void) {
@@ -655,7 +395,7 @@ static int import_files(int *cards) {
         if (!android_import(pick.uris[i], roms, path, sizeof path)) continue;
         struct stat info;
         uint32_t screens;
-        if (stat(path, &info) == 0 && info.st_size >= ROM_MIN_BYTES && info.st_size <= ROM_MAX_BYTES && rom_system(path, &screens)) {
+        if (rom_catalog_probe(path, NULL)) {
             rom_count++;
             continue;
         }
@@ -691,16 +431,6 @@ static void machines_folder(char *path, size_t size) {
     SDL_CreateDirectory(path);
 }
 
-static uint32_t probe_rom(const char *path, char *label, size_t label_size) {
-    struct stat info;
-    if (stat(path, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size < ROM_MIN_BYTES || info.st_size > ROM_MAX_BYTES) return 0;
-    uint32_t screens;
-    int system = cached_rom_system(path, &info, &screens);
-    if (!system) return 0;
-    snprintf(label, label_size, "%s: %s", machine_board_name(system), file_leaf_name(path));
-    return screens;
-}
-
 static int list_roms(dialog_rom_t *roms, int max) {
     char folder[1100];
     rom_folder(folder, sizeof folder);
@@ -712,18 +442,11 @@ static int list_roms(dialog_rom_t *roms, int max) {
         if (entry->d_name[0] == '.') continue;
         dialog_rom_t *rom = &roms[count];
         if (snprintf(rom->path, sizeof rom->path, "%s/%s", folder, entry->d_name) >= (int)sizeof rom->path) continue;
-        rom->screens = probe_rom(rom->path, rom->label, sizeof rom->label);
+        rom->screens = rom_catalog_label(rom->path, rom->label, sizeof rom->label);
         if (rom->screens) count++;
     }
     closedir(dir);
     return count;
-}
-
-static int profile_system(const profile_t *profile) {
-    struct stat info;
-    uint32_t screens;
-    if (stat(profile->rom, &info) != 0) return 0;
-    return cached_rom_system(profile->rom, &info, &screens);
 }
 
 static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
@@ -739,26 +462,13 @@ static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
     return true;
 }
 
-static screen_size_t rom_screen(const char *path, screen_size_t preferred) {
-    struct stat info;
-    uint32_t screens = 0;
-    if (stat(path, &info) != 0 || !cached_rom_system(path, &info, &screens)) return preferred;
-    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
-        if (SCREEN_PRESETS[i].width == preferred.width && SCREEN_PRESETS[i].height == preferred.height && (screens & (1u << i))) return preferred;
-    }
-    for (int i = 0; i < SCREEN_PRESET_COUNT; i++) {
-        if (screens & (1u << i)) return SCREEN_PRESETS[i];
-    }
-    return preferred;
-}
-
 static void migrate_profiles(profiles_t *profiles, const rom_set_t *roms, const settings_t *settings, const char *folder) {
     for (int system = MACHINE_BOARD_CASIO; system < MACHINE_BOARD_COUNT; system++) {
         if (!roms->path[system][0]) continue;
         profile_t profile = { .memory = settings->memory, .screen = settings->screen, .host_time = settings->host_time != 0 };
         snprintf(profile.name, sizeof profile.name, "%s", machine_board_name(system));
         snprintf(profile.rom, sizeof profile.rom, "%s", roms->path[system]);
-        profile.screen = rom_screen(profile.rom, settings->screen);
+        profile.screen = rom_catalog_screen(profile.rom, settings->screen);
         if (!legacy_state_path(profile.rom, profile.state, sizeof profile.state)) continue;
         profile_make_unique(profiles, &profile, folder);
         profile_save(&profile, folder);
@@ -797,7 +507,7 @@ static machine_t *start_machine(const profile_t *profile, uint32_t speed, const 
     else if (profile->state[0]) snprintf(state, state_size, "%s", profile->state);
     else state_path(state, state_size, machine, rom_path);
     if (fresh) {
-        backup_file(state);
+        snapshot_store_backup_file(&snapshots, state);
         return machine;
     }
     int64_t saved_at;
@@ -815,62 +525,6 @@ static machine_t *start_machine(const profile_t *profile, uint32_t speed, const 
         *notice = message;
     }
     return machine;
-}
-
-static const void *clipboard_png(void *userdata, const char *mime_type, size_t *size) {
-    const size_t *stored = userdata;
-    if (strcmp(mime_type, "image/png")) { *size = 0; return NULL; }
-    *size = stored[0];
-    return stored + 1;
-}
-
-static bool copy_screen(view_t *view) {
-    int width, height;
-    const uint32_t *pixels = view_image(view, &width, &height);
-    uint8_t *png;
-    size_t length;
-    if (!pixels || !png_encode(pixels, width, height, &png, &length)) return false;
-#ifdef __ANDROID__
-    bool shared = android_share_picture(png, length, "SH3Emu Screen.png");
-    free(png);
-    return shared;
-#endif
-    size_t *stored = malloc(sizeof(size_t) + length);
-    if (!stored) { free(png); return false; }
-    stored[0] = length;
-    memcpy(stored + 1, png, length);
-    free(png);
-    const char *types[] = { "image/png" };
-    if (SDL_SetClipboardData(clipboard_png, free, stored, types, 1)) return true;
-    free(stored);
-    return false;
-}
-
-static bool save_screenshot(view_t *view, char *path, size_t size) {
-    int width, height;
-    const uint32_t *pixels = view_image(view, &width, &height);
-    uint8_t *png;
-    size_t length;
-    if (!pixels || !png_encode(pixels, width, height, &png, &length)) return false;
-    time_t now = time(NULL);
-    struct tm local;
-    localtime_r(&now, &local);
-    char stamp[64];
-    strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
-#ifdef __ANDROID__
-    snprintf(path, size, "SH3Emu Screenshot %s.png", stamp);
-    bool stored = android_save_picture(png, length, path);
-    free(png);
-    return stored;
-#endif
-    const char *folder = SDL_GetUserFolder(SCREENSHOT_FOLDER);
-    if (folder) snprintf(path, size, "%sSH3Emu Screenshot %s.png", folder, stamp);
-    else snprintf(path, size, "%s/SH3Emu Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
-    FILE *file = fopen(path, "wb");
-    bool saved = file && fwrite(png, 1, length, file) == length;
-    if (file) fclose(file);
-    free(png);
-    return saved;
 }
 
 static void window_size(view_display_t display, uint32_t scale, int *width, int *height) {
@@ -892,86 +546,6 @@ static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
     SDL_SetWindowSize(window, width, height);
 }
 
-typedef struct {
-    settings_t   *settings;
-    const char   *card, *state_file, *machine;
-    bool fresh;
-    int gdb_port;
-    const char   *gdb_process;
-    const char   *agent_socket;
-} launch_t;
-
-enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_MEMORY, LAUNCH_SPEED,
-    LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_TCP, LAUNCH_USER_AGENT, LAUNCH_AGENT,
-    LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
-};
-
-static const option_t LAUNCH_OPTIONS[] = {
-    [LAUNCH_HEADING_MACHINE] = { NULL, NULL, "Machine", 0 },
-    [LAUNCH_MACHINE] = { "machine", "NAME", "open the machine with this name (from Machine > Machines)", 0 },
-    [LAUNCH_STATE] = { "state", "FILE", "load, save and autosave FILE instead of the ROM's own state", 0 },
-    [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
-    [LAUNCH_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image", 0 },
-    [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
-    [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
-    [LAUNCH_HEADING_CONNECTIONS] = { NULL, NULL, "Connections", 0 },
-    [LAUNCH_NET] = { "net", NULL, "plug COM1 into the PPP network (Devices > Serial Port), and remember that", 0 },
-    [LAUNCH_TCP] = { "tcp", "[PORT]", "offer COM1 as raw bytes on a TCP port on all interfaces (9991, or PORT, kept in sh3emu.ini), with the cable connected while a client is attached, and remember that", 0 },
-    [LAUNCH_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent, kept in sh3emu.ini; empty passes Pocket IE's own through", 0 },
-    [LAUNCH_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's trapa #0xCE mailbox and one client on this Unix socket", 0 },
-    [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
-    [LAUNCH_VERBOSE] = { "verbose", NULL, "log unmodelled hardware accesses to stderr", 0 },
-    [LAUNCH_DEBUG_OUTPUT] = { "debug-output", NULL, "print CE's debug output (OutputDebugString, kernel messages) to stderr as well as debug.log", 0 },
-    [LAUNCH_GDB] = { "gdb", "PORT", "listen for GDB on 127.0.0.1:PORT; it can attach and detach while the machine runs", 0 },
-    [LAUNCH_GDB_PROCESS] = { "gdb-process", "NAME", "debug one process, e.g. maths.exe: breakpoints below 0x02000000 only stop there, and GDB stops when it starts", 0 },
-};
-
-static bool launch_option(void *context, int option, const char *value, char *error, size_t error_size) {
-    launch_t *launch = context;
-    settings_t *settings = launch->settings;
-    long integer;
-    (void)error;
-    (void)error_size;
-    switch (option) {
-    case LAUNCH_MACHINE: launch->machine = value; return true;
-    case LAUNCH_STATE: launch->state_file = value; return true;
-    case LAUNCH_FRESH: launch->fresh = true; return true;
-    case LAUNCH_CARD: launch->card = value; return true;
-    case LAUNCH_MEMORY:
-        if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
-        settings->memory = (uint32_t)integer;
-        return true;
-    case LAUNCH_SPEED:
-        if (!option_integer(value, 10, &integer) || (integer != 1 && integer != 2 && integer != 4 && integer != 8)) return false;
-        settings->speed = (uint32_t)integer;
-        return true;
-    case LAUNCH_VERBOSE: app_log_set_verbose(true); return true;
-    case LAUNCH_DEBUG_OUTPUT: debug_log_set_stderr(true); return true;
-    case LAUNCH_GDB:
-        if (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535) return false;
-        launch->gdb_port = (int)integer;
-        return true;
-    case LAUNCH_GDB_PROCESS: launch->gdb_process = value; return true;
-    case LAUNCH_NET: settings->serial = SERIAL_NETWORK; return true;
-    case LAUNCH_TCP:
-        if (value && (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535)) return false;
-        if (value) settings->serial_tcp_port = (uint32_t)integer;
-        settings->serial = SERIAL_TCP;
-        return true;
-    case LAUNCH_USER_AGENT: snprintf(settings->user_agent, sizeof settings->user_agent, "%s", value); return true;
-    case LAUNCH_AGENT: launch->agent_socket = value; return true;
-    }
-    return false;
-}
-
-static const option_spec_t LAUNCH_SPEC = {
-    "sh3emu", "[OPTIONS] [ROM]",
-    "Emulates the Casio Cassiopeia A-51 and HP 320LX Windows CE handhelds. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
-    LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
-    "headless runs the machine without a window, for tests and scripts.",
-};
-
 int main(int argc, char **argv) {
     const char *rom_path = NULL;
 #ifdef __ANDROID__
@@ -985,14 +559,17 @@ int main(int argc, char **argv) {
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
 #endif
+    char base[1024];
+    app_data_folder(base, sizeof base);
+    snapshot_store_init(&snapshots, base);
     settings_t settings = settings_load();
-    launch_t launch = { &settings, NULL, NULL, NULL, false, 0, NULL, NULL };
-    const char *positional[1];
-    int positional_count;
-    options_result_t parsed = options_parse(&LAUNCH_SPEC, argc, argv, launch_option, &launch, positional, 1, &positional_count);
+    launch_t launch;
+    options_result_t parsed = launch_parse(&launch, &settings, argc, argv);
     if (parsed == OPTIONS_EXIT) return 0;
     if (parsed == OPTIONS_ERROR) return 2;
-    if (positional_count) rom_path = positional[0];
+    app_log_set_verbose(launch.verbose);
+    debug_log_set_stderr(launch.debug_output);
+    rom_path = launch.rom;
     const char *card = launch.card, *state_file = launch.state_file;
     bool fresh = launch.fresh;
     static rom_set_t roms;
@@ -1254,11 +831,11 @@ int main(int argc, char **argv) {
                 dialog_machine_t chosen = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .host_time = settings.host_time != 0 };
                 if (rom_count) snprintf(chosen.rom, sizeof chosen.rom, "%s", current.rom);
                 events_seen = true;
-                if (!dialog_new_machine(window, rom_list, rom_count, probe_rom, &chosen)) break;
+                if (!dialog_new_machine(window, rom_list, rom_count, rom_catalog_label, &chosen)) break;
                 profile_t made = { .screen = chosen.screen, .memory = chosen.memory, .host_time = chosen.host_time };
                 snprintf(made.rom, sizeof made.rom, "%s", chosen.rom);
                 if (chosen.name[0]) snprintf(made.name, sizeof made.name, "%s", chosen.name);
-                else profile_default_name(&made, profile_system(&made), made.name, sizeof made.name);
+                else profile_default_name(&made, rom_catalog_probe(made.rom, NULL), made.name, sizeof made.name);
                 profile_make_unique(&profiles, &made, profiles_folder);
                 if (!profile_save(&made, profiles_folder)) {
                     notice = "could not save the new machine";
@@ -1282,11 +859,11 @@ int main(int argc, char **argv) {
                 if (action == DIALOG_MANAGE_RESET) {
                     if (!confirm_reset(window, picked_profile.name)) break;
                     if (chosen == current_index) {
-                        backup_machine(machine, state);
+                        snapshot_store_backup_machine(&snapshots, machine, state);
                         since_backup = 0;
                         machine_reset(machine);
                     } else {
-                        backup_file(picked_profile.state);
+                        snapshot_store_backup_file(&snapshots, picked_profile.state);
                         remove(picked_profile.state);
                     }
                     snprintf(manage_notice, sizeof manage_notice, "reset %s; the machine before it is in Snapshots/Backups", picked_profile.name);
@@ -1299,7 +876,7 @@ int main(int argc, char **argv) {
                     char title[160];
                     snprintf(title, sizeof title, "Delete %s?", picked_profile.name);
                     if (!host_confirm(window, title, "This removes the machine and its saved state. A backup of the state goes in Snapshots/Backups first.", "Delete")) break;
-                    backup_file(picked_profile.state);
+                    snapshot_store_backup_file(&snapshots, picked_profile.state);
                     profile_delete(&picked_profile, profiles_folder);
                     char current_id[sizeof current.id];
                     snprintf(current_id, sizeof current_id, "%s", current.id);
@@ -1318,11 +895,11 @@ int main(int argc, char **argv) {
             case MENU_SCALE_200:
             case MENU_ZOOM_IN:
             case MENU_ZOOM_OUT: {
-                int index = scale_index(settings.scale);
-                if (item == MENU_ZOOM_IN) index = index + 1 < SCALE_COUNT ? index + 1 : index;
+                int index = settings_scale_index(settings.scale);
+                if (item == MENU_ZOOM_IN) index = index + 1 < SETTINGS_SCALE_COUNT ? index + 1 : index;
                 else if (item == MENU_ZOOM_OUT) index = index > 0 ? index - 1 : index;
                 else index = item - MENU_SCALE_50;
-                settings.scale = SCALES[index];
+                settings.scale = settings_scale_at(index);
                 settings_save(&settings);
                 fit_window(window, view, settings.scale);
                 break;
@@ -1338,13 +915,13 @@ int main(int argc, char **argv) {
                 fit_window(window, view, settings.scale);
                 break;
             case MENU_COPY_SCREEN:
-                notice = copy_screen(view) ? "screen copied" : "could not copy the screen";
+                notice = capture_copy_screen(view) ? "screen copied" : "could not copy the screen";
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_SAVE_SCREENSHOT: {
                 static char screenshot_notice[1200];
                 char path[1100];
-                if (save_screenshot(view, path, sizeof path)) snprintf(screenshot_notice, sizeof screenshot_notice, "saved %s", file_leaf_name(path));
+                if (capture_save_screenshot(view, path, sizeof path)) snprintf(screenshot_notice, sizeof screenshot_notice, "saved %s", file_leaf_name(path));
                 else snprintf(screenshot_notice, sizeof screenshot_notice, "could not save the screenshot");
                 notice = screenshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
@@ -1364,7 +941,7 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_LOAD_STATE:
-                backup_machine(machine, state);
+                snapshot_store_backup_machine(&snapshots, machine, state);
                 notice = machine_load(machine, state, NULL) ? "state loaded" : "no saved state";
                 set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                 notice_left = NOTICE_SECONDS;
@@ -1373,14 +950,14 @@ int main(int argc, char **argv) {
             case MENU_SAVE_SNAPSHOT: {
                 static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state" } };
                 static char default_snapshot[1200];
-                snapshot_default_name(default_snapshot, sizeof default_snapshot);
+                snapshot_store_default_name(&snapshots, default_snapshot, sizeof default_snapshot);
                 SDL_ShowSaveFileDialog(pick_done, (void *)(intptr_t)PICK_SAVE_SNAPSHOT, window, filters, 1, default_snapshot);
                 break;
             }
             case MENU_LOAD_SNAPSHOT: {
                 static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state;bin" } };
                 static char folder[1100];
-                snapshot_folder(folder, sizeof folder);
+                snapshot_store_folder(&snapshots, folder, sizeof folder);
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_LOAD_SNAPSHOT, window, filters, 1, folder, false);
                 break;
             }
@@ -1623,7 +1200,7 @@ int main(int argc, char **argv) {
                 if (serial.gateway && net_gateway_online(serial.gateway)) desktop_sync(desktop, settings.shared_folder);
             } else if (picked->kind == PICK_LOAD_SNAPSHOT) {
                 static char snapshot_notice[1200];
-                if (machine_state_matches(machine, picked->paths[0])) backup_machine(machine, state);
+                if (machine_state_matches(machine, picked->paths[0])) snapshot_store_backup_machine(&snapshots, machine, state);
                 if (machine_load(machine, picked->paths[0], NULL)) {
                     set_serial(machine, (serial_mode_t)settings.serial, settings.serial_device, &serial_plug_at);
                     snprintf(snapshot_notice, sizeof snapshot_notice, "loaded snapshot %s", file_leaf_name(picked->paths[0]));
@@ -1730,9 +1307,9 @@ int main(int argc, char **argv) {
             menu_set_checked(machine_item, i == current_index);
         }
         menu_set_enabled(MENU_NEW_MACHINE, profiles.count < PROFILES_MAX);
-        for (int scale_item = MENU_SCALE_50; scale_item <= MENU_SCALE_200; scale_item++) menu_set_checked(scale_item, settings.scale == SCALES[scale_item - MENU_SCALE_50]);
-        menu_set_enabled(MENU_ZOOM_IN, settings.scale < SCALES[SCALE_COUNT - 1]);
-        menu_set_enabled(MENU_ZOOM_OUT, settings.scale > SCALES[0]);
+        for (int scale_item = MENU_SCALE_50; scale_item <= MENU_SCALE_200; scale_item++) menu_set_checked(scale_item, settings.scale == settings_scale_at(scale_item - MENU_SCALE_50));
+        menu_set_enabled(MENU_ZOOM_IN, settings.scale < settings_scale_at(SETTINGS_SCALE_COUNT - 1));
+        menu_set_enabled(MENU_ZOOM_OUT, settings.scale > settings_scale_at(0));
         menu_set_checked(MENU_FULL_SCREEN, (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0);
         menu_set_checked(MENU_DISPLAY_SIMULATED, settings.display == VIEW_SIMULATED);
         menu_set_checked(MENU_DISPLAY_SHARP, settings.display == VIEW_SHARP);
@@ -1757,7 +1334,7 @@ int main(int argc, char **argv) {
         if (!paused) since_backup += elapsed;
         if (since_backup >= BACKUP_SECONDS) {
             since_backup = 0;
-            backup_machine(machine, state);
+            snapshot_store_backup_machine(&snapshots, machine, state);
         }
         if (since_autosave >= AUTOSAVE_SECONDS) {
             since_autosave = 0;
