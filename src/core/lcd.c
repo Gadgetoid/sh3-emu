@@ -68,6 +68,7 @@ static int dirty_x, dirty_y, dirty_w, dirty_h;
 static bool force_compose = true;
 static uint32_t palette[LCD_PALETTE_MAX];
 static int palette_count = 0;
+static float unlit_level = 1.0f;
 static bool backlight = true;
 static bool powered = true;
 
@@ -130,6 +131,12 @@ void lcd_set_backlight(bool on) {
     force_compose = true;
 }
 bool lcd_get_backlight(void) { return backlight; }
+
+void lcd_set_unlit_level(float level) {
+    if (level == unlit_level) return;
+    unlit_level = level;
+    lcd_invalidate();
+}
 uint32_t *lcd_compose_pixels(void) { return output; }
 int lcd_compose_width(void) { return output_w; }
 int lcd_compose_height(void) { return output_h; }
@@ -350,6 +357,7 @@ bool lcd_compose(float seconds) {
     }
 
     const panel_t *panel = backlight && powered ? &panel_lit : &panel_unlit;
+    float level = panel == &panel_unlit ? unlit_level : 1.0f;
     int gap = cell >= 4 ? max_int(1, cell / 7) : 1;
     float gain = (0.55f + contrast_level * 0.06f) / 0.85f;
     float off_bias = contrast_level > 6 ? (contrast_level - 6) * 0.035f : 0.0f;
@@ -427,6 +435,9 @@ bool lcd_compose(float seconds) {
                 b += panel->glass.b * glow * 0.5f;
             }
 
+            r *= level;
+            g *= level;
+            b *= level;
             out_row[x] = (uint32_t)to_byte(r) | (uint32_t)to_byte(g) << 8 | (uint32_t)to_byte(b) << 16 | 0xff000000u;
         }
     }

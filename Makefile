@@ -10,11 +10,13 @@ ROM      ?= rom/nk-hp320lx.bin
 
 .DEFAULT_GOAL := all
 
+PKG_CONFIG ?= pkg-config
+
 CFLAGS  += -Isrc -I$(BUILD) -Wall -Wextra -O2 -std=c11 -fno-common -MMD -MP
 ifeq ($(SDL_STATIC),1)
-SDL_PKG_CONFIG = pkg-config --static
+SDL_PKG_CONFIG = $(PKG_CONFIG) --static
 else
-SDL_PKG_CONFIG = pkg-config
+SDL_PKG_CONFIG = $(PKG_CONFIG)
 endif
 
 CFLAGS  += $(shell $(SDL_PKG_CONFIG) --cflags sdl3)
@@ -24,25 +26,27 @@ LDFLAGS += $(shell $(SDL_PKG_CONFIG) --libs sdl3) -lm -lz $(THREAD_LIBS)
 UNAME := $(shell uname -s)
 ifeq ($(UNAME),Darwin)
 MENU     ?= macos
-LDFLAGS  += -framework Cocoa
 else
 MENU     ?= bar
 CFLAGS   += -D_GNU_SOURCE
 endif
 ifeq ($(MENU),macos)
 SRC_MENU  = src/app/menu_macos.m src/app/dialog_macos.m
+LDFLAGS  += -framework Cocoa
+else ifeq ($(MENU),android)
+SRC_MENU  = src/app/menu_android.c src/app/android.c src/vendor/truetype.c
 else
 SRC_MENU  = src/app/menu_bar.c src/vendor/truetype.c
 endif
 
-ifeq ($(shell pkg-config --exists slirp && echo yes),yes)
+ifeq ($(shell $(PKG_CONFIG) --exists slirp && echo yes),yes)
 SRC_NET   = src/net/net_gateway.c src/net/serial_link.c
-CFLAGS   += $(shell pkg-config --cflags slirp)
-NET_LIBS  = $(shell pkg-config --libs slirp)
-ifeq ($(shell pkg-config --exists libcurl && echo yes),yes)
+CFLAGS   += $(shell $(PKG_CONFIG) --cflags slirp)
+NET_LIBS  = $(shell $(PKG_CONFIG) --libs slirp)
+ifeq ($(shell $(PKG_CONFIG) --exists libcurl && echo yes),yes)
 SRC_NET  += src/net/web_proxy.c src/net/web_image.c src/vendor/image.c src/vendor/svg.c
-CFLAGS   += $(shell pkg-config --cflags libcurl)
-NET_LIBS += $(shell pkg-config --libs libcurl)
+CFLAGS   += $(shell $(PKG_CONFIG) --cflags libcurl)
+NET_LIBS += $(shell $(PKG_CONFIG) --libs libcurl)
 else
 SRC_NET  += src/net/web_proxy_none.c
 endif
@@ -61,6 +65,9 @@ all: $(HEADLESS) $(SH3RUN) $(RAPI_TOOL)
 
 $(PROG): $(OBJ_APP)
 	$(CC) -o $@ $^ $(LDFLAGS) $(NET_LIBS)
+
+$(BUILD)/libmain.so: $(OBJ_APP)
+	$(CC) -shared -Wl,--no-undefined -o $@ $^ $(LDFLAGS) $(NET_LIBS)
 
 $(HEADLESS): $(OBJ_HEADLESS)
 	$(CC) -o $@ $^ -lm -lz $(THREAD_LIBS) $(NET_LIBS)
@@ -113,10 +120,19 @@ run: $(PROG)
 app: $(PROG) $(RAPI_TOOL) icons
 	ICONS=$(BUILD)/icons sh tools/mkapp.sh $(APP)
 
+apk: icons
+	ICONS=$(BUILD)/icons sh tools/mkapk.sh
+
+apk-push:
+	sh tools/mkapk.sh push
+
+apk-install: icons
+	ICONS=$(BUILD)/icons sh tools/mkapk.sh install
+
 clean:
 	rm -rf $(BUILD) $(PROG) $(HEADLESS) $(SH3RUN) $(RAPI_TOOL) $(PROXYCHECK) $(APP)
 
-.PHONY: all run clean test check app icons sh3-fuzz FORCE
+.PHONY: all run clean test check app apk apk-push apk-install icons sh3-fuzz FORCE
 
 -include $(OBJ_APP:.o=.d) $(OBJ_HEADLESS:.o=.d) $(BUILD)/tools/icon.d $(BUILD)/tools/sh3_run.d $(BUILD)/tools/gateway_check.d $(BUILD)/tools/sh3emu_rapi.d
 

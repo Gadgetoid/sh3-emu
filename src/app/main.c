@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "app/android.h"
 #include "app/desktop.h"
 #include "app/dialog.h"
 #include "app/menu.h"
@@ -19,6 +20,7 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
+#include "net/net_gateway.h"
 #include "net/serial_link.h"
 #include "rapi/rapi.h"
 #include "util/file.h"
@@ -58,6 +60,7 @@
 #define AUDIO_CHUNK 8192
 #define SERIAL_PORT_MAX  16
 #define PORT_SCAN_MS     2000
+#define ANDROID_UNLIT_LEVEL 0.5f
 
 #ifdef __APPLE__
 #define SCREENSHOT_FOLDER SDL_FOLDER_DESKTOP
@@ -215,6 +218,9 @@ static const char *set_serial(machine_t *machine, serial_mode_t mode, const char
 }
 
 static void log_gdb(const char *message) {
+#ifdef __ANDROID__
+    SDL_Log("%s", message);
+#endif
     fputs(message, stderr);
 }
 
@@ -295,6 +301,7 @@ typedef struct {
     pick_kind_t kind;
     int         count;
     char        paths[PICK_MAX][1024];
+    char        export_uri[1024];
 } picked_t;
 
 static Uint32 pick_event_type = 0;
@@ -306,6 +313,7 @@ static void pick_done(void *userdata, const char *const *files, int filter) {
     if (!picked) return;
     picked->kind = (pick_kind_t)(intptr_t)userdata;
     picked->count = 0;
+    picked->export_uri[0] = 0;
     while (files[picked->count] && picked->count < PICK_MAX) {
         snprintf(picked->paths[picked->count], sizeof picked->paths[0], "%s", files[picked->count]);
         picked->count++;
@@ -359,6 +367,9 @@ static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t
 }
 
 static void log_message(const char *message) {
+#ifdef __ANDROID__
+    SDL_Log("%s", message);
+#endif
     if (verbose) fputs(message, stderr);
 }
 
@@ -542,6 +553,7 @@ typedef struct {
     char     shared_folder[1024];
     char     dictionary[1024];
     uint32_t network_rapi, rapi_port;
+    uint32_t full_brightness;
 } settings_t;
 
 static void settings_path(char *path, size_t size) {
@@ -575,7 +587,7 @@ static void copy_setting(char *destination, size_t size, const char *value) {
 }
 
 static settings_t settings_load(void) {
-    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT };
+    settings_t settings = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .speed = 1, .host_time = 1, .scale = 100, .display = VIEW_SIMULATED, .rapi_port = RAPI_DEFAULT_PORT, .full_brightness = 1 };
     char path[1100];
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "r");
@@ -602,6 +614,7 @@ static settings_t settings_load(void) {
         else if (sscanf(line, "network_rapi=%u", &value) == 1) settings.network_rapi = value != 0;
         else if (sscanf(line, "rapi_port=%u", &value) == 1 && value > 0 && value < 65536) settings.rapi_port = value;
         else if (!strncmp(line, "dictionary=", 11)) copy_setting(settings.dictionary, sizeof settings.dictionary, line + 11);
+        else if (sscanf(line, "full_brightness=%u", &value) == 1) settings.full_brightness = value != 0;
     }
     fclose(file);
     return settings;
@@ -612,9 +625,9 @@ static void settings_save(const settings_t *settings) {
     settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port);
+            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness);
     fclose(file);
 }
 
@@ -735,6 +748,7 @@ static void rom_folder(char *path, size_t size) {
 #define ROM_MIN_BYTES   (1024 * 1024)
 #define ROM_MAX_BYTES   (64 * 1024 * 1024)
 #define ROM_PROBE_CACHE 32
+#define CARD_MIN_BYTES  (1024 * 1024)
 
 typedef struct {
     char     path[1024];
@@ -826,6 +840,99 @@ static bool no_roms_dialog(void) {
     if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) open_path(folder);
     return false;
 }
+
+#ifdef __ANDROID__
+static void data_subfolder(const char *name, char *path, size_t size) {
+    char base[1024];
+    data_folder(base, sizeof base);
+    snprintf(path, size, "%s/%s", base, name);
+    SDL_CreateDirectory(path);
+}
+
+static void localize_picked(picked_t *picked) {
+    char folder[1100];
+    if (picked->kind == PICK_CARD) data_subfolder("cards", folder, sizeof folder);
+    else if (picked->kind == PICK_DICTIONARY) data_subfolder("dictionaries", folder, sizeof folder);
+    else snprintf(folder, sizeof folder, "%s", getenv("TMPDIR") ? getenv("TMPDIR") : ".");
+    SDL_CreateDirectory(folder);
+    for (int i = 0; i < picked->count; i++) {
+        char uri[1024], path[1024];
+        snprintf(uri, sizeof uri, "%s", picked->paths[i]);
+        bool local;
+        if (picked->kind == PICK_SAVE_SNAPSHOT) {
+            local = android_local_path(uri, folder, path, sizeof path);
+            snprintf(picked->export_uri, sizeof picked->export_uri, "%s", uri);
+        } else {
+            local = android_import(uri, folder, path, sizeof path);
+        }
+        snprintf(picked->paths[i], sizeof picked->paths[i], "%s", local ? path : "");
+    }
+}
+
+typedef struct {
+    SDL_AtomicInt done;
+    int           count;
+    char          uris[PICK_MAX][1024];
+} import_pick_t;
+
+static void import_picked(void *userdata, const char *const *files, int filter) {
+    (void)filter;
+    import_pick_t *pick = userdata;
+    pick->count = 0;
+    while (files && files[pick->count] && pick->count < PICK_MAX) {
+        snprintf(pick->uris[pick->count], sizeof pick->uris[0], "%s", files[pick->count]);
+        pick->count++;
+    }
+    SDL_SetAtomicInt(&pick->done, 1);
+}
+
+static int import_files(int *cards) {
+    static import_pick_t pick;
+    pick.count = 0;
+    SDL_SetAtomicInt(&pick.done, 0);
+    SDL_ShowOpenFileDialog(import_picked, &pick, NULL, NULL, 0, NULL, true);
+    while (!SDL_GetAtomicInt(&pick.done)) {
+        SDL_Event event;
+        if (SDL_WaitEventTimeout(&event, 100) && event.type == SDL_EVENT_QUIT) SDL_PushEvent(&event);
+    }
+    char roms[1100], card_folder[1100];
+    rom_folder(roms, sizeof roms);
+    data_subfolder("cards", card_folder, sizeof card_folder);
+    int rom_count = 0;
+    *cards = 0;
+    for (int i = 0; i < pick.count; i++) {
+        char path[1200];
+        if (!android_import(pick.uris[i], roms, path, sizeof path)) continue;
+        struct stat info;
+        uint32_t screens;
+        if (stat(path, &info) == 0 && info.st_size >= ROM_MIN_BYTES && info.st_size <= ROM_MAX_BYTES && rom_system(path, &screens)) {
+            rom_count++;
+            continue;
+        }
+        char card[1200];
+        snprintf(card, sizeof card, "%s/%s", card_folder, file_leaf_name(path));
+        if (stat(path, &info) == 0 && info.st_size >= CARD_MIN_BYTES && info.st_size % 512 == 0 && rename(path, card) == 0) (*cards)++;
+        else remove(path);
+    }
+    return rom_count;
+}
+
+static bool first_run_import(void) {
+    SDL_Init(SDL_INIT_VIDEO);
+    const SDL_MessageBoxButtonData buttons[] = {
+        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
+        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Choose Files" },
+    };
+    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "Import ROMs and Cards",
+        "Choose your ROMs: a Casio Cassiopeia A-51 or HP 320LX ROM image, or both. Card images can be chosen at the same time.",
+        2, buttons, NULL };
+    int chosen = 0;
+    if (!SDL_ShowMessageBox(&dialog, &chosen) || chosen != 1) return false;
+    int cards;
+    import_files(&cards);
+    return true;
+}
+#endif
 
 const uint32_t DIALOG_MEMORY_SIZES[DIALOG_MEMORY_COUNT] = { 16, 32, 64 };
 
@@ -975,6 +1082,11 @@ static bool copy_screen(view_t *view) {
     uint8_t *png;
     size_t length;
     if (!pixels || !png_encode(pixels, width, height, &png, &length)) return false;
+#ifdef __ANDROID__
+    bool shared = android_share_picture(png, length, "SH3Emu Screen.png");
+    free(png);
+    return shared;
+#endif
     size_t *stored = malloc(sizeof(size_t) + length);
     if (!stored) { free(png); return false; }
     stored[0] = length;
@@ -997,6 +1109,12 @@ static bool save_screenshot(view_t *view, char *path, size_t size) {
     localtime_r(&now, &local);
     char stamp[64];
     strftime(stamp, sizeof stamp, "%Y-%m-%d at %H.%M.%S", &local);
+#ifdef __ANDROID__
+    snprintf(path, size, "SH3Emu Screenshot %s.png", stamp);
+    bool stored = android_save_picture(png, length, path);
+    free(png);
+    return stored;
+#endif
     const char *folder = SDL_GetUserFolder(SCREENSHOT_FOLDER);
     if (folder) snprintf(path, size, "%sSH3Emu Screenshot %s.png", folder, stamp);
     else snprintf(path, size, "%s/SH3Emu Screenshot %s.png", getenv("HOME") ? getenv("HOME") : ".", stamp);
@@ -1014,6 +1132,12 @@ static void window_size(view_display_t display, uint32_t scale, int *width, int 
 }
 
 static void fit_window(SDL_Window *window, view_t *view, uint32_t scale) {
+#ifdef __ANDROID__
+    (void)window;
+    (void)view;
+    (void)scale;
+    return;
+#endif
     if (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) SDL_SetWindowFullscreen(window, false);
     int width, height;
     window_size(view_display(view), scale, &width, &height);
@@ -1094,6 +1218,17 @@ static const option_spec_t LAUNCH_SPEC = {
 
 int main(int argc, char **argv) {
     const char *rom_path = NULL;
+#ifdef __ANDROID__
+    const char *storage = SDL_GetAndroidExternalStoragePath();
+    if (storage) {
+        setenv("XDG_DATA_HOME", storage, 1);
+        setenv("XDG_CONFIG_HOME", storage, 1);
+    }
+    const char *cache = SDL_GetAndroidCachePath();
+    if (cache) setenv("TMPDIR", cache, 1);
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight Portrait");
+#endif
     settings_t settings = settings_load();
     launch_t launch = { &settings, NULL, NULL, NULL, false, 0, NULL, NULL };
     const char *positional[1];
@@ -1125,6 +1260,13 @@ int main(int argc, char **argv) {
             current_index = settings.machine[0] ? profile_find(&profiles, settings.machine) : -1;
             if (current_index < 0) current_index = profiles.count ? 0 : -1;
         }
+#ifdef __ANDROID__
+        while (current_index < 0 && first_run_import()) {
+            find_roms(&roms);
+            migrate_profiles(&profiles, &roms, &settings, profiles_folder);
+            current_index = profiles.count ? 0 : -1;
+        }
+#endif
         if (current_index < 0) return no_roms_dialog() ? 0 : 1;
         current = profiles.entries[current_index];
     }
@@ -1151,6 +1293,10 @@ int main(int argc, char **argv) {
     SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, NULL) : NULL;
     if (!renderer) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     SDL_SetRenderVSync(renderer, 1);
+#ifdef __ANDROID__
+    SDL_SetWindowFullscreen(window, true);
+    lcd_set_unlit_level(ANDROID_UNLIT_LEVEL);
+#endif
 
     view_t *view = view_create(window, renderer, (view_display_t)settings.display, menu_bar_height());
 
@@ -1199,7 +1345,11 @@ int main(int argc, char **argv) {
     serial_link_init(&serial, NULL);
     static char rapi_socket[1024], sync_manifest[1024];
     char desktop_notice[256], shared_notice[1200];
+#ifdef __ANDROID__
+    if (net_gateway_socket_path(rapi_socket, sizeof rapi_socket, "sh3emu-rapi")) serial.options.rapi_socket = rapi_socket;
+#else
     if (rapi_data_path("rapi.sock", rapi_socket, sizeof rapi_socket)) serial.options.rapi_socket = rapi_socket;
+#endif
     serial.options.rapi_port = settings.network_rapi ? (int)settings.rapi_port : 0;
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
     desktop_t *desktop = desktop_create(rapi_socket, sync_manifest);
@@ -1234,7 +1384,11 @@ int main(int argc, char **argv) {
             }
             switch (event.type) {
             case SDL_EVENT_QUIT:
+            case SDL_EVENT_TERMINATING:
                 running = false;
+                break;
+            case SDL_EVENT_WILL_ENTER_BACKGROUND:
+                machine_save(machine, state, (int64_t)time(NULL));
                 break;
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP: {
@@ -1265,6 +1419,10 @@ int main(int argc, char **argv) {
                 break;
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
                 find_roms(&roms);
+#ifdef __ANDROID__
+                SDL_SetWindowFullscreen(window, false);
+                SDL_SetWindowFullscreen(window, true);
+#endif
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 release_keys(&input, machine, held, -1);
@@ -1297,6 +1455,9 @@ int main(int argc, char **argv) {
                 if (pick_event_type && event.type == pick_event_type) {
                     free(picked);
                     picked = event.user.data1;
+#ifdef __ANDROID__
+                    localize_picked(picked);
+#endif
                 }
                 break;
             }
@@ -1468,6 +1629,50 @@ int main(int argc, char **argv) {
             case MENU_QUIT:
                 running = false;
                 break;
+#ifdef __ANDROID__
+            case MENU_IMPORT: {
+                static char import_notice[160];
+                int cards, imported = import_files(&cards);
+                find_roms(&roms);
+                snprintf(import_notice, sizeof import_notice, "imported %d ROMs and %d cards", imported, cards);
+                notice = import_notice;
+                notice_left = NOTICE_SECONDS * 2;
+                break;
+            }
+            case MENU_FULL_BRIGHTNESS:
+                settings.full_brightness = !settings.full_brightness;
+                settings_save(&settings);
+                break;
+            case MENU_FETCH_DOCUMENTS:
+            case MENU_SHARED_FOLDER: {
+                if (!android_all_files_access()) {
+                    android_request_all_files_access();
+                    notice = "allow All files access for SH3Emu, then try again";
+                    notice_left = NOTICE_SECONDS * 3;
+                    break;
+                }
+                bool shared = item == MENU_SHARED_FOLDER;
+                picked_t *folder = calloc(1, sizeof *folder);
+                const char *start = shared && settings.shared_folder[0] ? settings.shared_folder : "/storage/emulated/0/Documents";
+                if (folder && android_choose_folder(shared ? "Folder to share with My Documents" : "Folder to copy My Documents into", start, folder->paths[0], sizeof folder->paths[0])) {
+                    folder->kind = shared ? PICK_SHARED : PICK_FETCH;
+                    folder->count = 1;
+                    free(picked);
+                    picked = folder;
+                } else {
+                    free(folder);
+                }
+                events_seen = true;
+                break;
+            }
+#else
+            case MENU_FETCH_DOCUMENTS:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
+                break;
+            case MENU_SHARED_FOLDER:
+                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
+                break;
+#endif
             case MENU_SPEED_1:
             case MENU_SPEED_2:
             case MENU_SPEED_4:
@@ -1517,12 +1722,6 @@ int main(int argc, char **argv) {
                 break;
             case MENU_SEND_FILES:
                 SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
-                break;
-            case MENU_FETCH_DOCUMENTS:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
-                break;
-            case MENU_SHARED_FOLDER:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
                 break;
             case MENU_SYNC_NOW:
                 desktop_sync(desktop, settings.shared_folder);
@@ -1618,6 +1817,12 @@ int main(int argc, char **argv) {
                 char path[1100];
                 snprintf(path, sizeof path, "%s%s", picked->paths[0], has_extension(picked->paths[0], ".state") ? "" : ".state");
                 bool saved = machine_save(machine, path, (int64_t)time(NULL));
+#ifdef __ANDROID__
+                if (saved && picked->export_uri[0]) {
+                    saved = android_export(path, picked->export_uri);
+                    remove(path);
+                }
+#endif
                 snprintf(snapshot_notice, sizeof snapshot_notice, saved ? "saved snapshot %s" : "could not save %s", file_leaf_name(path));
                 notice = snapshot_notice;
                 notice_left = NOTICE_SECONDS * 2;
@@ -1715,6 +1920,7 @@ int main(int argc, char **argv) {
         }
         reap_reveal_children();
         menu_set_checked(MENU_PAUSE, paused);
+        menu_set_checked(MENU_FULL_BRIGHTNESS, settings.full_brightness != 0);
         menu_set_checked(MENU_SOUND, sound);
         for (int i = 0; i < PROFILES_MAX; i++) {
             int machine_item = MENU_MACHINE_FIRST + i;
@@ -1744,6 +1950,9 @@ int main(int argc, char **argv) {
             if (notice_left <= 0) notice = NULL;
         }
         set_title(window, current.name, notice, paused, machine_suspended(machine));
+#ifdef __ANDROID__
+        if (android_toast(notice ? notice : paused ? "Paused" : NULL)) events_seen = true;
+#endif
         since_autosave += elapsed;
         if (!paused) since_backup += elapsed;
         if (since_backup >= BACKUP_SECONDS) {
@@ -1767,6 +1976,9 @@ int main(int argc, char **argv) {
         lcd_set_power(machine_lcd_enabled(machine));
         lcd_set_backlight_colour(machine_backlight_colour(machine));
         lcd_set_backlight(machine_backlight(machine));
+#ifdef __ANDROID__
+        android_update(settings.full_brightness && machine_backlight(machine) && machine_lcd_enabled(machine), !machine_suspended(machine));
+#endif
         uint32_t rate;
         for (size_t count; (count = machine_audio(machine, samples, AUDIO_CHUNK, &rate)) > 0;) {
             if (!audio || !sound) continue;
@@ -1781,6 +1993,9 @@ int main(int argc, char **argv) {
         machine_screen(machine, lcd_framebuffer);
         bool lcd_on = machine_lcd_enabled(machine);
         SDL_UnlockMutex(runner.lock);
+        int inset_left, inset_top, inset_right, inset_bottom;
+        menu_insets(&inset_left, &inset_top, &inset_right, &inset_bottom);
+        view_set_insets(view, inset_left, inset_top, inset_right, inset_bottom);
         bool screen_changed = view_update(view, (float)elapsed, lcd_on);
         if (screen_changed || events_seen || menu_active()) {
             view_render(view);

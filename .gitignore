@@ -21,3 +21,4 @@ __pycache__/
 .vscode/
 sh3emu-rapi
 proxycheck
+*.jks

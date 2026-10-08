@@ -60,6 +60,9 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_ITEM, MENU_MACHINE_FIRST + 15, "", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_NEW_MACHINE, "New Machine" ELLIPSIS, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_MANAGE_MACHINES, "Manage Machines" ELLIPSIS, 0, 0 },
+#ifdef __ANDROID__
+    { MENU_ENTRY_ITEM, MENU_IMPORT, "Import ROMs and Cards" ELLIPSIS, 0, 0 },
+#endif
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_PAUSE, "Pause", 'p', MENU_KEY_PRIMARY },
     { MENU_ENTRY_SUBMENU, 0, "CPU Speed", 0, 0 },
@@ -103,6 +106,9 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_DISPLAY_SIMULATED, "Simulated LCD", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_DISPLAY_SHARP, "Sharp Pixels", 0, 0 },
+#ifdef __ANDROID__
+    { MENU_ENTRY_ITEM, MENU_FULL_BRIGHTNESS, "Full Brightness with Backlight", 0, 0 },
+#endif
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_ITEM, MENU_FULL_SCREEN, "Full Screen", 'f', MENU_KEY_PRIMARY | MENU_KEY_CONTROL },
     { MENU_ENTRY_END, 0, NULL, 0, 0 },

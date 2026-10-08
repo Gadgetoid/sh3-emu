@@ -9,6 +9,7 @@ An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs
 
 - **macOS (Apple silicon):** `SH3Emu.app`, from a release or `make app`. It isn't notarised: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine SH3Emu.app`.
 - **Debian 12 or later and Ubuntu 24.04 or later:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu`, `sh3emu-headless` and `sh3emu-rapi`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
+- **Android (arm64, Android 9 or later):** the `.apk`, from a release or `make apk`. See Android.
 - **From source:** see Building.
 
 ## Supported ROMs
@@ -167,6 +168,17 @@ Not yet: sound on the Casio A-51, the IR port, the HP 320LX's PC Card slot, card
 
 Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Power Button (Cmd-Shift-P) presses the HP 320LX's ON key, which wakes it from suspend, and the Casio A-51's. Devices > Sound turns the sound off and on. Machine > Backlight (Cmd-B) presses the backlight key, and is ticked while the backlight is on; the screen is drawn unlit until it is. On the HP 320LX, F9 is the backlight key too, as it's in F9's place in the key matrix. The title bar says when the machine is suspended.
 
+## Android
+
+The first run asks for ROMs and card images, from the phone's storage or Downloads, and copies them into the app; Machine > Import ROMs and Cards adds more later. A finger is the stylus. In landscape the controls run down both sides of the screen, and in portrait across the top:
+
+- **Hide** folds them into a Keys tab and gives the screen the full height.
+- **Menu**, or Back, opens the menus as tabs. The ones that need a desktop (zoom, full screen, the pseudo-terminal and host serial ports) are left out.
+- **Kbd** opens the phone's keyboard. Ctrl, Alt and Shift stay down until tapped again.
+- **Esc**, **Tab**, the arrows and **Enter** are keys, and **Power** and **Light** the power and backlight buttons.
+
+Notices appear at the bottom of the screen. The unlit screen is dimmed; with the backlight on, the phone runs at full brightness (View > Full Brightness with Backlight turns that off). Picked card, dictionary and snapshot files are copied into the app, under `Android/data/org.sh3_emu.sh3emu/files/sh3-emu`. Save Screenshot puts it in Pictures/SH3Emu, and Share Screen shares it. PC Link's Shared Folder and Copy My Documents need All files access, which they ask for. Leaving the app saves the machine.
+
 ## Testing
 
 - `make check` needs no ROMs: the command lines, and the gateway's `CLIENT` handshake after stray text.
@@ -177,6 +189,8 @@ Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Po
 ## Building
 
 macOS: `brew install sdl3 libslirp`, then `make`. Debian or Ubuntu: `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev`, then `make`. Without `libsdl3-dev` (Debian 12, Ubuntu 24.04), install `cmake curl libglib2.0-dev` and the X11 and Wayland development packages listed in `.github/workflows/build.yml`, then `sh tools/sdl3-static.sh` and `PKG_CONFIG_PATH=build/sdl3/lib/pkgconfig make SDL_STATIC=1`.
+
+Android, from macOS: `brew install --cask android-ndk android-commandlinetools`, `brew install openjdk@21 meson ninja` and `sdkmanager "platforms;android-35" "build-tools;35.0.0"`, then `make apk` for `dist/sh3emu.apk`. `tools/android-deps.sh` cross-builds GLib, libslirp, mbedTLS and curl into `build/android` the first time. Without a release key (`APK_KEYSTORE`, `APK_KEYSTORE_PASSWORD`, `APK_KEY_ALIAS`), the APK is a debug build signed with `~/.android/debug.keystore`. `make apk-install` installs it over adb with the Play Store as the installer, which gets past phones that block USB installs once the app has been installed by hand. `make apk-push` replaces a debug install's native code without reinstalling.
 
 ## Licence
 
