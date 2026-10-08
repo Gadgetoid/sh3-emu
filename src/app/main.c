@@ -13,8 +13,10 @@
 #include "app/host.h"
 #include "app/input.h"
 #include "app/launch.h"
+#include "app/library.h"
 #include "app/log.h"
 #include "app/paths.h"
+#include "app/picks.h"
 #include "app/profiles.h"
 #include "app/rom_catalog.h"
 #include "app/settings.h"
@@ -162,74 +164,6 @@ static void release_keys(input_queue_t *input, machine_t *machine, bool *held, i
     }
 }
 
-typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_SEND, PICK_FETCH, PICK_SHARED, PICK_DICTIONARY } pick_kind_t;
-
-#define PICK_MAX 64
-
-typedef struct {
-    pick_kind_t kind;
-    int count;
-    char paths[PICK_MAX][1024];
-    char export_uri[1024];
-} picked_t;
-
-static Uint32 pick_event_type = 0;
-
-static void pick_done(void *userdata, const char *const *files, int filter) {
-    (void)filter;
-    if (!pick_event_type || !files || !files[0]) return;
-    picked_t *picked = malloc(sizeof *picked);
-    if (!picked) return;
-    picked->kind = (pick_kind_t)(intptr_t)userdata;
-    picked->count = 0;
-    picked->export_uri[0] = 0;
-    while (files[picked->count] && picked->count < PICK_MAX) {
-        snprintf(picked->paths[picked->count], sizeof picked->paths[0], "%s", files[picked->count]);
-        picked->count++;
-    }
-    SDL_Event event;
-    SDL_zero(event);
-    event.type = pick_event_type;
-    event.user.data1 = picked;
-    if (!SDL_PushEvent(&event)) free(picked);
-}
-
-typedef struct {
-    char paths[PICK_MAX][1024];
-    int count;
-} dropped_t;
-
-static bool is_directory(const char *path) {
-    struct stat info;
-    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
-}
-
-static const char *handle_drop(dropped_t *dropped, machine_t *machine, desktop_t *desktop, bool online) {
-    static char message[1200];
-    int files = 0, scripts = -1, cards = -1;
-    const char *list[PICK_MAX + 1];
-    for (int i = 0; i < dropped->count; i++) {
-        const char *path = dropped->paths[i];
-        if (is_directory(path)) continue;
-        if (file_has_extension(path, ".img") && cards < 0) cards = i;
-        else if (file_has_extension(path, ".load") && scripts < 0) scripts = i;
-        list[files++] = path;
-    }
-    list[files] = NULL;
-    dropped->count = 0;
-    if (cards >= 0 && files == 1) {
-        snprintf(message, sizeof message, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", file_leaf_name(list[0]));
-        return message;
-    }
-    if (!files) return "drop files, a .load script or a card image";
-    if (!online) return "connect Devices > Serial Port > Network (PPP) to send files to the device";
-    if (scripts >= 0) {
-        snprintf(message, sizeof message, "installing %s", file_leaf_name(dropped->paths[scripts]));
-        return desktop_load(desktop, dropped->paths[scripts]) ? message : "busy with the last transfer";
-    }
-    return desktop_send(desktop, list) ? "sending to \\My Documents" : "busy with the last transfer";
-}
-
 static void print_debug_line(void *context, const char *line) {
     (void)context;
     if (debugger) gdb_debug_line(debugger, line);
@@ -300,153 +234,6 @@ static void set_title(SDL_Window *window, const char *name, const char *notice, 
     else if (suspended) snprintf(title, sizeof title, "%s, suspended", base);
     else snprintf(title, sizeof title, "%s", base);
     if (strcmp(SDL_GetWindowTitle(window), title)) SDL_SetWindowTitle(window, title);
-}
-
-static void rom_folder(char *path, size_t size) {
-    char base[1024];
-    app_data_folder(base, sizeof base);
-    snprintf(path, size, "%s/roms", base);
-    SDL_CreateDirectory(path);
-}
-
-#define CARD_MIN_BYTES  (1024 * 1024)
-
-static void find_roms(rom_set_t *roms) {
-    char folder[1100];
-    rom_folder(folder, sizeof folder);
-    rom_catalog_find(roms, folder);
-}
-
-static bool no_roms_dialog(void) {
-    char folder[1100], message[1400];
-    rom_folder(folder, sizeof folder);
-    snprintf(message, sizeof message, "Put a ROM in %s: a Casio Cassiopeia A-51 or HP 320LX ROM image.", folder);
-    const SDL_MessageBoxButtonData buttons[] = {
-        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
-        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Show ROM Folder" },
-    };
-    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "No ROM found", message, 2, buttons, NULL };
-    int chosen = 0;
-    if (SDL_ShowMessageBox(&dialog, &chosen) && chosen == 1) host_open_path(folder);
-    return false;
-}
-
-#ifdef __ANDROID__
-static void data_subfolder(const char *name, char *path, size_t size) {
-    char base[1024];
-    app_data_folder(base, sizeof base);
-    snprintf(path, size, "%s/%s", base, name);
-    SDL_CreateDirectory(path);
-}
-
-static void localize_picked(picked_t *picked) {
-    char folder[1100];
-    if (picked->kind == PICK_CARD) data_subfolder("cards", folder, sizeof folder);
-    else if (picked->kind == PICK_DICTIONARY) data_subfolder("dictionaries", folder, sizeof folder);
-    else snprintf(folder, sizeof folder, "%s", getenv("TMPDIR") ? getenv("TMPDIR") : ".");
-    SDL_CreateDirectory(folder);
-    for (int i = 0; i < picked->count; i++) {
-        char uri[1024], path[1024];
-        snprintf(uri, sizeof uri, "%s", picked->paths[i]);
-        bool local;
-        if (picked->kind == PICK_SAVE_SNAPSHOT) {
-            local = android_local_path(uri, folder, path, sizeof path);
-            snprintf(picked->export_uri, sizeof picked->export_uri, "%s", uri);
-        } else {
-            local = android_import(uri, folder, path, sizeof path);
-        }
-        snprintf(picked->paths[i], sizeof picked->paths[i], "%s", local ? path : "");
-    }
-}
-
-typedef struct {
-    SDL_AtomicInt done;
-    int count;
-    char uris[PICK_MAX][1024];
-} import_pick_t;
-
-static void import_picked(void *userdata, const char *const *files, int filter) {
-    (void)filter;
-    import_pick_t *pick = userdata;
-    pick->count = 0;
-    while (files && files[pick->count] && pick->count < PICK_MAX) {
-        snprintf(pick->uris[pick->count], sizeof pick->uris[0], "%s", files[pick->count]);
-        pick->count++;
-    }
-    SDL_SetAtomicInt(&pick->done, 1);
-}
-
-static int import_files(int *cards) {
-    static import_pick_t pick;
-    pick.count = 0;
-    SDL_SetAtomicInt(&pick.done, 0);
-    SDL_ShowOpenFileDialog(import_picked, &pick, NULL, NULL, 0, NULL, true);
-    while (!SDL_GetAtomicInt(&pick.done)) {
-        SDL_Event event;
-        if (SDL_WaitEventTimeout(&event, 100) && event.type == SDL_EVENT_QUIT) SDL_PushEvent(&event);
-    }
-    char roms[1100], card_folder[1100];
-    rom_folder(roms, sizeof roms);
-    data_subfolder("cards", card_folder, sizeof card_folder);
-    int rom_count = 0;
-    *cards = 0;
-    for (int i = 0; i < pick.count; i++) {
-        char path[1200];
-        if (!android_import(pick.uris[i], roms, path, sizeof path)) continue;
-        struct stat info;
-        uint32_t screens;
-        if (rom_catalog_probe(path, NULL)) {
-            rom_count++;
-            continue;
-        }
-        char card[1200];
-        snprintf(card, sizeof card, "%s/%s", card_folder, file_leaf_name(path));
-        if (stat(path, &info) == 0 && info.st_size >= CARD_MIN_BYTES && info.st_size % 512 == 0 && rename(path, card) == 0) (*cards)++;
-        else remove(path);
-    }
-    return rom_count;
-}
-
-static bool first_run_import(void) {
-    SDL_Init(SDL_INIT_VIDEO);
-    const SDL_MessageBoxButtonData buttons[] = {
-        { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
-        { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Choose Files" },
-    };
-    const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "Import ROMs and Cards",
-                                        "Choose your ROMs: a Casio Cassiopeia A-51 or HP 320LX ROM image, or both. Card images can be chosen at the same time.",
-                                        2, buttons, NULL };
-    int chosen = 0;
-    if (!SDL_ShowMessageBox(&dialog, &chosen) || chosen != 1) return false;
-    int cards;
-    import_files(&cards);
-    return true;
-}
-#endif
-
-static void machines_folder(char *path, size_t size) {
-    char base[1024];
-    app_data_folder(base, sizeof base);
-    snprintf(path, size, "%s/machines", base);
-    SDL_CreateDirectory(path);
-}
-
-static int list_roms(dialog_rom_t *roms, int max) {
-    char folder[1100];
-    rom_folder(folder, sizeof folder);
-    DIR *dir = opendir(folder);
-    if (!dir) return 0;
-    int count = 0;
-    struct dirent *entry;
-    while ((entry = readdir(dir)) && count < max) {
-        if (entry->d_name[0] == '.') continue;
-        dialog_rom_t *rom = &roms[count];
-        if (snprintf(rom->path, sizeof rom->path, "%s/%s", folder, entry->d_name) >= (int)sizeof rom->path) continue;
-        rom->screens = rom_catalog_label(rom->path, rom->label, sizeof rom->label);
-        if (rom->screens) count++;
-    }
-    closedir(dir);
-    return count;
 }
 
 static bool legacy_state_path(const char *rom_path, char *state, size_t size) {
@@ -573,9 +360,9 @@ int main(int argc, char **argv) {
     const char *card = launch.card, *state_file = launch.state_file;
     bool fresh = launch.fresh;
     static rom_set_t roms;
-    find_roms(&roms);
+    library_find_roms(&roms);
     char profiles_folder[1100];
-    machines_folder(profiles_folder, sizeof profiles_folder);
+    library_machines_folder(profiles_folder, sizeof profiles_folder);
     static profiles_t profiles;
     profiles_load(&profiles, profiles_folder);
     if (!profiles.count) migrate_profiles(&profiles, &roms, &settings, profiles_folder);
@@ -594,13 +381,16 @@ int main(int argc, char **argv) {
             if (current_index < 0) current_index = profiles.count ? 0 : -1;
         }
 #ifdef __ANDROID__
-        while (current_index < 0 && first_run_import()) {
-            find_roms(&roms);
+        while (current_index < 0 && library_first_run_import()) {
+            library_find_roms(&roms);
             migrate_profiles(&profiles, &roms, &settings, profiles_folder);
             current_index = profiles.count ? 0 : -1;
         }
 #endif
-        if (current_index < 0) return no_roms_dialog() ? 0 : 1;
+        if (current_index < 0) {
+            library_show_no_roms();
+            return 1;
+        }
         current = profiles.entries[current_index];
     }
     char state[1100];
@@ -619,7 +409,7 @@ int main(int argc, char **argv) {
 
     SDL_SetAppMetadata("SH3Emu", options_version(), "sh3-emu");
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
-    pick_event_type = SDL_RegisterEvents(1);
+    picks_init();
     int window_width, window_height;
     window_size((view_display_t)settings.display, settings.scale, &window_width, &window_height);
     SDL_Window *window = SDL_CreateWindow(WINDOW_TITLE, window_width, window_height, SDL_WINDOW_HIGH_PIXEL_DENSITY);
@@ -755,12 +545,14 @@ int main(int argc, char **argv) {
                 break;
             case SDL_EVENT_DROP_COMPLETE:
                 if (dropped.count) {
-                    notice = handle_drop(&dropped, machine, desktop, serial.gateway && net_gateway_online(serial.gateway) && !desktop_busy(desktop));
+                    static char drop_notice[1200];
+                    picks_handle_drop(&dropped, machine, desktop, serial.gateway && net_gateway_online(serial.gateway) && !desktop_busy(desktop), drop_notice, sizeof drop_notice);
+                    notice = drop_notice;
                     notice_left = NOTICE_SECONDS * 2;
                 }
                 break;
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
-                find_roms(&roms);
+                library_find_roms(&roms);
 #ifdef __ANDROID__
                 SDL_SetWindowFullscreen(window, false);
                 SDL_SetWindowFullscreen(window, true);
@@ -794,14 +586,14 @@ int main(int argc, char **argv) {
                 }
                 break;
             default:
-                if (pick_event_type && event.type == pick_event_type) {
+            {
+                picked_t *taken = picks_take(&event);
+                if (taken) {
                     free(picked);
-                    picked = event.user.data1;
-#ifdef __ANDROID__
-                    localize_picked(picked);
-#endif
+                    picked = taken;
                 }
-                break;
+            }
+            break;
             }
         }
 
@@ -827,7 +619,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_NEW_MACHINE: {
                 static dialog_rom_t rom_list[32];
-                int rom_count = list_roms(rom_list, 32);
+                int rom_count = library_list_roms(rom_list, 32);
                 dialog_machine_t chosen = { .memory = 16, .screen = { SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT }, .host_time = settings.host_time != 0 };
                 if (rom_count) snprintf(chosen.rom, sizeof chosen.rom, "%s", current.rom);
                 events_seen = true;
@@ -951,14 +743,14 @@ int main(int argc, char **argv) {
                 static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state" } };
                 static char default_snapshot[1200];
                 snapshot_store_default_name(&snapshots, default_snapshot, sizeof default_snapshot);
-                SDL_ShowSaveFileDialog(pick_done, (void *)(intptr_t)PICK_SAVE_SNAPSHOT, window, filters, 1, default_snapshot);
+                SDL_ShowSaveFileDialog(picks_done, (void *)(intptr_t)PICK_SAVE_SNAPSHOT, window, filters, 1, default_snapshot);
                 break;
             }
             case MENU_LOAD_SNAPSHOT: {
                 static const SDL_DialogFileFilter filters[] = { { "Snapshot", "state;bin" } };
                 static char folder[1100];
                 snapshot_store_folder(&snapshots, folder, sizeof folder);
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_LOAD_SNAPSHOT, window, filters, 1, folder, false);
+                SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_LOAD_SNAPSHOT, window, filters, 1, folder, false);
                 break;
             }
             case MENU_SHOW_DEBUG_OUTPUT: {
@@ -989,8 +781,8 @@ int main(int argc, char **argv) {
 #ifdef __ANDROID__
             case MENU_IMPORT: {
                 static char import_notice[160];
-                int cards, imported = import_files(&cards);
-                find_roms(&roms);
+                int cards, imported = library_import_files(&cards);
+                library_find_roms(&roms);
                 snprintf(import_notice, sizeof import_notice, "imported %d ROMs and %d cards", imported, cards);
                 notice = import_notice;
                 notice_left = NOTICE_SECONDS * 2;
@@ -1024,10 +816,10 @@ int main(int argc, char **argv) {
             }
 #else
             case MENU_FETCH_DOCUMENTS:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
+                SDL_ShowOpenFolderDialog(picks_done, (void *)(intptr_t)PICK_FETCH, window, NULL, false);
                 break;
             case MENU_SHARED_FOLDER:
-                SDL_ShowOpenFolderDialog(pick_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
+                SDL_ShowOpenFolderDialog(picks_done, (void *)(intptr_t)PICK_SHARED, window, settings.shared_folder[0] ? settings.shared_folder : NULL, false);
                 break;
 #endif
             case MENU_SPEED_1:
@@ -1040,7 +832,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_INSERT_CARD: {
                 static const SDL_DialogFileFilter filters[] = { { "Card images", "img;bin;raw" }, { "All files", "*" } };
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_CARD, window, filters, 2, NULL, false);
+                SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_CARD, window, filters, 2, NULL, false);
                 break;
             }
             default:
@@ -1068,7 +860,7 @@ int main(int argc, char **argv) {
                 break;
             case MENU_MOUNT_DICTIONARY: {
                 static const SDL_DialogFileFilter filters[] = { { "Dictionary images", "bin;rom" }, { "All files", "*" } };
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_DICTIONARY, window, filters, 2, settings.dictionary[0] ? settings.dictionary : NULL, false);
+                SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_DICTIONARY, window, filters, 2, settings.dictionary[0] ? settings.dictionary : NULL, false);
                 break;
             }
             case MENU_UNMOUNT_DICTIONARY:
@@ -1079,7 +871,7 @@ int main(int argc, char **argv) {
                 notice_left = NOTICE_SECONDS;
                 break;
             case MENU_SEND_FILES:
-                SDL_ShowOpenFileDialog(pick_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
+                SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_SEND, window, NULL, 0, NULL, true);
                 break;
             case MENU_SYNC_NOW:
                 desktop_sync(desktop, settings.shared_folder);
