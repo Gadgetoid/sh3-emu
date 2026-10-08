@@ -65,6 +65,7 @@ void sh3_flush_translations(sh3_cpu_t *cpu) {
 void sh3_reset(sh3_cpu_t *cpu) {
     sh3_bus_t bus = cpu->bus;
     uint32_t speed = cpu->speed;
+    bool fast_divide = cpu->fast_divide;
     sh3_debug_t *debug = cpu->debug;
     bool (*on_trapa)(void *, uint32_t) = cpu->on_trapa;
     bool (*on_watch)(void *, uint32_t) = cpu->on_watch;
@@ -76,6 +77,7 @@ void sh3_reset(sh3_cpu_t *cpu) {
     cpu->on_watch = on_watch;
     cpu->on_interrupt = on_interrupt;
     cpu->speed = speed ? speed : 1;
+    cpu->fast_divide = fast_divide;
     cpu->sr = SH3_SR_MD | SH3_SR_RB | SH3_SR_BL | SH3_SR_IMASK;
     cpu->pc = RESET_VECTOR;
     cpu->expevt = SH3_EXP_POWER_ON;
@@ -525,6 +527,50 @@ static void div1(sh3_cpu_t *cpu, uint32_t n, uint32_t m) {
     if (!mbit) q = q ? !carry : carry;
     else q = q ? carry : !carry;
     cpu->sr = (cpu->sr & ~(SH3_SR_Q | SH3_SR_T)) | (q ? SH3_SR_Q : 0) | (q == mbit ? SH3_SR_T : 0);
+}
+
+#define DIVIDE_STEPS_MIN 8
+#define DIVIDE_STEPS_MAX 32
+
+static bool cached_op(const sh3_cpu_t *cpu, uint32_t va, uint16_t *op) {
+    const sh3_fetch_cache_t *slot = &cpu->fetch_cache[(va >> 10) & (SH3_FETCH_CACHE - 1)];
+    if (slot->tag != cache_tag(cpu, va) || !slot->block) return false;
+    *op = (uint16_t)read_host(slot->block + (va & 0x3FFu), 2);
+    return true;
+}
+
+static bool is_rotcl(uint16_t op) {
+    return (op & 0xF0FFu) == 0x4024u;
+}
+
+static bool is_div1(uint16_t op) {
+    return (op & 0xF00Fu) == 0x3004u;
+}
+
+static bool divide_steps(sh3_cpu_t *cpu, uint32_t pc, uint16_t rotcl) {
+    uint16_t step;
+    if (!cached_op(cpu, pc + 2, &step) || !is_div1(step)) return false;
+    int steps = 0;
+    for (uint16_t op; steps < DIVIDE_STEPS_MAX; steps++) {
+        uint32_t at = pc + (uint32_t)steps * 4;
+        if (!cached_op(cpu, at, &op) || op != rotcl || !cached_op(cpu, at + 2, &op) || op != step) break;
+    }
+    if (steps < DIVIDE_STEPS_MIN) return false;
+    uint32_t rotated = (rotcl >> 8) & 15, n = (step >> 8) & 15, m = (step >> 4) & 15;
+    for (int i = 0; i < steps; i++) {
+        uint32_t carry = cpu->r[rotated] >> 31;
+        cpu->r[rotated] = (cpu->r[rotated] << 1) | (cpu->sr & SH3_SR_T);
+        cpu->sr = (cpu->sr & ~SH3_SR_T) | (carry ? SH3_SR_T : 0);
+        div1(cpu, n, m);
+    }
+    for (int i = 1; i < steps * 2; i++) {
+        if (++cpu->speed_count >= cpu->speed) {
+            cpu->speed_count = 0;
+            cpu->cycles++;
+        }
+    }
+    cpu->pc = pc + (uint32_t)steps * 4;
+    return true;
 }
 
 static void set_t(sh3_cpu_t *cpu, bool value) {
@@ -1020,6 +1066,7 @@ void sh3_run(sh3_cpu_t *cpu, uint64_t until_cycle) {
         for (int w = 0; (cpu->watch_filter[bit >> 5] >> (bit & 31) & 1) && w < cpu->watch_count && !handled; w++)
             if (current_pc == cpu->watch[w]) handled = cpu->on_watch(cpu->bus.context, current_pc);
         if (cpu->fault || handled) continue;
+        if (cpu->fast_divide && !cpu->debug && is_rotcl(op) && divide_steps(cpu, current_pc, op)) continue;
         if (cpu->debug) {
             if (debug_stops_before(cpu, current_pc)) {
                 cpu->debug->stop = true;

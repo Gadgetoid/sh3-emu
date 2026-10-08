@@ -999,6 +999,7 @@ uint32_t machine_speed(machine_t *m) {
 }
 void machine_set_optimisations(machine_t *m, bool optimisations) {
     m->optimisations = optimisations;
+    m->cpu.fast_divide = optimisations;
 }
 bool machine_optimisations(machine_t *m) {
     return m->optimisations;

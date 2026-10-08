@@ -105,6 +105,7 @@ struct sh3_cpu {
     bool in_slot;
     uint64_t cycles;
     uint32_t speed;
+    bool fast_divide;
     uint32_t speed_count;
     uint64_t exceptions[64];
     bool fault;
