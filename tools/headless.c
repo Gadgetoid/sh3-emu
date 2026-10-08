@@ -45,6 +45,7 @@ static void advance(machine_t *machine, uint64_t cycles) {
         run_cycles(machine, step);
         if (agent) agent_poll(agent, machine_mailbox(machine));
         serial_link_pump(&serial, machine);
+        if (serial.mode == SERIAL_TCP && serial_link_attached(&serial) != machine_serial_connected(machine)) machine_serial_connect(machine, serial_link_attached(&serial));
         cycles -= step;
     }
 }
@@ -130,18 +131,22 @@ typedef struct {
     int      power_count;
     double   backlight_times[8];
     int      backlight_count;
-    double   soft_reset_at, realtime, net_at, replug_at;
+    double   soft_reset_at, realtime, net_at, replug_at, cable_at;
+    double   send_times[8];
+    const char *send_text[8];
+    int      send_count;
     bool     net, pty;
     const char *rapi_socket;
+    const char *user_agent;
     const char *dictionary;
-    int      rapi_port;
+    int      rapi_port, tcp_port;
     uint32_t watches[MACHINE_WATCH_MAX];
     int      watch_count;
     uint32_t memory, speed;
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -157,6 +162,10 @@ static const option_t OPTIONS[] = {
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the device's RAPI port on a Unix socket, for sh3emu-rapi --socket", 0 },
     [OPT_RAPI_PORT] = { "rapi-port", "PORT", "expose the device's RAPI port on this TCP port on all interfaces, for sh3emu-rapi --connect", 0 },
+    [OPT_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent; empty passes Pocket IE's own through", 0 },
+    [OPT_CABLE] = { "cable", "SECONDS", "connect a bare serial cable, with nothing at the other end", 0 },
+    [OPT_CABLE_SEND] = { "cable-send", "SECONDS:TEXT", "send bytes down the cable (\\r and \\n allowed); anything CE sends is printed", 8 },
+    [OPT_TCP] = { "tcp", "PORT", "offer COM1 as raw bytes on this TCP port on all interfaces, with the cable connected while a client is attached", 0 },
     [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 20 s, or 2 s after --load)", 0 },
     [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, with a new gateway", 0 },
     [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
@@ -207,12 +216,17 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_CARD: run->card = value; return true;
     case OPT_DICTIONARY: run->dictionary = value; return true;
     case OPT_RAPI: run->rapi_socket = value; return true;
+    case OPT_USER_AGENT: run->user_agent = value; return true;
     case OPT_RAPI_PORT: {
         double port;
         if (!option_number(value, &port) || port < 1 || port > 65535) return false;
         run->rapi_port = (int)port;
         return true;
     }
+    case OPT_TCP:
+        if (!option_integer(value, 10, &integer) || integer < 1 || integer > 65535) return false;
+        run->tcp_port = (int)integer;
+        return true;
     case OPT_NET:
     case OPT_PTY:
         if (option == OPT_NET) run->net = true;
@@ -264,6 +278,11 @@ static bool parse_option(void *context, int option, const char *value, char *err
         run->key_count++;
         return true;
     }
+    case OPT_CABLE: return option_number(value, &run->cable_at) && run->cable_at >= 0;
+    case OPT_CABLE_SEND:
+        if (!option_timed(value, &run->send_times[run->send_count], &rest)) return false;
+        run->send_text[run->send_count++] = rest;
+        return true;
     case OPT_TYPE:
         if (!option_timed(value, &run->type_times[run->type_count], &rest)) return false;
         run->type_strings[run->type_count++] = rest;
@@ -325,7 +344,7 @@ static bool due(double at, uint64_t done, uint64_t slice) {
 
 int main(int argc, char **argv) {
     static run_t run;
-    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .replug_at = -1 };
+    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .replug_at = -1, .cable_at = -1 };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&SPEC, argc, argv, parse_option, &run, positional, 1, &positional_count);
@@ -336,6 +355,8 @@ int main(int argc, char **argv) {
         return 2;
     }
     run.rom_path = positional[0];
+    if (run.net && run.pty) { fprintf(stderr, "headless: --net and --pty can't both be given\n"); return 2; }
+    if (run.tcp_port && (run.net || run.pty)) { fprintf(stderr, "headless: --tcp can't be given with --net or --pty\n"); return 2; }
     if (run.gdb_port && !run.seconds_given) run.seconds = 1e7;
     double latest = run.soft_reset_at;
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
@@ -343,6 +364,8 @@ int main(int argc, char **argv) {
     for (int k = 0; k < run.type_count; k++) if (run.type_times[k] > latest) latest = run.type_times[k];
     for (int b = 0; b < run.power_count; b++) if (run.power_times[b] > latest) latest = run.power_times[b];
     for (int b = 0; b < run.backlight_count; b++) if (run.backlight_times[b] > latest) latest = run.backlight_times[b];
+    for (int k = 0; k < run.send_count; k++) if (run.send_times[k] > latest) latest = run.send_times[k];
+    if (run.cable_at > latest) latest = run.cable_at;
     if (run.replug_at >= 0 && run.replug_at + 2 > latest) latest = run.replug_at + 2;
     if (latest >= run.seconds) fprintf(stderr, "headless: an event at %.2f s is at or after --seconds=%.2f and won't happen\n", latest, run.seconds);
     if (run.agent_socket && !(agent = agent_create(run.agent_socket, log_stderr))) {
@@ -375,13 +398,19 @@ int main(int argc, char **argv) {
     serial_link_init(&serial, log_stderr);
     serial.options.rapi_socket = run.rapi_socket;
     serial.options.rapi_port = run.rapi_port;
-    if (run.net && run.pty) { fprintf(stderr, "headless: --net and --pty can't both be given\n"); return 2; }
+    if (run.user_agent) serial.options.user_agent = run.user_agent;
     if (run.net || run.pty) {
         if (run.net && !net_gateway_available()) { fprintf(stderr, "headless: --net needs a build with libslirp\n"); return 2; }
         const char *failure = serial_link_open(&serial, run.net ? SERIAL_NETWORK : SERIAL_PTY, NULL);
         if (failure) { fprintf(stderr, "headless: %s\n", failure); return 1; }
         if (run.pty) fprintf(stderr, "serial: COM1 on %s\n", serial.name);
         if (run.net_at < 0) run.net_at = run.load ? 2 : 20;
+        machine_serial_connect(machine, false);
+    }
+    if (run.tcp_port) {
+        serial.tcp_port = run.tcp_port;
+        const char *failure = serial_link_open(&serial, SERIAL_TCP, NULL);
+        if (failure) { fprintf(stderr, "headless: %s\n", failure); return 1; }
         machine_serial_connect(machine, false);
     }
     if (run.gdb_process && !run.gdb_port) {
@@ -443,6 +472,18 @@ int main(int argc, char **argv) {
             machine_backlight_button(machine, false);
         }
         if (due(run.soft_reset_at, done, slice)) machine_soft_reset(machine);
+        if (due(run.cable_at, done, slice)) machine_serial_connect(machine, true);
+        for (int k = 0; k < run.send_count; k++) {
+            if (!due(run.send_times[k], done, slice)) continue;
+            char text[512];
+            size_t length = 0;
+            for (const char *c = run.send_text[k]; *c && length < sizeof text - 1; c++) {
+                if (c[0] == '\\' && c[1] == 'r') { text[length++] = '\r'; c++; }
+                else if (c[0] == '\\' && c[1] == 'n') { text[length++] = '\n'; c++; }
+                else text[length++] = *c;
+            }
+            machine_serial_send(machine, (const uint8_t *)text, length);
+        }
         if ((run.net || run.pty) && due(run.net_at, done, slice)) machine_serial_connect(machine, true);
         if (run.net && due(run.replug_at, done, slice)) {
             machine_serial_connect(machine, false);
@@ -451,6 +492,15 @@ int main(int argc, char **argv) {
         }
         advance(machine, total - done < slice ? total - done : slice);
         pace(machine, run.realtime, wall_start, cycles_start);
+        if (serial.mode == SERIAL_OFF) {
+            uint8_t sent[4096];
+            size_t count = machine_serial_take(machine, sent, sizeof sent);
+            if (count) {
+                fprintf(stderr, "SERIAL TX %zu bytes at %u baud t=%.1f:", count, machine_serial_baud(machine), (double)machine_cycles(machine) / MACHINE_CLOCK_HZ);
+                for (size_t i = 0; i < count && i < 64; i++) fprintf(stderr, " %02X", sent[i]);
+                fprintf(stderr, "\n");
+            }
+        }
         if (wav_file) {
             uint32_t rate;
             size_t count = machine_audio(machine, audio, sizeof audio / sizeof audio[0], &rate);

@@ -1,4 +1,5 @@
 #include "rapi/rapi_sync.h"
+#include "rapi/rapi_project.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -14,7 +15,7 @@
 
 #define PATH_SIZE       1024
 #define FREE_MARGIN     (64 * 1024)
-#define MANIFEST_HEADER "sh3emu-sync 1"
+#define MANIFEST_HEADER RAPI_SYNC_MANIFEST
 
 typedef struct {
     char     path[PATH_SIZE];
@@ -330,19 +331,19 @@ static bool upload(sync_t *sync, entry_t *entry) {
     local_path(sync, entry->path, local, sizeof local);
     remote_path(sync, entry->path, remote, sizeof remote);
     if (!valid_on_device(entry->path)) {
-        sync_log(sync, "skipped %s: name not allowed on the device", entry->path);
+        sync_log(sync, "skipped %s: name not allowed on the " RAPI_DEVICE, entry->path);
         sync->result->skipped++;
         return false;
     }
     if (entry->mac_size + FREE_MARGIN > sync->free_space) {
-        sync_log(sync, "skipped %s: not enough storage on the device", entry->path);
+        sync_log(sync, "skipped %s: not enough storage on the " RAPI_DEVICE, entry->path);
         sync->result->skipped++;
         return false;
     }
     make_remote_directories(sync, entry->path);
     rapi_file_t info;
     if (!rapi_upload(sync->rapi, local, remote, NULL, NULL) || !rapi_stat(sync->rapi, remote, &info)) {
-        sync_log(sync, "can't copy %s to the device: %s", entry->path, rapi_error(sync->rapi));
+        sync_log(sync, "can't copy %s to the " RAPI_DEVICE ": %s", entry->path, rapi_error(sync->rapi));
         check_connection(sync);
         return false;
     }
@@ -351,7 +352,7 @@ static bool upload(sync_t *sync, entry_t *entry) {
     entry->device_size = info.size;
     sync->free_space -= entry->mac_size < sync->free_space ? entry->mac_size : sync->free_space;
     sync->result->uploaded++;
-    sync_log(sync, "copied %s to the device", entry->path);
+    sync_log(sync, "copied %s to the " RAPI_DEVICE, entry->path);
     return true;
 }
 
@@ -361,12 +362,12 @@ static bool download_as(sync_t *sync, entry_t *entry, const char *relative) {
     remote_path(sync, entry->path, remote, sizeof remote);
     make_local_directories(local);
     if (!rapi_download(sync->rapi, remote, local, NULL, NULL)) {
-        sync_log(sync, "can't copy %s from the device: %s", entry->path, rapi_error(sync->rapi));
+        sync_log(sync, "can't copy %s from the " RAPI_DEVICE ": %s", entry->path, rapi_error(sync->rapi));
         check_connection(sync);
         return false;
     }
     sync->result->downloaded++;
-    sync_log(sync, "copied %s from the device", relative);
+    sync_log(sync, "copied %s from the " RAPI_DEVICE, relative);
     return true;
 }
 
@@ -387,11 +388,11 @@ static bool resolve_conflict(sync_t *sync, entries_t *entries, size_t index) {
     const char *path = entries->items[index].path;
     const char *leaf = strrchr(path, '/');
     const char *dot = strrchr(leaf ? leaf : path, '.');
-    if (dot && dot != (leaf ? leaf + 1 : path)) snprintf(copy, sizeof copy, "%.*s (device)%s", (int)(dot - path), path, dot);
-    else snprintf(copy, sizeof copy, "%s (device)", path);
+    if (dot && dot != (leaf ? leaf + 1 : path)) snprintf(copy, sizeof copy, "%.*s (" RAPI_DEVICE ")%s", (int)(dot - path), path, dot);
+    else snprintf(copy, sizeof copy, "%s (" RAPI_DEVICE ")", path);
     if (!download_as(sync, &entries->items[index], copy)) return false;
     sync->result->conflicts++;
-    sync_log(sync, "%s changed on both: kept the device's copy as %s", path, copy);
+    sync_log(sync, "%s changed on both: kept the " RAPI_DEVICE "'s copy as %s", path, copy);
     char local[PATH_SIZE * 2];
     struct stat info;
     local_path(sync, copy, local, sizeof local);
@@ -420,12 +421,12 @@ static bool apply(sync_t *sync, entries_t *entries, size_t index) {
         char local[PATH_SIZE * 2];
         local_path(sync, entry->path, local, sizeof local);
         if (!move_to_trash(local)) {
-            sync_log(sync, "%s was deleted on the device; couldn't move the Mac copy to the Trash", entry->path);
+            sync_log(sync, "%s was deleted on the " RAPI_DEVICE "; couldn't move the Mac copy to the Trash", entry->path);
             return false;
         }
         entry->on_mac = false;
         sync->result->deleted_on_mac++;
-        sync_log(sync, "%s was deleted on the device: moved the Mac copy to the Trash", entry->path);
+        sync_log(sync, "%s was deleted on the " RAPI_DEVICE ": moved the Mac copy to the Trash", entry->path);
         return true;
     }
     if (entry->on_device) {
@@ -433,13 +434,13 @@ static bool apply(sync_t *sync, entries_t *entries, size_t index) {
         char remote[PATH_SIZE * 2];
         remote_path(sync, entry->path, remote, sizeof remote);
         if (!rapi_delete(sync->rapi, remote)) {
-            sync_log(sync, "can't delete %s on the device: %s", entry->path, rapi_error(sync->rapi));
+            sync_log(sync, "can't delete %s on the " RAPI_DEVICE ": %s", entry->path, rapi_error(sync->rapi));
             check_connection(sync);
             return false;
         }
         entry->on_device = false;
         sync->result->deleted_on_device++;
-        sync_log(sync, "%s was deleted on the host: deleted it on the device", entry->path);
+        sync_log(sync, "%s was deleted on the host: deleted it on the " RAPI_DEVICE, entry->path);
         return true;
     }
     return true;
