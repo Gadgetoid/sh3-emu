@@ -963,6 +963,8 @@ bool machine_watch_pc(machine_t *m, uint32_t va) {
 
 void machine_set_memory(machine_t *m, uint32_t megabytes) {
     if (megabytes != 16 && megabytes != 32 && megabytes != 64) return;
+    uint32_t most = machine_board_memory_max(machine_rom_system(m));
+    if (megabytes > most) megabytes = most;
     m->dram_size_next = megabytes << 20;
     if (m->dram_size_next != m->dram_size) machine_reset(m);
 }
@@ -1025,6 +1027,9 @@ const char *machine_board_name(int board) {
     case MACHINE_BOARD_HP300LX: return "HP 300LX";
     default: return "Unknown";
     }
+}
+uint32_t machine_board_memory_max(int board) {
+    return board == MACHINE_BOARD_HP300LX ? 32 : 64;
 }
 key_layout_t machine_key_layout(machine_t *m) {
     (void)m; return KEY_LAYOUT_ROM;

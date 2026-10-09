@@ -12,5 +12,5 @@ typedef struct {
 
 void         rom_catalog_find(rom_set_t *roms, const char *folder);
 int          rom_catalog_probe(const char *path, uint32_t *screens);
-uint32_t     rom_catalog_label(const char *path, char *label, size_t label_size);
+uint32_t     rom_catalog_label(const char *path, char *label, size_t label_size, uint32_t *memory_max);
 screen_size_t rom_catalog_screen(const char *path, screen_size_t preferred);

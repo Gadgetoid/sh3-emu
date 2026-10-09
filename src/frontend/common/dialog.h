@@ -20,9 +20,10 @@ typedef struct {
     char path[1024];
     char label[160];
     uint32_t screens;
+    uint32_t memory_max;
 } dialog_rom_t;
 
-typedef uint32_t (*dialog_probe_fn)(const char *path, char *label, size_t label_size);
+typedef uint32_t (*dialog_probe_fn)(const char *path, char *label, size_t label_size, uint32_t *memory_max);
 
 typedef struct {
     char name[96];
@@ -34,6 +35,7 @@ typedef struct {
 
 const char *dialog_screen_label(int preset);
 bool        dialog_rom_allows_screen(const dialog_rom_t *rom, int preset);
+bool        dialog_rom_allows_memory(const dialog_rom_t *rom, int size);
 
 typedef enum { DIALOG_MANAGE_CLOSE, DIALOG_MANAGE_RESET, DIALOG_MANAGE_DELETE } dialog_manage_t;
 

@@ -373,16 +373,21 @@ typedef struct {
     dialog_rom_t roms[FORM_OPTIONS - 1];
     int count;
     dialog_probe_fn probe;
-    int rom, screen, last_rom;
+    int rom, screen, memory, last_rom;
     SDL_AtomicInt picked;
     char picked_path[1024];
 } new_machine_t;
 
-static void update_screens(form_t *form, new_machine_t *state) {
-    widget_t *rom = &form->widgets[state->rom], *screen = &form->widgets[state->screen];
-    uint32_t mask = rom->selected < state->count ? state->roms[rom->selected].screens : 1u;
-    screen->enabled = mask;
+static void update_choices(form_t *form, new_machine_t *state) {
+    widget_t *rom = &form->widgets[state->rom], *screen = &form->widgets[state->screen], *memory = &form->widgets[state->memory];
+    const dialog_rom_t *chosen = rom->selected < state->count ? &state->roms[rom->selected] : NULL;
+    screen->enabled = chosen ? chosen->screens : 1u;
     if (!option_enabled(screen, screen->selected)) screen->selected = 0;
+    memory->enabled = 0;
+    for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
+        if (!chosen || dialog_rom_allows_memory(chosen, i)) memory->enabled |= 1u << i;
+    }
+    while (memory->selected > 0 && !option_enabled(memory, memory->selected)) memory->selected--;
 }
 
 static void picked_rom(void *userdata, const char *const *files, int filter) {
@@ -399,7 +404,7 @@ static void rom_changed(form_t *form, int widget_index, void *context) {
     widget_t *rom = &form->widgets[state->rom];
     if (rom->selected < state->count) {
         state->last_rom = rom->selected;
-        update_screens(form, state);
+        update_choices(form, state);
         return;
     }
     SDL_SetAtomicInt(&state->picked, 0);
@@ -410,12 +415,14 @@ static void rom_changed(form_t *form, int widget_index, void *context) {
     }
     rom->selected = state->last_rom;
     char label[160];
-    uint32_t screens = state->picked_path[0] && state->count < FORM_OPTIONS - 1 ? state->probe(state->picked_path, label, sizeof label) : 0;
+    uint32_t memory_max = 0;
+    uint32_t screens = state->picked_path[0] && state->count < FORM_OPTIONS - 1 ? state->probe(state->picked_path, label, sizeof label, &memory_max) : 0;
     if (screens) {
         dialog_rom_t *added = &state->roms[state->count];
         snprintf(added->path, sizeof added->path, "%s", state->picked_path);
         snprintf(added->label, sizeof added->label, "%s", label);
         added->screens = screens;
+        added->memory_max = memory_max;
         rom->options[state->count] = added->label;
         state->count++;
         rom->options[state->count] = "Other ROM File" ELLIPSIS;
@@ -427,7 +434,7 @@ static void rom_changed(form_t *form, int widget_index, void *context) {
         int chosen;
         SDL_ShowMessageBox(&dialog, &chosen);
     }
-    update_screens(form, state);
+    update_choices(form, state);
 }
 
 bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_count, dialog_probe_fn probe, dialog_machine_t *result) {
@@ -456,10 +463,11 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         screen->options[screen->count++] = dialog_screen_label(i);
         if (SCREEN_PRESETS[i].width == result->screen.width && SCREEN_PRESETS[i].height == result->screen.height) screen->selected = i;
     }
-    int memory = add_widget(&form, WIDGET_CHOICE, "Memory:");
+    state->memory = add_widget(&form, WIDGET_CHOICE, "Memory:");
+    widget_t *memory = &form.widgets[state->memory];
     for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
-        form.widgets[memory].options[form.widgets[memory].count++] = DIALOG_MEMORY_LABELS[i];
-        if (DIALOG_MEMORY_SIZES[i] == result->memory) form.widgets[memory].selected = i;
+        memory->options[memory->count++] = DIALOG_MEMORY_LABELS[i];
+        if (DIALOG_MEMORY_SIZES[i] == result->memory) memory->selected = i;
     }
     int clock = add_widget(&form, WIDGET_CHECK, NULL);
     form.widgets[clock].text = DIALOG_CLOCK_LABEL;
@@ -470,12 +478,12 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
     int create = add_widget(&form, WIDGET_BUTTON, NULL);
     form.widgets[create].text = "Create";
     form.widgets[create].result = NEW_CREATE;
-    update_screens(&form, state);
+    update_choices(&form, state);
     bool created = run_form(&form) == NEW_CREATE && rom->selected < state->count;
     if (created) {
         snprintf(result->rom, sizeof result->rom, "%s", state->roms[rom->selected].path);
         result->screen = SCREEN_PRESETS[screen->selected];
-        result->memory = DIALOG_MEMORY_SIZES[form.widgets[memory].selected];
+        result->memory = DIALOG_MEMORY_SIZES[memory->selected];
         result->host_time = form.widgets[clock].checked;
     }
     free(state);

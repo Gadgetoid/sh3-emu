@@ -85,6 +85,7 @@ enum {
 
 int      machine_rom_system(machine_t *machine);
 const char *machine_board_name(int board);
+uint32_t    machine_board_memory_max(int board);
 key_layout_t machine_key_layout(machine_t *machine);
 bool machine_state_matches(machine_t *machine, const char *path);
 bool machine_load(machine_t *machine, const char *path, int64_t *host_time);

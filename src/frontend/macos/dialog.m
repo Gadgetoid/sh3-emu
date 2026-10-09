@@ -13,24 +13,29 @@
 @property(strong) NSPopUpButton *screen;
 @property(strong) NSMutableArray<NSString *> *paths;
 @property(strong) NSMutableArray<NSNumber *> *screens;
+@property(strong) NSMutableArray<NSNumber *> *memoryLimits;
 @property(assign) dialog_probe_fn probe;
 @property(assign) NSInteger lastRom;
 @end
 
 @implementation MachineForm
 
-- (void)updateScreens {
+- (void)updateChoices {
     NSInteger index = self.rom.indexOfSelectedItem;
-    uint32_t mask = index >= 0 && index < (NSInteger)self.screens.count ? self.screens[(NSUInteger)index].unsignedIntValue : 1u;
+    bool known = index >= 0 && index < (NSInteger)self.screens.count;
+    uint32_t mask = known ? self.screens[(NSUInteger)index].unsignedIntValue : 1u;
     for (NSInteger i = 0; i < self.screen.numberOfItems; i++) [self.screen itemAtIndex:i].enabled = (mask >> i) & 1u;
     if (!self.screen.selectedItem.enabled) [self.screen selectItemAtIndex:0];
+    dialog_rom_t limits = { .memory_max = known ? self.memoryLimits[(NSUInteger)index].unsignedIntValue : UINT32_MAX };
+    for (NSInteger i = 0; i < self.memory.numberOfItems; i++) [self.memory itemAtIndex:i].enabled = dialog_rom_allows_memory(&limits, (int)i);
+    while (self.memory.indexOfSelectedItem > 0 && !self.memory.selectedItem.enabled) [self.memory selectItemAtIndex:self.memory.indexOfSelectedItem - 1];
 }
 
 - (void)romChosen:(id)sender {
     NSInteger index = self.rom.indexOfSelectedItem;
     if (index < (NSInteger)self.paths.count) {
         self.lastRom = index;
-        [self updateScreens];
+        [self updateChoices];
         return;
     }
     NSOpenPanel *panel = [NSOpenPanel openPanel];
@@ -41,15 +46,17 @@
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         const char *path = panel.URL.fileSystemRepresentation;
         char label[160];
-        uint32_t mask = self.probe(path, label, sizeof label);
+        uint32_t memory_max = 0;
+        uint32_t mask = self.probe(path, label, sizeof label, &memory_max);
         if (mask) {
             NSUInteger position = self.paths.count;
             [self.paths addObject:[NSString stringWithUTF8String:path]];
             [self.screens addObject:@(mask)];
+            [self.memoryLimits addObject:@(memory_max)];
             [self.rom insertItemWithTitle:[NSString stringWithUTF8String:label] atIndex:(NSInteger)position];
             [self.rom selectItemAtIndex:(NSInteger)position];
             self.lastRom = (NSInteger)position;
-            [self updateScreens];
+            [self updateChoices];
             return;
         }
         NSAlert *alert = [[NSAlert alloc] init];
@@ -58,7 +65,7 @@
         [alert runModal];
     }
     if (self.lastRom >= 0) [self.rom selectItemAtIndex:self.lastRom];
-    [self updateScreens];
+    [self updateChoices];
 }
 
 @end
@@ -80,6 +87,7 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
     form.probe = probe;
     form.paths = [NSMutableArray array];
     form.screens = [NSMutableArray array];
+    form.memoryLimits = [NSMutableArray array];
     form.lastRom = -1;
 
     NSTextField *name = [NSTextField textFieldWithString:[NSString stringWithUTF8String:result->name]];
@@ -92,6 +100,7 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
         [form.rom addItemWithTitle:[NSString stringWithUTF8String:roms[i].label]];
         [form.paths addObject:[NSString stringWithUTF8String:roms[i].path]];
         [form.screens addObject:@(roms[i].screens)];
+        [form.memoryLimits addObject:@(roms[i].memory_max)];
         if (selected < 0 && !strcmp(roms[i].path, result->rom)) selected = i;
     }
     if (rom_count) [form.rom.menu addItem:[NSMenuItem separatorItem]];
@@ -108,7 +117,6 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
         [form.screen addItemWithTitle:[NSString stringWithUTF8String:dialog_screen_label(i)]];
         if (SCREEN_PRESETS[i].width == result->screen.width && SCREEN_PRESETS[i].height == result->screen.height) [form.screen selectItemAtIndex:i];
     }
-    [form updateScreens];
 
     NSPopUpButton *memory = popup();
     for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
@@ -142,6 +150,7 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
     form.alert = alert;
     form.name = name;
     form.memory = memory;
+    [form updateChoices];
     form.clock = clock;
     return form;
 }

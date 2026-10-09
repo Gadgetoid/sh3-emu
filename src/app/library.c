@@ -127,7 +127,7 @@ int library_list_roms(dialog_rom_t *roms, int max) {
         if (entry->d_name[0] == '.') continue;
         dialog_rom_t *rom = &roms[count];
         if (snprintf(rom->path, sizeof rom->path, "%s/%s", folder, entry->d_name) >= (int)sizeof rom->path) continue;
-        rom->screens = rom_catalog_label(rom->path, rom->label, sizeof rom->label);
+        rom->screens = rom_catalog_label(rom->path, rom->label, sizeof rom->label, &rom->memory_max);
         if (rom->screens) count++;
     }
     closedir(dir);

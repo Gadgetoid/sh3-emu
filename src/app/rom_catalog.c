@@ -97,10 +97,11 @@ void rom_catalog_find(rom_set_t *roms, const char *folder) {
     closedir(dir);
 }
 
-uint32_t rom_catalog_label(const char *path, char *label, size_t label_size) {
+uint32_t rom_catalog_label(const char *path, char *label, size_t label_size, uint32_t *memory_max) {
     uint32_t screens;
     int system = rom_catalog_probe(path, &screens);
     if (!system) return 0;
+    *memory_max = machine_board_memory_max(system);
     snprintf(label, label_size, "%s: %s", machine_board_name(system), file_leaf_name(path));
     return screens;
 }

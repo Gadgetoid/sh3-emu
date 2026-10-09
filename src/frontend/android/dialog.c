@@ -35,7 +35,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
     }
     int screen = screen_preset_index(result->screen);
     if (screen < 0 || !dialog_rom_allows_screen(&roms[rom], screen)) screen = 0;
-    uint32_t memory = result->memory;
+    uint32_t memory = result->memory > roms[rom].memory_max ? roms[rom].memory_max : result->memory;
     bool host_time = result->host_time;
     list_scroll_t scroll = { 0 };
     for (;;) {
@@ -43,7 +43,9 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         list_add_row(&list, ROW_HEADING, 0, "ROM", false, false);
         for (int i = 0; i < rom_count; i++) list_add_row(&list, ROW_ITEM, CHOICE_ROM + i, roms[i].label, i == rom, false);
         list_add_row(&list, ROW_HEADING, 0, "Memory", false, false);
-        for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) list_add_row(&list, ROW_ITEM, CHOICE_MEMORY + i, DIALOG_MEMORY_LABELS[i], DIALOG_MEMORY_SIZES[i] == memory, false);
+        for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
+            if (dialog_rom_allows_memory(&roms[rom], i)) list_add_row(&list, ROW_ITEM, CHOICE_MEMORY + i, DIALOG_MEMORY_LABELS[i], DIALOG_MEMORY_SIZES[i] == memory, false);
+        }
         list_add_row(&list, ROW_HEADING, 0, "Screen", false, false);
         for (int i = 0; i < SCREEN_PRESET_COUNT && dialog_screen_label(i); i++) {
             if (dialog_rom_allows_screen(&roms[rom], i)) list_add_row(&list, ROW_ITEM, CHOICE_SCREEN + i, dialog_screen_label(i), i == screen, false);
@@ -64,6 +66,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         if (tap.tag >= CHOICE_ROM && tap.tag < CHOICE_ROM + rom_count) {
             rom = tap.tag - CHOICE_ROM;
             if (!dialog_rom_allows_screen(&roms[rom], screen)) screen = 0;
+            if (memory > roms[rom].memory_max) memory = roms[rom].memory_max;
         } else if (tap.tag >= CHOICE_MEMORY && tap.tag < CHOICE_MEMORY + DIALOG_MEMORY_COUNT) {
             memory = DIALOG_MEMORY_SIZES[tap.tag - CHOICE_MEMORY];
         } else if (tap.tag >= CHOICE_SCREEN && tap.tag < CHOICE_SCREEN + SCREEN_PRESET_COUNT) {

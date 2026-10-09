@@ -39,3 +39,7 @@ const char *dialog_screen_label(int preset) {
 bool dialog_rom_allows_screen(const dialog_rom_t *rom, int preset) {
     return preset >= 0 && preset < 32 && (rom->screens & (1u << preset));
 }
+
+bool dialog_rom_allows_memory(const dialog_rom_t *rom, int size) {
+    return size >= 0 && size < DIALOG_MEMORY_COUNT && DIALOG_MEMORY_SIZES[size] <= rom->memory_max;
+}
