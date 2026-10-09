@@ -90,6 +90,10 @@
 #define ADCSR_MULTI 0x10u
 #define ADCSR_CH    0x07u
 #define ADCR_SCAN   0x20u
+#define LCD_INDEX   0x0C0u
+#define LCD_CONTROL 0x0C2u
+#define LCD_PALETTE 0x0C6u
+#define LCD_FRAME   0x0CEu
 #define ADCR_RESET  0x3Fu
 #define ADC_CHANNEL_HZ 50000u
 
@@ -763,6 +767,10 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     case 0x018: *value = chip->priority[3]; return true;
     case 0x01A: *value = chip->priority[4]; return true;
     case 0x0B0: *value = chip->ccr2; return true;
+    case LCD_INDEX: *value = chip->lcd_index; return true;
+    case LCD_CONTROL: *value = chip->lcd_control[chip->lcd_index % SH7709_LCD_CONTROLS]; return true;
+    case LCD_PALETTE: *value = chip->lcd_index < SH7709_LCD_PALETTE ? chip->lcd_palette[chip->lcd_index] : 0; return true;
+    case LCD_FRAME: *value = chip->lcd_frame[chip->lcd_index % SH7709_LCD_FRAMES]; return true;
     case 0x0E0: case 0x0F0: *value = PCC_NO_CARD; return true;
     default: break;
     }
@@ -826,6 +834,12 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     case 0x018: chip->priority[3] = (uint16_t)value; return true;
     case 0x01A: chip->priority[4] = (uint16_t)value; return true;
     case 0x0B0: chip->ccr2 = value; return true;
+    case LCD_INDEX: chip->lcd_index = (uint16_t)value; return true;
+    case LCD_CONTROL: chip->lcd_control[chip->lcd_index % SH7709_LCD_CONTROLS] = (uint16_t)value; return true;
+    case LCD_PALETTE:
+        if (chip->lcd_index < SH7709_LCD_PALETTE) chip->lcd_palette[chip->lcd_index] = (uint16_t)value;
+        return true;
+    case LCD_FRAME: chip->lcd_frame[chip->lcd_index % SH7709_LCD_FRAMES] = (uint16_t)value; return true;
     default: break;
     }
     if (offset == 0x090) {

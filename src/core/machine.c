@@ -1,6 +1,7 @@
 #include "core/machine.h"
 
 #include <stdarg.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -798,9 +799,12 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
         casio_screen(&m->casio_board, levels);
         return true;
     }
-    uint32_t offset = (m->hp_model == HP_MODEL_300LX ? HP300LX_FRAMEBUFFER : HP320LX_FRAMEBUFFER) - DRAM_PA;
-    if (offset + HP320LX_SCREEN_WIDTH / 4 * HP320LX_SCREEN_HEIGHT > m->dram_size) return false;
-    hp320lx_screen(m->dram + offset, levels);
+    const uint16_t *frame = m->chip.lcd_frame;
+    uint32_t programmed = ((uint32_t)frame[HP320LX_LCD_FRAME_HIGH] << 16 | frame[HP320LX_LCD_FRAME_LOW]) & AREA_MASK;
+    uint32_t start = programmed ? programmed : m->hp_model == HP_MODEL_300LX ? HP300LX_FRAMEBUFFER : HP320LX_FRAMEBUFFER;
+    uint32_t offset = start - DRAM_PA;
+    if (offset >= m->dram_size || offset + HP320LX_SCREEN_WIDTH / 4 * HP320LX_SCREEN_HEIGHT > m->dram_size) return false;
+    hp320lx_screen(m->dram + offset, m->chip.lcd_palette, frame[HP320LX_LCD_MODE], levels);
     return true;
 }
 
@@ -1116,6 +1120,10 @@ static bool state_header_matches(const machine_t *m, const uint8_t *data, size_t
            !memcmp(data + sizeof STATE_MAGIC, &m->rom_hash, 8);
 }
 
+static bool grown_record(const char *name, uint32_t size) {
+    return !strcmp(name, "chip") && size == offsetof(sh7709_t, lcd_index);
+}
+
 static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length) {
     const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
     while (cursor < end) {
@@ -1129,7 +1137,7 @@ static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length)
         memcpy(&size, cursor, 4);
         cursor += 4;
         if ((size_t)(end - cursor) < size) return false;
-#define CHECK_FIELD(key, field) if (!strcmp(name, #key) && size != sizeof(field)) return false;
+#define CHECK_FIELD(key, field) if (!strcmp(name, #key) && size != sizeof(field) && !grown_record(name, size)) return false;
         STATE_FIELDS(CHECK_FIELD)
 #undef CHECK_FIELD
         cursor += size;
@@ -1172,7 +1180,11 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
         memcpy(&size, cursor, 4);
         cursor += 4;
         if ((size_t)(end - cursor) < size) break;
-#define LOAD_FIELD(key, field) if (!strcmp(name, #key) && size == sizeof(field)) memcpy(&(field), cursor, size);
+#define LOAD_FIELD(key, field) \
+    if (!strcmp(name, #key) && (size == sizeof(field) || grown_record(name, size))) { \
+        memset(&(field), 0, sizeof(field)); \
+        memcpy(&(field), cursor, size); \
+    }
         STATE_FIELDS(LOAD_FIELD)
 #undef LOAD_FIELD
         if (!strcmp(name, "dram")) {

@@ -25,6 +25,8 @@
 #define TOUCH_RAW_MIN      64u
 #define TOUCH_RAW_SPAN     896u
 #define TOUCH_PEN_LEVEL    0x3FFu
+#define LCD_LEVEL_MASK     0xFu
+#define LCD_MODE_BYTE_ORDER 0x8000u
 
 typedef struct {
     uint8_t control, data, bit;
@@ -203,12 +205,18 @@ hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *por
     return inputs;
 }
 
-void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels) {
+void hp320lx_screen(const uint8_t *framebuffer, const uint16_t *palette, uint16_t mode, uint8_t *levels) {
+    uint8_t shades[4];
+    bool programmed = palette[0] | palette[1] | palette[2] | palette[3];
+    for (uint32_t pixel = 0; pixel < 4; pixel++) {
+        shades[pixel] = programmed ? (uint8_t)(palette[pixel] & LCD_LEVEL_MASK) : (uint8_t)((3 - pixel) * LEVEL_STEP);
+    }
+    uint32_t byte_order = mode && !(mode & LCD_MODE_BYTE_ORDER) ? 3u : 0u;
     for (uint32_t y = 0; y < HP320LX_SCREEN_HEIGHT; y++) {
         for (uint32_t x = 0; x < HP320LX_SCREEN_WIDTH; x++) {
-            uint8_t byte = framebuffer[y * LINE_BYTES + x / 4];
+            uint8_t byte = framebuffer[y * LINE_BYTES + ((x / 4) ^ byte_order)];
             uint32_t pixel = (byte >> ((3 - (x & 3)) * 2)) & 3;
-            levels[y * HP320LX_SCREEN_WIDTH + x] = (uint8_t)((3 - pixel) * LEVEL_STEP);
+            levels[y * HP320LX_SCREEN_WIDTH + x] = shades[pixel];
         }
     }
 }

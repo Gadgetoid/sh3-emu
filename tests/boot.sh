@@ -2,6 +2,9 @@
 set -e
 OUT=${TMPDIR:-/tmp}/sh3-boot
 mkdir -p "$OUT"
+rapi_tool() {
+    perl -e 'alarm 60; exec @ARGV' ./sh3emu-rapi "$@"
+}
 gdb_check() {
     name=$1; rom=$2
     ./headless "$rom" --seconds=20 --save="$OUT/$name.state" > /dev/null 2>&1
@@ -20,8 +23,8 @@ rapi_check() {
     EMULATOR=$!
     for attempt in $(seq 1 120); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
     sleep 2
-    ./sh3emu-rapi --socket="$socket" put "$OUT/$name.txt" > /dev/null 2>&1 || true
-    ./sh3emu-rapi --socket="$socket" get "$name.txt" "$OUT/$name.back" > /dev/null 2>&1 || true
+    rapi_tool --socket="$socket" put "$OUT/$name.txt" > /dev/null 2>&1 || true
+    rapi_tool --socket="$socket" get "$name.txt" "$OUT/$name.back" > /dev/null 2>&1 || true
     kill $EMULATOR 2>/dev/null || true
     wait $EMULATOR 2>/dev/null || true
     rm -f "$socket"
@@ -37,7 +40,7 @@ debugmgr_check() {
     for attempt in $(seq 1 120); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
     sleep 2
     started=fail
-    ./sh3emu-rapi --socket="$socket" debugmgr run > /dev/null 2>&1 && python3 tests/agent_ping.py "$agent" 30 > /dev/null && started=ok
+    rapi_tool --socket="$socket" debugmgr run > /dev/null 2>&1 && python3 tests/agent_ping.py "$agent" 30 > /dev/null && started=ok
     kill $EMULATOR 2>/dev/null || true
     wait $EMULATOR 2>/dev/null || true
     rm -f "$socket" "$agent"
@@ -101,7 +104,7 @@ dictionary_check() {
         --save="$OUT/$name.running.state" > "$OUT/$name.log" 2>&1 &
     EMULATOR=$!
     for attempt in $(seq 1 120); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
-    ./sh3emu-rapi --socket="$socket" run '\Windows\dic.exe' > /dev/null 2>&1 || true
+    rapi_tool --socket="$socket" run '\Windows\dic.exe' > /dev/null 2>&1 || true
     wait $EMULATOR 2>/dev/null || true
     rm -f "$socket"
     ./headless "$rom" --dictionary="$dictionary" --load="$OUT/$name.running.state" --seconds=3 --pgm="$OUT/$name.pgm" > /dev/null 2>&1
@@ -176,11 +179,11 @@ else
 fi
 
 HP_ROM=${HP_ROM:-rom/nk-hp320lx.bin}
-HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
-HP_TYPE_HASH=471755752e81af0bfb35466b7b263f62133d45399eb2b6b1cd0eff2ec2706f12
-HP_OPTIMISED_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
-HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
-HP_TOUCH_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
+HP_HASH=5ecfc61752af1df8b53784618ffbea9bec80e6e6599d7d8c787e6b9a674132d9
+HP_TYPE_HASH=d652dcdc9cff536ae0fc01193f8ca0faf85a38342c7c555fadb0f684372ad912
+HP_OPTIMISED_HASH=5e02270b4d18fc8ad071b54b434d69af4b13ad227535a7b052f9b56118ef7fcd
+HP_WAKE_HASH=8237b8c876580260482c7d32973b1f4a26184742b12fb3171c171b9b166547f3
+HP_TOUCH_HASH=5e02270b4d18fc8ad071b54b434d69af4b13ad227535a7b052f9b56118ef7fcd
 if [ -f "$HP_ROM" ]; then
     if ./build/native-check "$HP_ROM" > "$OUT/hp_native.log" 2>&1; then echo "ok   hp_native"; else echo "FAIL hp_native"; cat "$OUT/hp_native.log"; exit 1; fi
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1

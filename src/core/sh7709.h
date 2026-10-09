@@ -10,6 +10,10 @@ typedef enum {
     SH7709,
 } sh7709_variant_t;
 
+#define SH7709_LCD_CONTROLS 16
+#define SH7709_LCD_PALETTE  4
+#define SH7709_LCD_FRAMES   8
+
 typedef struct {
     uint32_t constant;
     uint32_t count;
@@ -94,6 +98,11 @@ typedef struct {
     uint16_t adc_data[4];
     uint16_t adc_input[4];
     uint64_t adc_done;
+
+    uint16_t lcd_index;
+    uint16_t lcd_control[SH7709_LCD_CONTROLS];
+    uint16_t lcd_palette[SH7709_LCD_PALETTE];
+    uint16_t lcd_frame[SH7709_LCD_FRAMES];
 } sh7709_t;
 
 void sh7709_init(sh7709_t *chip, sh3_cpu_t *cpu, sh7709_variant_t variant, uint32_t cpu_hz, uint32_t peripheral_hz);

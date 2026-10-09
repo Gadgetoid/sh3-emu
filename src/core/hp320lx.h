@@ -30,6 +30,9 @@
 #define HP320LX_KEY_COLUMNS   11
 #define HP320LX_KEY_EVENTS    64
 #define HP320LX_PEN_IRQ       3
+#define HP320LX_LCD_FRAME_LOW  0
+#define HP320LX_LCD_FRAME_HIGH 1
+#define HP320LX_LCD_MODE       4
 #define HP320LX_ON_IRQ        0
 
 typedef enum { HP_MODEL_NONE, HP_MODEL_320LX, HP_MODEL_300LX } hp_model_t;
@@ -77,4 +80,4 @@ bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up);
 uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports);
 void hp320lx_touch(hp320lx_t *board, bool down, int x, int y);
 hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *ports);
-void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels);
+void hp320lx_screen(const uint8_t *framebuffer, const uint16_t *palette, uint16_t mode, uint8_t *levels);
