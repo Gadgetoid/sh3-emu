@@ -89,6 +89,8 @@
 #define ADCSR_ADST  0x20u
 #define ADCSR_MULTI 0x10u
 #define ADCSR_CH    0x07u
+#define ADCR_SCAN   0x20u
+#define ADCR_RESET  0x3Fu
 #define ADC_CHANNEL_HZ 50000u
 
 #define PORT_A_DATA 0x10u
@@ -149,6 +151,7 @@ void sh7709_reset(sh7709_t *chip) {
         chip->timer[i].count = 0xFFFFFFFFu;
     }
     chip->sci.status = SCI_TDRE | SCI_TEND;
+    chip->adc_config = ADCR_RESET;
     chip->sci.bit_rate = 0xFF;
     for (int i = 0; i < 2; i++) {
         chip->scif[i].status = SCIF_TEND | SCIF_TDFE;
@@ -275,18 +278,24 @@ static void advance_rtc(sh7709_t *chip, uint64_t elapsed) {
     }
 }
 
+static uint64_t adc_cycle_length(const sh7709_t *chip) {
+    uint32_t last = chip->adc_control & ADCSR_CH & 3u;
+    uint32_t channels = (chip->adc_control & ADCSR_MULTI) ? last + 1 : 1;
+    return (uint64_t)channels * (chip->cpu_hz / ADC_CHANNEL_HZ);
+}
+
 static void advance_adc(sh7709_t *chip, uint64_t now) {
     if (!(chip->adc_control & ADCSR_ADST) || now < chip->adc_done) return;
     uint32_t last = chip->adc_control & ADCSR_CH & 3u;
     uint32_t first = (chip->adc_control & ADCSR_MULTI) ? 0 : last;
     for (uint32_t channel = first; channel <= last; channel++) chip->adc_data[channel] = chip->adc_input[channel];
-    chip->adc_control = (uint8_t)((chip->adc_control & ~ADCSR_ADST) | ADCSR_ADF);
+    chip->adc_control |= ADCSR_ADF;
+    if (chip->adc_config & ADCR_SCAN) chip->adc_done = now + adc_cycle_length(chip);
+    else chip->adc_control &= (uint8_t) ~ADCSR_ADST;
 }
 
 static void start_adc(sh7709_t *chip) {
-    uint32_t last = chip->adc_control & ADCSR_CH & 3u;
-    uint32_t channels = (chip->adc_control & ADCSR_MULTI) ? last + 1 : 1;
-    chip->adc_done = chip->cpu->cycles + (uint64_t)channels * (chip->cpu_hz / ADC_CHANNEL_HZ);
+    chip->adc_done = chip->cpu->cycles + adc_cycle_length(chip);
 }
 
 static uint16_t port_value(const sh7709_t *chip, uint32_t index) {

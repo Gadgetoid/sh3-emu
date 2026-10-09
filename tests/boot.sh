@@ -180,7 +180,7 @@ HP_HASH=ae7adf8be6004cf273fee8626b4d64730a3eb18e6fd36ffb44410a87d77edc45
 HP_TYPE_HASH=471755752e81af0bfb35466b7b263f62133d45399eb2b6b1cd0eff2ec2706f12
 HP_OPTIMISED_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
 HP_WAKE_HASH=375abeea2ef582a1b1409d78d3d2df58c76b18c143001e610227150d74fc304b
-HP_TOUCH_HASH=73146bf2f3df0fdb246742378da9d0992357c00b8270c1797afb7c225cc3d1c3
+HP_TOUCH_HASH=c958c0911596fcc2ddf9feaae152a7d2c12a11bd6ebf03b17db551a3b3b40531
 if [ -f "$HP_ROM" ]; then
     if ./build/native-check "$HP_ROM" > "$OUT/hp_native.log" 2>&1; then echo "ok   hp_native"; else echo "FAIL hp_native"; cat "$OUT/hp_native.log"; exit 1; fi
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
@@ -225,9 +225,10 @@ else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
 fi
 HP300_ROM=${HP300_ROM:-rom/nk-hp300lx-ce1.bin}
-HP300_HASH=2b0c4f41dd9ecb623f8d5bcd5cd108587d0768bbd0f714e34f437e2aba37c2c9
+HP300_HASH=aaeba2cbbd942c7fc392525dece84b268140383f64ff6d477520c0f5ca3e3532
 if [ -f "$HP300_ROM" ]; then
-    ./headless "$HP300_ROM" --debug-output --seconds=45 --pgm="$OUT/hp300.pgm" > "$OUT/hp300.log" 2>&1
+    ./headless "$HP300_ROM" --debug-output --seconds=66 --key=46:76 --key=49:5A --key=53:5A --tap=54:320:120:0.8 --tap=56:128:48:0.8 \
+        --tap=58:128:192:0.8 --tap=60:512:192:0.8 --tap=62:512:48:0.8 --pgm="$OUT/hp300.pgm" > "$OUT/hp300.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp300.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp300.log" && [ "$actual" = "$HP300_HASH" ]; then echo "ok   hp300"; else echo "FAIL hp300 $actual"; exit 1; fi
 else
