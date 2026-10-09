@@ -58,7 +58,8 @@ jobs:
           apt-get install -y --no-install-recommends build-essential pkg-config dpkg-dev git ca-certificates python3 curl cmake \
             libslirp-dev libglib2.0-dev zlib1g-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev libxtst-dev \
-            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev libgl-dev libdbus-1-dev libudev-dev
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev libgl-dev libdbus-1-dev libudev-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
