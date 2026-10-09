@@ -295,12 +295,6 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     return true;
 }
 
-static uint8_t *hp_framebuffer(machine_t *m) {
-    uint32_t offset = (m->hp_model == HP_MODEL_300LX ? HP300LX_FRAMEBUFFER : HP320LX_FRAMEBUFFER) - DRAM_PA;
-    if (offset + HP320LX_SCREEN_WIDTH / 4 * HP320LX_SCREEN_HEIGHT > m->dram_size) return NULL;
-    return m->dram + offset;
-}
-
 static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
@@ -361,7 +355,6 @@ static void hp_ports_written(void *context) {
     uint16_t columns = hp320lx_key_columns(&m->hp_board, m->chip.ports);
     sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
     sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
-    hp320lx_display_ports(&m->hp_board, m->chip.ports, hp_framebuffer(m));
     hp320lx_touch_t touch = hp320lx_touch_inputs(&m->hp_board, m->chip.ports);
     sh7709_set_adc(&m->chip, 0, touch.channel_a);
     sh7709_set_adc(&m->chip, 1, touch.channel_b);
@@ -805,9 +798,9 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
         casio_screen(&m->casio_board, levels);
         return true;
     }
-    uint8_t *framebuffer = hp_framebuffer(m);
-    if (!framebuffer) return false;
-    hp320lx_screen(framebuffer, m->hp_board.display_boot_format, levels);
+    uint32_t offset = (m->hp_model == HP_MODEL_300LX ? HP300LX_FRAMEBUFFER : HP320LX_FRAMEBUFFER) - DRAM_PA;
+    if (offset + HP320LX_SCREEN_WIDTH / 4 * HP320LX_SCREEN_HEIGHT > m->dram_size) return false;
+    hp320lx_screen(m->dram + offset, levels);
     return true;
 }
 

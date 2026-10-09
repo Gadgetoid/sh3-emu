@@ -20,7 +20,6 @@
 #define PORT_H_DATA        0x17u
 #define PORT_K_DATA        0x19u
 #define TOUCH_DRIVE        0x80u
-#define DISPLAY_NORMAL_FORMAT 0x20u
 #define TOUCH_X_SELECT     0x04u
 #define TOUCH_Y_SELECT     0x01u
 #define TOUCH_RAW_MIN      64u
@@ -204,30 +203,10 @@ hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *por
     return inputs;
 }
 
-static uint8_t boot_format_byte(const uint8_t *framebuffer, uint32_t offset) {
-    return (uint8_t) ~framebuffer[offset ^ 3u];
-}
-
-static void convert_boot_format(uint8_t *framebuffer) {
-    for (uint32_t offset = 0; offset < LINE_BYTES * HP320LX_SCREEN_HEIGHT; offset += 4) {
-        uint8_t word[4];
-        for (uint32_t i = 0; i < 4; i++) word[i] = boot_format_byte(framebuffer, offset + i);
-        memcpy(framebuffer + offset, word, sizeof word);
-    }
-}
-
-void hp320lx_display_ports(hp320lx_t *board, const uint16_t *ports, uint8_t *framebuffer) {
-    bool boot_format = !(ports[PORT_K_DATA] & DISPLAY_NORMAL_FORMAT);
-    if (boot_format == board->display_boot_format) return;
-    if (framebuffer) convert_boot_format(framebuffer);
-    board->display_boot_format = boot_format;
-}
-
-void hp320lx_screen(const uint8_t *framebuffer, bool boot_format, uint8_t *levels) {
+void hp320lx_screen(const uint8_t *framebuffer, uint8_t *levels) {
     for (uint32_t y = 0; y < HP320LX_SCREEN_HEIGHT; y++) {
         for (uint32_t x = 0; x < HP320LX_SCREEN_WIDTH; x++) {
-            uint32_t offset = y * LINE_BYTES + x / 4;
-            uint8_t byte = boot_format ? boot_format_byte(framebuffer, offset) : framebuffer[offset];
+            uint8_t byte = framebuffer[y * LINE_BYTES + x / 4];
             uint32_t pixel = (byte >> ((3 - (x & 3)) * 2)) & 3;
             levels[y * HP320LX_SCREEN_WIDTH + x] = (uint8_t)((3 - pixel) * LEVEL_STEP);
         }
