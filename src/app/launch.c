@@ -74,7 +74,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
 
 static const option_spec_t LAUNCH_SPEC = {
     "sh3emu", "[OPTIONS] [ROM]",
-    "Emulates the Casio Cassiopeia A-51 and HP 320LX Windows CE handhelds. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
+    "Emulates the Casio Cassiopeia A-51, HP 300LX and HP 320LX Windows CE handhelds. With no ROM it opens the last machine used; machines are made with Machine > New Machine from the ROMs in the roms folder in its data folder. With a ROM it runs that ROM with its own saved state, outside the machine list.",
     LAUNCH_OPTIONS, (int)(sizeof LAUNCH_OPTIONS / sizeof LAUNCH_OPTIONS[0]),
     "headless runs the machine without a window, for tests and scripts.",
 };

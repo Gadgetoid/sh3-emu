@@ -1,6 +1,6 @@
 # sh3-emu
 
-An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs of the Casio Cassiopeia A-51 (CE 1.01, Japanese) and the HP 320LX (CE 2.0), with a simulated LCD, the keyboard and touch panel, PC Card images, a serial port with a PPP network, and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
+An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs of the Casio Cassiopeia A-51 (CE 1.01, Japanese), the HP 300LX (CE 1.0) and the HP 320LX (CE 2.0), with a simulated LCD, the keyboard and touch panel, PC Card images, a serial port with a PPP network, and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
 
 ![HP 320LX World Clock, CE 2.0](docs/screenshots/hp-320lx.png)
 ![Casio Cassiopeia A-51 time zone, CE 1.01](docs/screenshots/casio-a51.png)
@@ -19,6 +19,7 @@ No ROMs are included. Put them in the `roms` folder of the data folder (see GUI)
 | Machine | ROM | CE | Working |
 |---|---|---|---|
 | Casio Cassiopeia A-51 | a raw dump of its flash | 1.01 (Japanese) | desktop, keyboard, touch, sound, backlight, suspend and resume, PC Card, serial, dictionary ROM |
+| HP 300LX | a raw dump of its flash | 1.0 | boots to the desktop |
 | HP 320LX | a raw dump of its flash | 2.0 | setup wizard, keyboard, touch, sound, backlight, suspend and resume, serial |
 
 ## Running
@@ -156,6 +157,15 @@ The keyboard is an 8x11 matrix scanned by the OAL through the CPU's ports. PS/2 
 ./headless rom/nk-hp320lx.bin --seconds=20 --debug-output --png=wizard.png
 ```
 
+
+## HP 300LX
+
+A ROM image without `hplib.dll` but with `hpst.exe` runs as the HP 300LX: HP's Windows CE 1.0 H/PC, a 320LX with 2 MB of RAM, no backlight and no CompactFlash slot. The one tested is `nk-hp300lx-ce1.bin`, a dump of a real 300LX: `make test` uses it from `rom/nk-hp300lx-ce1.bin` (or `HP300_ROM=PATH`) if it's there.
+
+- **The first 4 KB of flash** holds the reset stub, a boot table and a 640x230 boot logo. CE won't map physical page 0 for a program, but the flash repeats every 8 MB, so that page can be read at `0xA0800000` (see `../c1-ata/probe/boot0dump.c`).
+- **Port L reads 0x12** on the 300LX, as on the real one: bit 5 is clear, so there's no backlight.
+- **The framebuffer is at DRAM 0x0C004800**, just below where this kernel's RAM starts.
+- **Booting:** it goes to the desktop and runs HP's demo. `filesys.exe` reports an exception early on (a NULL read at 0x2239A) and carries on.
 ## What's emulated
 
 - CPU (`src/core/sh3.c`): the SH-3 instruction set, little-endian, with delay slots; banked registers, SR.MD/RB/BL; exceptions, TRAPA and interrupts through VBR+0x100/0x400/0x600 with EXPEVT, INTEVT, TRA, SPC and SSR; the MMU with the 128-entry 4-way UTLB, 1 KB and 4 KB pages, ASIDs, shared pages, MMUCR (AT, IX, TF, RC, SV), LDTLB, TLB miss, invalid, protection and initial page write exceptions, and the memory-mapped TLB arrays; SLEEP. No FPU or DSP.
@@ -164,7 +174,7 @@ The keyboard is an 8x11 matrix scanned by the OAL through the CPU's ports. PS/2 
 
 - Casio Cassiopeia A-51 board (`src/core/casio.c`): flash at physical 0, the 480x240 2 bpp display in 128 KB of video RAM at 0x08000000 (256 bytes a line), the board ASIC's register file at 0x10000000 (its write unlock, the power status, the PC Card socket (status at 0x326, card detect active low; its windows at 0x18000000, 0x19000000 and 0x1A000000 for attribute, common and I/O; a status change interrupt on vector 14 and the card's interrupt on vector 3) and an empty second socket (status at 0x282, windows in area 5), the backlight (0x08 bits 6 and 7; the key is at row 1, column 7 of the matrix), the AC adapter (0x260 bit 1), COM1's DSR (0x234 bit 2) with its edge enables and flags at 0x52 (an interrupt on vector 8) and its baud rate at 0x230 and 0x232, its interrupt mask, status, write-1-to-clear register and vector on an IRL, the pin registers at 0x40-0x66 reading inactive, the key matrix: rows selected at 0xE4, active-low columns at 0xE6, an interrupt while a key is down in the selected rows, and the touch panel: an interrupt on pen down, pen up at 0x8A, X and Y conversions selected by 0x8C and read from 0x98-0x9C, 64-960 across the screen), and the CPU's extra on-chip registers: two 32-bit up-counting timers at 0xFFFFFE20 and 0xFFFFFE40 with compare interrupts (INTEVT 0x6C0 and 0x6E0, priorities in 0xFFFFFEE6; clocked at the peripheral clock / 16, a guess), an SCIF at 0xFFFFFE70 (COM1; INTEVT 0x700-0x760, priority in 0xFFFFFEE6 bits 7-4), and register storage at 0xFFFFFE00 and 0xFFFFD000. The kernel scans the keys and samples the touch panel from the 0xFFFFFE20 timer's interrupt. The kernel's debug output is on the on-chip SCI. The kernel's startup calls an on-chip routine at 0xE00001DE, which isn't in the image; it's emulated as returning straight away. Not modelled: the ON key other than at the first cold boot, suspend, the battery, audio, and the second socket.
 
-- HP 320LX board (`src/core/hp320lx.c`): flash at physical 0, the 640x240 2 bpp display at DRAM 0x0C005000 (160 bytes a line), the companion ASIC at 0x02000000 as register storage with its debug UART (output on `--debug-output`) and its parallel-port link reporting no host, the battery A/D channels reading a healthy level, port L reading 0x32 as on a real 320LX: bit 4 is the "Luke" hardware (2 bpp display, 44 MHz clock setup) and bit 5 a backlit screen, which gives Display its Backlight tab, the key matrix: rows driven low on PB3-7, PJ4, SCPT3 and PD7, columns read on PA0-7 and PB0-2, the touch panel: pen down on IRQ3 and A/D channel A while PH7 is low, X on channel A with PK2 high and Y on channel B with PK0 high, 64-960 across the screen, the ON key on IRQ0, the AC adapter on PD4, the backlight on PC3 (low is lit; the backlight key is row 7, column 4 of the matrix, which the kernel handles itself), the compare match timer, DMA channels 0 and 2 and D/A channel 1 for sound, and COM1 on SCIF2 with the cable detect on PH2 and IRQ2 (falling edge when it goes in, rising when it comes out) and DTR on PC2.
+- HP 320LX board (`src/core/hp320lx.c`): flash at physical 0, the 640x240 2 bpp display at DRAM 0x0C005000 (0x0C004800 with the 300LX's CE 1.0; 160 bytes a line), the companion ASIC at 0x02000000 as register storage with its debug UART (output on `--debug-output`) and its parallel-port link reporting no host, the battery A/D channels reading a healthy level, port L reading 0x32 as on a real 320LX (0x12 on the 300LX): bit 4 is the "Luke" hardware (2 bpp display, 44 MHz clock setup) and bit 5 a backlit screen, which gives Display its Backlight tab, the key matrix: rows driven low on PB3-7, PJ4, SCPT3 and PD7, columns read on PA0-7 and PB0-2, the touch panel: pen down on IRQ3 and A/D channel A while PH7 is low, X on channel A with PK2 high and Y on channel B with PK0 high, 64-960 across the screen, the ON key on IRQ0, the AC adapter on PD4, the backlight on PC3 (low is lit; the backlight key is row 7, column 4 of the matrix, which the kernel handles itself), the compare match timer, DMA channels 0 and 2 and D/A channel 1 for sound, and COM1 on SCIF2 with the cable detect on PH2 and IRQ2 (falling edge when it goes in, rising when it comes out) and DTR on PC2.
 
 Guest time is the instruction count at 58.98 MHz. The peripheral clock is 10 MHz on the Casio A-51 and 11.0592 MHz on the HP 320LX, which give both kernels their 25 ms tick and the HP's serial driver its exact baud rates.
 

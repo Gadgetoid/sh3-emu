@@ -77,6 +77,7 @@ struct machine {
     uint64_t rom_hash;
     bool casio;
     bool hp;
+    hp_model_t hp_model;
     hp320lx_t hp_board;
     bool hp_on_key;
     hp320lx_host_t hp_host;
@@ -627,7 +628,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     hp320lx_reset(&m->hp_board);
     if (m->hp) {
         for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
-        sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, HP320LX_MODEL_PINS);
+        sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, m->hp_model == HP_MODEL_300LX ? HP300LX_MODEL_PINS : HP320LX_MODEL_PINS);
         sh7709_set_port_input(&m->chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
         sh7709_set_irq_active_high(&m->chip, 1u << HP320LX_PEN_IRQ);
     }
@@ -653,7 +654,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     memcpy(m->image, rom, rom_size);
     m->image_size = rom_size;
     m->rom_hash = hash_bytes(rom, rom_size);
-    m->hp = hp320lx_detect(rom, rom_size);
+    m->hp_model = hp320lx_detect(rom, rom_size);
+    m->hp = m->hp_model != HP_MODEL_NONE;
     m->casio = !m->hp;
     m->hp_host = (hp320lx_host_t){ hp_trace, board_debug_line, m };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
@@ -796,7 +798,7 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
         casio_screen(&m->casio_board, levels);
         return true;
     }
-    uint32_t offset = HP320LX_FRAMEBUFFER - DRAM_PA;
+    uint32_t offset = (m->hp_model == HP_MODEL_300LX ? HP300LX_FRAMEBUFFER : HP320LX_FRAMEBUFFER) - DRAM_PA;
     if (offset + HP320LX_SCREEN_WIDTH / 4 * HP320LX_SCREEN_HEIGHT > m->dram_size) return false;
     hp320lx_screen(m->dram + offset, levels);
     return true;
@@ -1012,13 +1014,15 @@ void machine_power_button(machine_t *m, bool down) {
 }
 
 int machine_rom_system(machine_t *m) {
-    return m->casio ? MACHINE_BOARD_CASIO : MACHINE_BOARD_HP;
+    if (m->casio) return MACHINE_BOARD_CASIO;
+    return m->hp_model == HP_MODEL_300LX ? MACHINE_BOARD_HP300LX : MACHINE_BOARD_HP;
 }
 
 const char *machine_board_name(int board) {
     switch (board) {
     case MACHINE_BOARD_CASIO: return "Casio A-51";
     case MACHINE_BOARD_HP: return "HP 320LX";
+    case MACHINE_BOARD_HP300LX: return "HP 300LX";
     default: return "Unknown";
     }
 }

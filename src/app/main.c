@@ -706,7 +706,7 @@ static void update_menus(app_t *app, bool device_online) {
     menu_set_enabled(MENU_STOP_SHARING, settings->shared_folder[0] != 0);
     menu_set_enabled(MENU_SET_PROXY, desktop_free);
     static const uint32_t LINK_SPEEDS[] = { 19200, 38400, 57600, 115200 };
-    bool speed_settable = desktop_free && machine_rom_system(machine) == MACHINE_BOARD_HP;
+    bool speed_settable = desktop_free && machine_rom_system(machine) != MACHINE_BOARD_CASIO;
     uint32_t link_baud = device_online ? machine_serial_baud(machine) : 0;
     for (int baud_item = MENU_BAUD_19200; baud_item <= MENU_BAUD_115200; baud_item++) {
         uint32_t speed = LINK_SPEEDS[baud_item - MENU_BAUD_19200];

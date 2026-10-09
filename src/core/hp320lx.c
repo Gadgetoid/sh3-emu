@@ -50,14 +50,18 @@ static const hp320lx_keymap_t key_map[] = {
     { 0x29, 7, 1 }, { 0x22, 7, 3 }, { 0x01, 7, 4 }, { 0x5E, 7, 4 }, { 0x09, 7, 6 }, { 0xF1, 7, 7 }, { 0xEB, 7, 8 }, { 0xF2, 7, 9 },
 };
 
-static const char signature[] = "hplib.dll";
-
-bool hp320lx_detect(const uint8_t *image, size_t size) {
-    size_t length = sizeof signature - 1;
+static bool contains(const uint8_t *image, size_t size, const char *text) {
+    size_t length = strlen(text);
     for (size_t i = 0; i + length <= size; i++) {
-        if (!memcmp(image + i, signature, length)) return true;
+        if (!memcmp(image + i, text, length)) return true;
     }
     return false;
+}
+
+hp_model_t hp320lx_detect(const uint8_t *image, size_t size) {
+    if (contains(image, size, "hplib.dll")) return HP_MODEL_320LX;
+    if (contains(image, size, "hpst.exe")) return HP_MODEL_300LX;
+    return HP_MODEL_NONE;
 }
 
 void hp320lx_reset(hp320lx_t *board) {

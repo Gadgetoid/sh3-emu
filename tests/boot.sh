@@ -224,3 +224,12 @@ if [ -f "$HP_ROM" ]; then
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
 fi
+HP300_ROM=${HP300_ROM:-rom/nk-hp300lx-ce1.bin}
+HP300_HASH=2b0c4f41dd9ecb623f8d5bcd5cd108587d0768bbd0f714e34f437e2aba37c2c9
+if [ -f "$HP300_ROM" ]; then
+    ./headless "$HP300_ROM" --debug-output --seconds=45 --pgm="$OUT/hp300.pgm" > "$OUT/hp300.log" 2>&1
+    actual=$(shasum -a 256 "$OUT/hp300.pgm" | cut -d' ' -f1)
+    if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp300.log" && [ "$actual" = "$HP300_HASH" ]; then echo "ok   hp300"; else echo "FAIL hp300 $actual"; exit 1; fi
+else
+    echo "skip hp300: no $HP300_ROM (HP 300LX ROM image)"
+fi

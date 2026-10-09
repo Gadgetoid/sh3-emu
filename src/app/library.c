@@ -37,7 +37,7 @@ void library_find_roms(rom_set_t *roms) {
 void library_show_no_roms(void) {
     char folder[1100], message[1400];
     rom_folder(folder, sizeof folder);
-    snprintf(message, sizeof message, "Put a ROM in %s: a Casio Cassiopeia A-51 or HP 320LX ROM image.", folder);
+    snprintf(message, sizeof message, "Put a ROM in %s: a Casio Cassiopeia A-51, HP 300LX or HP 320LX ROM image.", folder);
     const SDL_MessageBoxButtonData buttons[] = {
         { SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Quit" },
         { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Show ROM Folder" },
@@ -102,7 +102,7 @@ bool library_first_run_import(void) {
         { SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Choose Files" },
     };
     const SDL_MessageBoxData dialog = { SDL_MESSAGEBOX_INFORMATION, NULL, "Import ROMs and Cards",
-                                        "Choose your ROMs: a Casio Cassiopeia A-51 or HP 320LX ROM image, or both. Card images can be chosen at the same time.",
+                                        "Choose your ROMs: a Casio Cassiopeia A-51, HP 300LX or HP 320LX ROM image, or several. Card images can be chosen at the same time.",
                                         2, buttons, NULL };
     int chosen = 0;
     if (!SDL_ShowMessageBox(&dialog, &chosen) || chosen != 1) return false;

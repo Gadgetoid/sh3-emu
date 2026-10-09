@@ -7,11 +7,13 @@
 #define HP320LX_SCREEN_HEIGHT 240
 #define HP320LX_REGISTERS     4096
 #define HP320LX_FRAMEBUFFER   0x0C005000u
+#define HP300LX_FRAMEBUFFER   0x0C004800u
 #define HP320LX_ADC_HEALTHY   0x3A0u
 #define HP320LX_BACKLIGHT_COLOUR 0x41B432u
 #define HP320LX_PERIPHERAL_HZ 11059200u
 #define HP320LX_MODEL_PORT    0xA4000134u
 #define HP320LX_MODEL_PINS    0x0032u
+#define HP300LX_MODEL_PINS    0x0012u
 #define HP320LX_POWER_PORT    0xA4000126u
 #define HP320LX_POWER_AC      0x0010u
 #define HP320LX_SERIAL_PORT   0xA400012Eu
@@ -29,6 +31,8 @@
 #define HP320LX_KEY_EVENTS    64
 #define HP320LX_PEN_IRQ       3
 #define HP320LX_ON_IRQ        0
+
+typedef enum { HP_MODEL_NONE, HP_MODEL_320LX, HP_MODEL_300LX } hp_model_t;
 
 typedef void (*hp320lx_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*hp320lx_line_fn)(void *context, const char *line);
@@ -64,7 +68,7 @@ typedef struct {
     bool pen_interrupt;
 } hp320lx_touch_t;
 
-bool hp320lx_detect(const uint8_t *image, size_t size);
+hp_model_t hp320lx_detect(const uint8_t *image, size_t size);
 void hp320lx_reset(hp320lx_t *board);
 bool hp320lx_read(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t *value);
 bool hp320lx_write(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t value);

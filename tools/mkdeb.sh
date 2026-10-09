@@ -73,8 +73,8 @@ Section: otherosfs
 Priority: optional
 Description: Hitachi SH-3 Windows CE emulator
  Emulates Windows CE handhelds built on the Hitachi SH-3: the Casio
- Cassiopeia A-51 and the HP 320LX, with a simulated LCD, PC Card images,
- a serial port and a PPP network.
+ Cassiopeia A-51, the HP 300LX and the HP 320LX, with a simulated LCD,
+ PC Card images, a serial port and a PPP network.
  .
  sh3emu is the emulator, sh3emu-headless runs it without a window for tests
  and scripts, and sh3emu-rapi talks to a running device over RAPI. ROMs are

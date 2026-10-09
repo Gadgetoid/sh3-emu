@@ -30,7 +30,7 @@ cat > "$app/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$version</string>
     <key>CFBundleVersion</key><string>$version</string>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSHumanReadableCopyright</key><string>Emulates the Casio Cassiopeia A-51 and HP 320LX Windows CE handhelds. ROMs not included.</string>
+    <key>NSHumanReadableCopyright</key><string>Emulates the Casio Cassiopeia A-51, HP 300LX and HP 320LX Windows CE handhelds. ROMs not included.</string>
 </dict>
 </plist>
 EOF

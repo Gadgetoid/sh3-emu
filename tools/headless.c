@@ -337,7 +337,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
 
 static const option_spec_t SPEC = {
     "headless", "ROM [OPTIONS]",
-    "Runs a Casio Cassiopeia A-51 or HP 320LX ROM image without a window, for tests and scripts.",
+    "Runs a Casio Cassiopeia A-51, HP 300LX or HP 320LX ROM image without a window, for tests and scripts.",
     OPTIONS, (int)(sizeof OPTIONS / sizeof OPTIONS[0]),
     "Events at or after --seconds don't happen, and are reported. Options taking a value also accept it as the next argument.",
 };

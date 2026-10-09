@@ -24,7 +24,7 @@ const char *const DIALOG_MANAGE_MESSAGE =
 
 const char *const DIALOG_CLOCK_LABEL = "Set the clock from " CLOCK_SOURCE " at the first boot";
 
-const char *const DIALOG_ROM_PROMPT = "Choose a ROM: a Casio Cassiopeia A-51 or HP 320LX ROM image.";
+const char *const DIALOG_ROM_PROMPT = "Choose a ROM: a Casio Cassiopeia A-51, HP 300LX or HP 320LX ROM image.";
 
 const char *const DIALOG_NOT_A_ROM = "Not a ROM this emulator can run";
 
