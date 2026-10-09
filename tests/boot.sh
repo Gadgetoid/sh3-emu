@@ -206,6 +206,8 @@ if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --seconds=32 --key=20:9F --key=21:3C --key=25:5A --key=28:9F --trace-pc --pgm="$OUT/hp_wake.pgm" > "$OUT/hp_wake.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp_wake.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$HP_WAKE_HASH" ] && grep -q "^t=2[2-4].* lcd=0" "$OUT/hp_wake.log"; then echo "ok   hp_wake"; else echo "FAIL hp_wake $actual"; exit 1; fi
+    ./headless "$HP_ROM" --seconds=32 --power=22 --power=28 --trace-pc > "$OUT/hp_power.log" 2>&1
+    if grep -q "^t=2[4-6].* lcd=0" "$OUT/hp_power.log" && grep -q "^t=31.* lcd=1" "$OUT/hp_power.log"; then echo "ok   hp_power"; else echo "FAIL hp_power"; exit 1; fi
     ./headless "$HP_ROM" --seconds=24 --wav="$OUT/hp_sound.wav" > /dev/null 2>&1
     SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 2.4 < len(a) / 22050 < 2.6 and max(map(abs, a)) > 2000 else 1)'
     if python3 -c "$SOUND" "$OUT/hp_sound.wav"; then echo "ok   hp_sound"; else echo "FAIL hp_sound"; exit 1; fi

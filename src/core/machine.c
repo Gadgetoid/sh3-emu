@@ -401,7 +401,7 @@ size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate)
     return count;
 }
 
-static void casio_nmi_taken(void *context, uint32_t code) {
+static void nmi_taken(void *context, uint32_t code) {
     machine_t *m = context;
     if (code != NMI_CODE) return;
     m->chip.nmi = false;
@@ -603,7 +603,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
-    m->cpu.on_interrupt = m->casio ? casio_nmi_taken : NULL;
+    m->cpu.on_interrupt = nmi_taken;
     uint64_t cycles = m->cpu.cycles;
     sh3_reset(&m->cpu);
     if (keep_ram) {
@@ -1006,8 +1006,15 @@ uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
 }
 void machine_power_button(machine_t *m, bool down) {
-    if (m->hp && down && machine_suspended(m)) hp320lx_woken(&m->hp_board);
-    if (m->hp) sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
+    if (m->hp) {
+        bool suspended = machine_suspended(m);
+        if (down && suspended) hp320lx_woken(&m->hp_board);
+        sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
+        if (!down || suspended) return;
+        m->chip.nmi = true;
+        sh7709_update_interrupts(&m->chip);
+        return;
+    }
     if (!m->casio) return;
     casio_power_key(&m->casio_board, down);
     if (!down) return;
@@ -1203,7 +1210,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
     mailbox_clear(&m->mailbox);
-    m->cpu.on_interrupt = m->casio ? casio_nmi_taken : NULL;
+    m->cpu.on_interrupt = nmi_taken;
     if (m->optimiser.verify) m->optimiser.verify->pending = false;
     sync_watches(m);
     m->chip.cpu = &m->cpu;
