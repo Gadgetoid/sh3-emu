@@ -74,6 +74,7 @@ typedef struct {
     scroller_t scroller;
     notice_t notice;
     serial_service_t serial;
+    ethernet_link_t ethernet;
     desktop_t *desktop;
     dropped_t dropped;
     picked_t *picked;
@@ -538,6 +539,17 @@ static void handle_menu(app_t *app, int item, int *switch_to, bool *events_seen)
         machine_eject_card(machine);
         notice_show(&app->notice, "card ejected", NOTICE_SHORT);
         break;
+    case MENU_ETHERNET_CARD:
+        if (machine_ethernet_inserted(machine)) {
+            machine_eject_ethernet(machine);
+            ethernet_link_close(&app->ethernet);
+            notice_show(&app->notice, "Ethernet card ejected", NOTICE_SHORT);
+        } else if (ethernet_link_insert(&app->ethernet, machine)) {
+            notice_show(&app->notice, "Ethernet card inserted; CE uses it after a soft reset once its driver is installed", NOTICE_LONG);
+        } else {
+            notice_show(&app->notice, "could not insert the Ethernet card", NOTICE_SHORT);
+        }
+        break;
     case MENU_MOUNT_DICTIONARY: {
         static const SDL_DialogFileFilter filters[] = { { "Dictionary images", "bin;rom" }, { "All files", "*" } };
         SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_DICTIONARY, app->window, filters, 2, settings->dictionary[0] ? settings->dictionary : NULL, false);
@@ -715,6 +727,8 @@ static void update_menus(app_t *app, bool device_online) {
     }
     menu_set_checked(MENU_NETWORK_RAPI, settings->network_rapi != 0);
     menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
+    menu_set_enabled(MENU_ETHERNET_CARD, net_gateway_available() && machine_rom_system(machine) != MACHINE_BOARD_CASIO);
+    menu_set_checked(MENU_ETHERNET_CARD, machine_ethernet_inserted(machine));
     menu_set_enabled(MENU_MOUNT_DICTIONARY, machine_has_dictionary_slot(machine));
     menu_set_enabled(MENU_UNMOUNT_DICTIONARY, machine_dictionary_mounted(machine));
     menu_set_checked(MENU_BACKLIGHT, machine_backlight(machine));
@@ -1006,6 +1020,7 @@ static int start_debugging(app_t *app) {
 static void open_serial(app_t *app) {
     char sync_manifest[1024];
     serial_service_init(&app->serial, &app->settings);
+    ethernet_link_init(&app->ethernet, NULL, app->settings.user_agent);
     rapi_data_path("sync-manifest.txt", sync_manifest, sizeof sync_manifest);
     app->desktop = desktop_create(app->serial.rapi_socket, sync_manifest);
     const char *failure = serial_service_start(&app->serial, app->session.machine);
@@ -1021,6 +1036,7 @@ static void shut_down(app_t *app) {
     app->agent = NULL;
     desktop_destroy(app->desktop);
     serial_service_close(&app->serial);
+    ethernet_link_close(&app->ethernet);
     free(app->picked);
     machine_save(machine, app->session.state_path, (int64_t)time(NULL));
     if (app_log_verbose()) machine_dump_state(machine);
@@ -1054,7 +1070,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "sh3emu: cannot listen on agent socket %s\n", app->launch.agent_socket);
         return 1;
     }
-    app->runner = app_runner_create(machine, &app->input, app->debugger, app->agent, &app->serial.link);
+    app->runner = app_runner_create(machine, &app->input, app->debugger, app->agent, &app->serial.link, &app->ethernet);
     if (!app->runner) {
         fprintf(stderr, "sh3emu: cannot start machine runner\n");
         return 1;

@@ -44,7 +44,7 @@ SRC_MENU  = src/frontend/linux/menu.c src/frontend/linux/dialog.c src/frontend/l
 endif
 
 ifeq ($(shell $(PKG_CONFIG) --exists slirp && echo yes),yes)
-SRC_NET   = src/net/net_gateway.c src/net/serial_link.c
+SRC_NET   = src/net/net_gateway.c src/net/serial_link.c src/net/ethernet_link.c
 CFLAGS   += $(shell $(PKG_CONFIG) --cflags slirp)
 NET_LIBS  = $(shell $(PKG_CONFIG) --libs slirp)
 ifeq ($(shell $(PKG_CONFIG) --exists libcurl && echo yes),yes)
@@ -55,7 +55,7 @@ else
 SRC_NET  += src/net/web_proxy_none.c
 endif
 else
-SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_link.c
+SRC_NET   = src/net/net_gateway_none.c src/net/web_proxy_none.c src/net/serial_link.c src/net/ethernet_link.c
 endif
 
 SRC_MACHINE = src/core/sh3.c src/core/optimiser.c src/native/native.c src/native/lz.c src/native/lzw.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/pccard.c src/core/ne2000.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
@@ -79,10 +79,10 @@ $(HEADLESS): $(OBJ_HEADLESS)
 $(NATIVECHECK): $(BUILD)/src/core/sh3.o $(BUILD)/src/core/optimiser.o $(BUILD)/src/native/native.o $(BUILD)/src/native/lz.o $(BUILD)/src/native/lzw.o $(BUILD)/src/util/file.o $(BUILD)/tools/native_check.o
 	$(CC) -o $@ $^ -lz
 
-$(GATEWAYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
+$(GATEWAYCHECK): $(filter-out %/serial_link.o %/ethernet_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
-$(PROXYCHECK): $(filter-out %/serial_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/proxy_check.o
+$(PROXYCHECK): $(filter-out %/serial_link.o %/ethernet_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/proxy_check.o
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o

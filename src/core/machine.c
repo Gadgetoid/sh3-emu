@@ -102,6 +102,8 @@ struct machine {
     size_t dictionary_size;
     char pending_card[CARD_PATH_MAX];
     uint64_t pending_card_at;
+    bool pending_ethernet;
+    uint8_t pending_ethernet_mac[6];
     bool serial_connected;
     uint8_t serial_rx[SERIAL_FIFO], serial_tx[SERIAL_FIFO];
     uint32_t serial_rx_head, serial_rx_count, serial_tx_count;
@@ -909,24 +911,47 @@ bool machine_insert_card(machine_t *m, const char *path) {
 static void pending_card_event(machine_t *m) {
     if (!m->pending_card_at || m->cpu.cycles < m->pending_card_at) return;
     m->pending_card_at = 0;
-    if (!insert_card_now(m, m->pending_card)) machine_logf(m, "card: cannot open %s\n", m->pending_card);
+    if (m->pending_ethernet) {
+        m->pending_ethernet = false;
+        ne2000_insert(&m->ethernet, m->pending_ethernet_mac);
+        hp_card_changed(m);
+    }
+    if (m->pending_card[0] && !insert_card_now(m, m->pending_card)) machine_logf(m, "card: cannot open %s\n", m->pending_card);
+    m->pending_card[0] = 0;
+}
+
+static void swap_cards_later(machine_t *m) {
+    snprintf(m->pending_card, sizeof m->pending_card, "%s", m->card_path);
+    cfcard_eject(&m->card_slot);
+    m->card_path[0] = 0;
+    m->pending_card_at = m->cpu.cycles + MACHINE_CLOCK_HZ;
 }
 
 bool machine_insert_ethernet(machine_t *m, const uint8_t mac[6]) {
     if (!m->hp) return false;
+    if (m->ethernet.inserted || m->pending_ethernet) return true;
+    if (m->card.inserted) {
+        swap_cards_later(m);
+        m->pending_ethernet = true;
+        memcpy(m->pending_ethernet_mac, mac, 6);
+        hp_card_changed(m);
+        return true;
+    }
     ne2000_insert(&m->ethernet, mac);
     hp_card_changed(m);
     return true;
 }
 
 void machine_eject_ethernet(machine_t *m) {
+    m->pending_ethernet = false;
     if (!m->ethernet.inserted) return;
+    if (m->card.inserted) swap_cards_later(m);
     ne2000_eject(&m->ethernet);
     if (m->hp) hp_card_changed(m);
 }
 
 bool machine_ethernet_inserted(machine_t *m) {
-    return m->ethernet.inserted;
+    return m->ethernet.inserted || m->pending_ethernet;
 }
 
 size_t machine_ethernet_take(machine_t *m, uint8_t *frame, size_t max) {
@@ -939,7 +964,8 @@ void machine_ethernet_give(machine_t *m, const uint8_t *frame, size_t length) {
 }
 
 void machine_eject_card(machine_t *m) {
-    m->pending_card_at = 0;
+    m->pending_card[0] = 0;
+    if (!m->pending_ethernet) m->pending_card_at = 0;
     if (!m->card.inserted) return;
     cfcard_eject(&m->card_slot);
     m->card_path[0] = 0;
@@ -1212,6 +1238,7 @@ static bool grown_record(const char *name, uint32_t size) {
 
 static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length) {
     memset(&m->ethernet, 0, sizeof m->ethernet);
+    m->pending_ethernet = false;
     const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
     while (cursor < end) {
         uint8_t name_length = *cursor++;

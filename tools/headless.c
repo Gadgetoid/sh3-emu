@@ -10,7 +10,7 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
-#include "core/ne2000.h"
+#include "net/ethernet_link.h"
 #include "net/serial_link.h"
 #include "util/file.h"
 #include "util/options.h"
@@ -30,9 +30,7 @@ static void request_stop(int signal_number) {
 static gdb_t *debugger;
 static agent_t *agent;
 static serial_link_t serial;
-static net_gateway_t *ethernet;
-
-static const uint8_t ETHERNET_MAC[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x57 };
+static ethernet_link_t ethernet;
 
 #define AGENT_POLL_CYCLES (MACHINE_CLOCK_HZ / 100)
 
@@ -41,16 +39,8 @@ static void run_cycles(machine_t *machine, uint64_t cycles) {
     else if (!gdb_run(debugger, cycles)) stop_requested = 1;
 }
 
-static void pump_ethernet(machine_t *machine) {
-    uint8_t frame[NE2000_FRAME_MAX];
-    size_t length;
-    while ((length = machine_ethernet_take(machine, frame, sizeof frame)) > 0) net_gateway_frame_from_guest(ethernet, frame, length);
-    net_gateway_poll(ethernet, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
-    while ((length = net_gateway_frame_to_guest(ethernet, frame, sizeof frame)) > 0) machine_ethernet_give(machine, frame, length);
-}
-
 static void advance(machine_t *machine, uint64_t cycles) {
-    if (!agent && !ethernet && serial.mode == SERIAL_OFF) {
+    if (!agent && !machine_ethernet_inserted(machine) && serial.mode == SERIAL_OFF) {
         run_cycles(machine, cycles);
         return;
     }
@@ -59,7 +49,7 @@ static void advance(machine_t *machine, uint64_t cycles) {
         run_cycles(machine, step);
         if (agent) agent_poll(agent, machine_mailbox(machine));
         serial_link_pump(&serial, machine);
-        if (ethernet) pump_ethernet(machine);
+        ethernet_link_pump(&ethernet, machine);
         if (serial.mode == SERIAL_TCP && serial_link_attached(&serial) != machine_serial_connected(machine)) machine_serial_connect(machine, serial_link_attached(&serial));
         cycles -= step;
     }
@@ -412,11 +402,8 @@ int main(int argc, char **argv) {
     if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     if (run.ethernet) {
-        net_gateway_options_t options = { NET_GATEWAY_DEFAULT_USER_AGENT, NULL, 0, true };
         if (!net_gateway_available()) { fprintf(stderr, "headless: --ethernet needs a build with libslirp\n"); return 2; }
-        if (!machine_insert_ethernet(machine, ETHERNET_MAC)) { fprintf(stderr, "headless: --ethernet needs an HP machine\n"); return 2; }
-        ethernet = net_gateway_create(log_stderr, &options);
-        if (!ethernet) { fprintf(stderr, "headless: cannot start the Ethernet network\n"); return 1; }
+        if (!ethernet_link_insert(&ethernet, machine)) { fprintf(stderr, "headless: --ethernet needs an HP machine\n"); return 2; }
     }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     FILE *wav_file = run.wav ? fopen(run.wav, "wb") : NULL;
@@ -426,6 +413,7 @@ int main(int argc, char **argv) {
     static int16_t audio[65536];
     if (wav_file) fseek(wav_file, 44, SEEK_SET);
     serial_link_init(&serial, log_stderr);
+    ethernet_link_init(&ethernet, log_stderr, NULL);
     serial.options.rapi_socket = run.rapi_socket;
     serial.options.rapi_port = run.rapi_port;
     if (run.user_agent) serial.options.user_agent = run.user_agent;
@@ -567,7 +555,7 @@ int main(int argc, char **argv) {
     gdb_destroy(debugger);
     agent_destroy(agent);
     serial_link_close(&serial);
-    if (ethernet) net_gateway_destroy(ethernet);
+    ethernet_link_close(&ethernet);
     machine_destroy(machine);
     free(rom);
     return 0;

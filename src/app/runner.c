@@ -16,6 +16,7 @@ struct app_runner {
     gdb_t        *debugger;
     agent_t      *agent;
     serial_link_t *serial;
+    ethernet_link_t *ethernet;
     bool paused, stop, restart;
     SDL_AtomicInt waiting;
 };
@@ -45,6 +46,7 @@ static int run_machine(void *context) {
                 owed -= RUN_SLICE_CYCLES;
                 if (runner->agent) agent_poll(runner->agent, machine_mailbox(runner->machine));
                 serial_link_pump(runner->serial, runner->machine);
+                ethernet_link_pump(runner->ethernet, runner->machine);
                 if (!runner->debugger) continue;
                 gdb_after_run(runner->debugger);
                 if (gdb_halted(runner->debugger)) break;
@@ -58,7 +60,7 @@ static int run_machine(void *context) {
     }
 }
 
-app_runner_t *app_runner_create(machine_t *machine, input_queue_t *input, gdb_t *debugger, agent_t *agent, serial_link_t *serial) {
+app_runner_t *app_runner_create(machine_t *machine, input_queue_t *input, gdb_t *debugger, agent_t *agent, serial_link_t *serial, ethernet_link_t *ethernet) {
     app_runner_t *runner = calloc(1, sizeof *runner);
     if (!runner) return NULL;
     runner->lock = SDL_CreateMutex();
@@ -71,6 +73,7 @@ app_runner_t *app_runner_create(machine_t *machine, input_queue_t *input, gdb_t 
     runner->debugger = debugger;
     runner->agent = agent;
     runner->serial = serial;
+    runner->ethernet = ethernet;
     runner->restart = true;
     runner->thread = SDL_CreateThread(run_machine, "machine", runner);
     if (!runner->thread) {

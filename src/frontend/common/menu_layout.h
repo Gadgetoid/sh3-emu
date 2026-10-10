@@ -135,6 +135,7 @@ static const menu_entry_t MENU_ENTRIES[] = {
     { MENU_ENTRY_HEADING, 0, "PC Card", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_INSERT_CARD, "Insert Card Image" ELLIPSIS, 'o', MENU_KEY_PRIMARY },
     { MENU_ENTRY_ITEM, MENU_EJECT_CARD, "Eject Card", 'e', MENU_KEY_PRIMARY },
+    { MENU_ENTRY_ITEM, MENU_ETHERNET_CARD, "Ethernet Card", 0, 0 },
     { MENU_ENTRY_SEPARATOR, 0, NULL, 0, 0 },
     { MENU_ENTRY_HEADING, 0, "Dictionary ROM", 0, 0 },
     { MENU_ENTRY_ITEM, MENU_MOUNT_DICTIONARY, "Mount Dictionary" ELLIPSIS, 0, 0 },
