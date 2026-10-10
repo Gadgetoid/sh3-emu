@@ -50,7 +50,7 @@ The card has a CompactFlash CIS, a configuration option register, and ATA IDENTI
 
 ## Ethernet card
 
-On the HPs, `--ethernet` puts an NE2000-compatible card in the PC Card slot, with a `--card` image moving to the 320LX's CompactFlash slot. It's on its own libslirp network, as with `--net`, with DHCP giving CE 10.0.2.15. The card's CIS identifies it as a Socket Communications Low Power Ethernet CF, so Socket's LP-E driver for CE 2.0 SH3 (`SocketLpe.dll` with `ndis.dll`, `arp.dll` and `dhcp.dll`) claims it. CE binds TCP/IP to a network card only when it starts, so install the driver, add `SOCKETLPE1` to `HKLM\Comm\Tcpip\Linkage\Bind`, and soft reset with the card in:
+On the HPs, `--ethernet` (or Devices > Ethernet Card in `sh3emu`) puts an NE2000-compatible card in the PC Card slot, with a `--card` image moving to the 320LX's CompactFlash slot. It's on its own libslirp network, as with `--net`, with DHCP giving CE 10.0.2.15. The card's CIS identifies it as a Socket Communications Low Power Ethernet CF, so Socket's LP-E driver for CE 2.0 SH3 (`SocketLpe.dll` with `ndis.dll`, `arp.dll` and `dhcp.dll`) claims it. CE binds TCP/IP to a network card only when it starts, so install the driver, add `SOCKETLPE1` to `HKLM\Comm\Tcpip\Linkage\Bind`, and soft reset with the card in:
 
 ```
 ./headless rom/nk-hp320lx.bin --load=driver.state --ethernet --soft-reset=3 --seconds=60
