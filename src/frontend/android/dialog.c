@@ -35,7 +35,8 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
     }
     int screen = screen_preset_index(result->screen);
     if (screen < 0 || !dialog_rom_allows_screen(&roms[rom], screen)) screen = 0;
-    uint32_t memory = result->memory > roms[rom].memory_max ? roms[rom].memory_max : result->memory;
+    int memory_choice = dialog_rom_memory_choice(&roms[rom], result->memory);
+    uint32_t memory = memory_choice >= 0 ? DIALOG_MEMORY_SIZES[memory_choice] : result->memory;
     bool host_time = result->host_time;
     list_scroll_t scroll = { 0 };
     for (;;) {
@@ -66,7 +67,8 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
         if (tap.tag >= CHOICE_ROM && tap.tag < CHOICE_ROM + rom_count) {
             rom = tap.tag - CHOICE_ROM;
             if (!dialog_rom_allows_screen(&roms[rom], screen)) screen = 0;
-            if (memory > roms[rom].memory_max) memory = roms[rom].memory_max;
+            memory_choice = dialog_rom_memory_choice(&roms[rom], memory);
+            if (memory_choice >= 0) memory = DIALOG_MEMORY_SIZES[memory_choice];
         } else if (tap.tag >= CHOICE_MEMORY && tap.tag < CHOICE_MEMORY + DIALOG_MEMORY_COUNT) {
             memory = DIALOG_MEMORY_SIZES[tap.tag - CHOICE_MEMORY];
         } else if (tap.tag >= CHOICE_SCREEN && tap.tag < CHOICE_SCREEN + SCREEN_PRESET_COUNT) {

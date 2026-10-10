@@ -104,6 +104,20 @@ open(sys.argv[2], "wb").write(line)' "$PORT" "$OUT/$name.reply" &
     wait $LISTENER 2>/dev/null || true
     if grep -q "hello from tcpprobe" "$OUT/$name.reply" 2>/dev/null; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.reset.log"; exit 1; fi
 }
+memory_check() {
+    name=$1; rom=$2; net_at=$3; megabytes=$4; most_kb=$5
+    socket=/tmp/sh3emu-memory-$$.sock
+    rm -f "$socket"
+    ./headless "$rom" --memory="$megabytes" --seconds=300 --net="$net_at" --rapi="$socket" --realtime=4 > "$OUT/$name.log" 2>&1 &
+    EMULATOR=$!
+    for attempt in $(seq 1 200); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
+    sleep 2
+    storage=$(rapi_tool --socket="$socket" info 2>/dev/null | awk '/^storage/ {print $2}')
+    kill $EMULATOR 2>/dev/null || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$socket"
+    if [ -n "$storage" ] && [ "$storage" -lt "$most_kb" ]; then echo "ok   $name"; else echo "FAIL $name ($storage KB storage)"; tail -5 "$OUT/$name.log"; exit 1; fi
+}
 debugmgr_check() {
     name=$1; rom=$2; net_at=$3
     socket=/tmp/sh3emu-rapi-$$.sock
@@ -301,6 +315,7 @@ if [ -f "$HP_ROM" ]; then
         debugmgr_check hp_debugmgr "$HP_ROM" 20
         tcp_check hp_tcp "$HP_ROM" 8
         card_check hp_card "$HP_ROM" 22 "Storage Card"
+        memory_check hp_memory_4mb "$HP_ROM" 22 4 2048
         if [ -d "$ETHERNET_FILES" ]; then
             ethernet_check hp_ethernet "$HP_ROM" 22 "$ETHERNET_FILES"
         else
@@ -321,6 +336,7 @@ if [ -f "$HP300_ROM" ]; then
         echo "skip hp300_card: headless built without libslirp"
     else
         card_check hp300_card "$HP300_ROM" 50 "PC Card"
+        memory_check hp300_memory_2mb "$HP300_ROM" 50 2 1024
     fi
 else
     echo "skip hp300: no $HP300_ROM (HP 300LX ROM image)"

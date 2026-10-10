@@ -184,7 +184,7 @@ static const option_t OPTIONS[] = {
     [OPT_TCP] = { "tcp", "PORT", "offer COM1 as raw bytes on this TCP port on all interfaces, with the cable connected while a client is attached", 0 },
     [OPT_PTY] = { "pty", "[SECONDS]", "plug COM1 into a pseudo-terminal, named on stderr (default at 20 s, or 2 s after --load)", 0 },
     [OPT_REPLUG] = { "replug", "SECONDS", "unplug the --net cable and plug it back in 2 seconds later, with a new gateway", 0 },
-    [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 16, 32 or 64", 0 },
+    [OPT_MEMORY] = { "memory", "MB", "RAM for a cold boot: 2, 4, 8, 16, 32 or 64, within what the machine had (HP 300LX 2-32, HP 320LX and Casio A-51 4-64; default 16)", 0 },
     [OPT_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [OPT_REALTIME] = { "realtime", "[N]", "pace emulated time at N times real time (default 1), for agent clients", 0 },
     [OPT_OPTIMISATIONS] = { "optimisations", NULL, "run CE's ROM compression natively and skip busy-waits on the clock", 0 },
@@ -253,7 +253,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
         run->net_at = -1;
         return !value || (option_number(value, &run->net_at) && run->net_at >= 0);
     case OPT_MEMORY:
-        if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
+        if (!option_integer(value, 10, &integer) || integer < 0 || !machine_memory_size_valid((uint32_t)integer)) return false;
         run->memory = (uint32_t)integer;
         return true;
     case OPT_SPEED:

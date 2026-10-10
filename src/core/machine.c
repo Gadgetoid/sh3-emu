@@ -1035,10 +1035,16 @@ bool machine_watch_pc(machine_t *m, uint32_t va) {
     return true;
 }
 
+bool machine_memory_size_valid(uint32_t megabytes) {
+    return megabytes >= 2 && megabytes <= 64 && !(megabytes & (megabytes - 1));
+}
+
 void machine_set_memory(machine_t *m, uint32_t megabytes) {
-    if (megabytes != 16 && megabytes != 32 && megabytes != 64) return;
-    uint32_t most = machine_board_memory_max(machine_rom_system(m));
+    if (!machine_memory_size_valid(megabytes)) return;
+    int board = machine_rom_system(m);
+    uint32_t most = machine_board_memory_max(board), least = machine_board_memory_min(board);
     if (megabytes > most) megabytes = most;
+    if (megabytes < least) megabytes = least;
     m->dram_size_next = megabytes << 20;
     if (m->dram_size_next != m->dram_size) machine_reset(m);
 }
@@ -1111,6 +1117,9 @@ const char *machine_board_name(int board) {
 }
 uint32_t machine_board_memory_max(int board) {
     return board == MACHINE_BOARD_HP300LX ? 32 : 64;
+}
+uint32_t machine_board_memory_min(int board) {
+    return board == MACHINE_BOARD_HP300LX ? 2 : 4;
 }
 key_layout_t machine_key_layout(machine_t *m) {
     (void)m; return KEY_LAYOUT_ROM;

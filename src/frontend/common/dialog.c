@@ -8,12 +8,12 @@
 #define CLOCK_SOURCE "this computer"
 #endif
 
-const uint32_t DIALOG_MEMORY_SIZES[] = { 16, 32, 64 };
+const uint32_t DIALOG_MEMORY_SIZES[] = { 2, 4, 8, 16, 32, 64 };
 
 const int DIALOG_MEMORY_COUNT = (int)(sizeof DIALOG_MEMORY_SIZES / sizeof DIALOG_MEMORY_SIZES[0]);
 
 const char *const DIALOG_MEMORY_LABELS[] = {
-    "16 MB", "32 MB", "64 MB",
+    "2 MB", "4 MB", "8 MB", "16 MB", "32 MB", "64 MB",
 };
 
 const char *const DIALOG_NEW_MACHINE_MESSAGE =
@@ -41,5 +41,15 @@ bool dialog_rom_allows_screen(const dialog_rom_t *rom, int preset) {
 }
 
 bool dialog_rom_allows_memory(const dialog_rom_t *rom, int size) {
-    return size >= 0 && size < DIALOG_MEMORY_COUNT && DIALOG_MEMORY_SIZES[size] <= rom->memory_max;
+    return size >= 0 && size < DIALOG_MEMORY_COUNT && DIALOG_MEMORY_SIZES[size] <= rom->memory_max && DIALOG_MEMORY_SIZES[size] >= rom->memory_min;
+}
+
+int dialog_rom_memory_choice(const dialog_rom_t *rom, uint32_t megabytes) {
+    int below = -1, above = -1;
+    for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
+        if (!dialog_rom_allows_memory(rom, i)) continue;
+        if (DIALOG_MEMORY_SIZES[i] <= megabytes) below = i;
+        else if (above < 0) above = i;
+    }
+    return below >= 0 ? below : above;
 }

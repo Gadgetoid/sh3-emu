@@ -14,6 +14,7 @@
 @property(strong) NSMutableArray<NSString *> *paths;
 @property(strong) NSMutableArray<NSNumber *> *screens;
 @property(strong) NSMutableArray<NSNumber *> *memoryLimits;
+@property(strong) NSMutableArray<NSNumber *> *memoryMinimums;
 @property(assign) dialog_probe_fn probe;
 @property(assign) NSInteger lastRom;
 @end
@@ -26,9 +27,14 @@
     uint32_t mask = known ? self.screens[(NSUInteger)index].unsignedIntValue : 1u;
     for (NSInteger i = 0; i < self.screen.numberOfItems; i++) [self.screen itemAtIndex:i].enabled = (mask >> i) & 1u;
     if (!self.screen.selectedItem.enabled) [self.screen selectItemAtIndex:0];
-    dialog_rom_t limits = { .memory_max = known ? self.memoryLimits[(NSUInteger)index].unsignedIntValue : UINT32_MAX };
+    dialog_rom_t limits = { .memory_min = known ? self.memoryMinimums[(NSUInteger)index].unsignedIntValue : 0,
+                            .memory_max = known ? self.memoryLimits[(NSUInteger)index].unsignedIntValue : UINT32_MAX };
     for (NSInteger i = 0; i < self.memory.numberOfItems; i++) [self.memory itemAtIndex:i].enabled = dialog_rom_allows_memory(&limits, (int)i);
-    while (self.memory.indexOfSelectedItem > 0 && !self.memory.selectedItem.enabled) [self.memory selectItemAtIndex:self.memory.indexOfSelectedItem - 1];
+    NSInteger current = self.memory.indexOfSelectedItem;
+    if (current >= 0 && current < DIALOG_MEMORY_COUNT && !self.memory.selectedItem.enabled) {
+        int choice = dialog_rom_memory_choice(&limits, DIALOG_MEMORY_SIZES[current]);
+        if (choice >= 0) [self.memory selectItemAtIndex:choice];
+    }
 }
 
 - (void)romChosen:(id)sender {
@@ -46,13 +52,14 @@
     if ([panel runModal] == NSModalResponseOK && panel.URL) {
         const char *path = panel.URL.fileSystemRepresentation;
         char label[160];
-        uint32_t memory_max = 0;
-        uint32_t mask = self.probe(path, label, sizeof label, &memory_max);
+        uint32_t memory_min = 0, memory_max = 0;
+        uint32_t mask = self.probe(path, label, sizeof label, &memory_min, &memory_max);
         if (mask) {
             NSUInteger position = self.paths.count;
             [self.paths addObject:[NSString stringWithUTF8String:path]];
             [self.screens addObject:@(mask)];
             [self.memoryLimits addObject:@(memory_max)];
+            [self.memoryMinimums addObject:@(memory_min)];
             [self.rom insertItemWithTitle:[NSString stringWithUTF8String:label] atIndex:(NSInteger)position];
             [self.rom selectItemAtIndex:(NSInteger)position];
             self.lastRom = (NSInteger)position;
@@ -88,6 +95,7 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
     form.paths = [NSMutableArray array];
     form.screens = [NSMutableArray array];
     form.memoryLimits = [NSMutableArray array];
+    form.memoryMinimums = [NSMutableArray array];
     form.lastRom = -1;
 
     NSTextField *name = [NSTextField textFieldWithString:[NSString stringWithUTF8String:result->name]];
@@ -101,6 +109,7 @@ static MachineForm *new_machine_form(const dialog_rom_t *roms, int rom_count, di
         [form.paths addObject:[NSString stringWithUTF8String:roms[i].path]];
         [form.screens addObject:@(roms[i].screens)];
         [form.memoryLimits addObject:@(roms[i].memory_max)];
+        [form.memoryMinimums addObject:@(roms[i].memory_min)];
         if (selected < 0 && !strcmp(roms[i].path, result->rom)) selected = i;
     }
     if (rom_count) [form.rom.menu addItem:[NSMenuItem separatorItem]];

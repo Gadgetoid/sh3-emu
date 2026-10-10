@@ -387,7 +387,10 @@ static void update_choices(form_t *form, new_machine_t *state) {
     for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
         if (!chosen || dialog_rom_allows_memory(chosen, i)) memory->enabled |= 1u << i;
     }
-    while (memory->selected > 0 && !option_enabled(memory, memory->selected)) memory->selected--;
+    if (chosen && !option_enabled(memory, memory->selected)) {
+        int choice = dialog_rom_memory_choice(chosen, DIALOG_MEMORY_SIZES[memory->selected]);
+        if (choice >= 0) memory->selected = choice;
+    }
 }
 
 static void picked_rom(void *userdata, const char *const *files, int filter) {
@@ -415,13 +418,14 @@ static void rom_changed(form_t *form, int widget_index, void *context) {
     }
     rom->selected = state->last_rom;
     char label[160];
-    uint32_t memory_max = 0;
-    uint32_t screens = state->picked_path[0] && state->count < FORM_OPTIONS - 1 ? state->probe(state->picked_path, label, sizeof label, &memory_max) : 0;
+    uint32_t memory_min = 0, memory_max = 0;
+    uint32_t screens = state->picked_path[0] && state->count < FORM_OPTIONS - 1 ? state->probe(state->picked_path, label, sizeof label, &memory_min, &memory_max) : 0;
     if (screens) {
         dialog_rom_t *added = &state->roms[state->count];
         snprintf(added->path, sizeof added->path, "%s", state->picked_path);
         snprintf(added->label, sizeof added->label, "%s", label);
         added->screens = screens;
+        added->memory_min = memory_min;
         added->memory_max = memory_max;
         rom->options[state->count] = added->label;
         state->count++;

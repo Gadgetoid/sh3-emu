@@ -22,7 +22,7 @@ static bool read_profile(const char *path, profile_t *profile) {
     if (!file) return false;
     memset(profile, 0, sizeof *profile);
     profile->screen = (screen_size_t){ SCREEN_STOCK_WIDTH, SCREEN_STOCK_HEIGHT };
-    profile->memory = 4;
+    profile->memory = 16;
     profile->host_time = true;
     char line[1200];
     unsigned value;
