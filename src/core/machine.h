@@ -50,6 +50,11 @@ bool machine_suspended(machine_t *machine);
 
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
+bool machine_insert_ethernet(machine_t *machine, const uint8_t mac[6]);
+void machine_eject_ethernet(machine_t *machine);
+bool machine_ethernet_inserted(machine_t *machine);
+size_t machine_ethernet_take(machine_t *machine, uint8_t *frame, size_t max);
+void machine_ethernet_give(machine_t *machine, const uint8_t *frame, size_t length);
 bool machine_card_inserted(machine_t *machine);
 
 void   machine_serial_connect(machine_t *machine, bool connected);

@@ -92,6 +92,7 @@ struct machine {
     cfcard_t card;
     cfcard_slot_t card_slot;
     char card_path[CARD_PATH_MAX];
+    ne2000_t ethernet;
     uint8_t  *dictionary;
     int16_t audio[AUDIO_RING];
     uint32_t audio_head, audio_count;
@@ -252,19 +253,39 @@ static void skip_ahead(machine_t *m) {
     if (when > m->cpu.cycles) m->cpu.cycles = when;
 }
 
+static pccard_slot_t hp_socket(machine_t *m, int socket) {
+    pccard_slot_t slot = { NULL, NULL };
+    bool ethernet = m->ethernet.inserted;
+    if (socket == HP320LX_PC_CARD_SOCKET && ethernet) slot.ethernet = &m->ethernet;
+    else if (socket == HP320LX_PC_CARD_SOCKET || (socket == HP320LX_CF_SOCKET && ethernet)) slot.storage = &m->card_slot;
+    return slot;
+}
+
+static void hp_card_lines(machine_t *m, int socket) {
+    pccard_slot_t slot = hp_socket(m, socket);
+    bool interrupt = pccard_interrupt(&slot);
+    uint8_t status = HP320LX_CARD_EMPTY;
+    if (pccard_present(&slot)) {
+        bool rdy_high = !interrupt;
+        if (socket == HP320LX_CF_SOCKET) rdy_high = !rdy_high;
+        status = HP320LX_CARD_PRESENT | (rdy_high ? HP320LX_CARD_RDY_PIN : 0);
+    }
+    sh7709_set_pcc_status(&m->chip, socket, status);
+    sh7709_set_pcc_irq(&m->chip, socket, interrupt);
+}
+
 static bool hp_card_access(machine_t *m, uint32_t pa, int size, bool write, uint32_t *value) {
     pccard_address_t address;
     if (!pccard_decode(pa, &address)) return false;
-    bool ours = address.socket == HP320LX_CARD_SOCKET;
-    pccard_access(ours ? &m->card_slot : NULL, &address, size, write, value);
-    if (ours) sh7709_set_pcc_irq(&m->chip, address.socket, m->card.inserted && cfcard_io_mode(&m->card) && cfcard_interrupt(&m->card));
+    pccard_slot_t slot = hp_socket(m, address.socket);
+    pccard_access(&slot, &address, size, write, value);
+    hp_card_lines(m, address.socket);
     return true;
 }
 
 static void hp_card_changed(machine_t *m) {
     for (int socket = 0; socket < PCCARD_SOCKETS; socket++) {
-        bool present = socket == HP320LX_CARD_SOCKET && m->card.inserted;
-        sh7709_set_pcc_status(&m->chip, socket, present ? HP320LX_CARD_READY : HP320LX_CARD_EMPTY);
+        hp_card_lines(m, socket);
     }
 }
 
@@ -663,6 +684,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
         hp_ports_written(m);
     }
     cfcard_reset(&m->card_slot);
+    ne2000_power_on(&m->ethernet);
     if (m->hp) hp_card_changed(m);
     set_serial_lines(m);
     m->serial_rx_count = m->serial_tx_count = 0;
@@ -890,6 +912,32 @@ static void pending_card_event(machine_t *m) {
     if (!insert_card_now(m, m->pending_card)) machine_logf(m, "card: cannot open %s\n", m->pending_card);
 }
 
+bool machine_insert_ethernet(machine_t *m, const uint8_t mac[6]) {
+    if (!m->hp) return false;
+    ne2000_insert(&m->ethernet, mac);
+    hp_card_changed(m);
+    return true;
+}
+
+void machine_eject_ethernet(machine_t *m) {
+    if (!m->ethernet.inserted) return;
+    ne2000_eject(&m->ethernet);
+    if (m->hp) hp_card_changed(m);
+}
+
+bool machine_ethernet_inserted(machine_t *m) {
+    return m->ethernet.inserted;
+}
+
+size_t machine_ethernet_take(machine_t *m, uint8_t *frame, size_t max) {
+    return ne2000_take_sent(&m->ethernet, frame, max);
+}
+
+void machine_ethernet_give(machine_t *m, const uint8_t *frame, size_t length) {
+    if (!ne2000_receive(&m->ethernet, frame, length) || !m->hp) return;
+    hp_card_lines(m, HP320LX_PC_CARD_SOCKET);
+}
+
 void machine_eject_card(machine_t *m) {
     m->pending_card_at = 0;
     if (!m->card.inserted) return;
@@ -1092,7 +1140,7 @@ void machine_dump_state(machine_t *m) {
 }
 
 #define STATE_FIELDS(X) \
-    X(cpu, m->cpu) X(chip, m->chip) X(card, m->card) X(card_path, m->card_path) X(casio_board, m->casio_board) X(casio_audio, m->casio_audio) X(hp_board, m->hp_board)
+    X(cpu, m->cpu) X(chip, m->chip) X(card, m->card) X(card_path, m->card_path) X(casio_board, m->casio_board) X(casio_audio, m->casio_audio) X(hp_board, m->hp_board) X(ethernet, m->ethernet)
 
 static bool write_bytes(gzFile file, const void *data, uint32_t size) {
     return size == 0 || gzwrite(file, data, size) == (int)size;
@@ -1154,6 +1202,7 @@ static bool grown_record(const char *name, uint32_t size) {
 }
 
 static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length) {
+    memset(&m->ethernet, 0, sizeof m->ethernet);
     const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
     while (cursor < end) {
         uint8_t name_length = *cursor++;
@@ -1237,6 +1286,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     sync_watches(m);
     m->chip.cpu = &m->cpu;
     cfcard_sanitize(&m->card);
+    ne2000_sanitize(&m->ethernet);
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
     cfcard_rebind(&m->card_slot, image);
     if (!image) m->card_path[0] = 0;

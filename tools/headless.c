@@ -10,6 +10,7 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
+#include "core/ne2000.h"
 #include "net/serial_link.h"
 #include "util/file.h"
 #include "util/options.h"
@@ -29,6 +30,9 @@ static void request_stop(int signal_number) {
 static gdb_t *debugger;
 static agent_t *agent;
 static serial_link_t serial;
+static net_gateway_t *ethernet;
+
+static const uint8_t ETHERNET_MAC[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x57 };
 
 #define AGENT_POLL_CYCLES (MACHINE_CLOCK_HZ / 100)
 
@@ -37,8 +41,16 @@ static void run_cycles(machine_t *machine, uint64_t cycles) {
     else if (!gdb_run(debugger, cycles)) stop_requested = 1;
 }
 
+static void pump_ethernet(machine_t *machine) {
+    uint8_t frame[NE2000_FRAME_MAX];
+    size_t length;
+    while ((length = machine_ethernet_take(machine, frame, sizeof frame)) > 0) net_gateway_frame_from_guest(ethernet, frame, length);
+    net_gateway_poll(ethernet, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
+    while ((length = net_gateway_frame_to_guest(ethernet, frame, sizeof frame)) > 0) machine_ethernet_give(machine, frame, length);
+}
+
 static void advance(machine_t *machine, uint64_t cycles) {
-    if (!agent && serial.mode == SERIAL_OFF) {
+    if (!agent && !ethernet && serial.mode == SERIAL_OFF) {
         run_cycles(machine, cycles);
         return;
     }
@@ -47,6 +59,7 @@ static void advance(machine_t *machine, uint64_t cycles) {
         run_cycles(machine, step);
         if (agent) agent_poll(agent, machine_mailbox(machine));
         serial_link_pump(&serial, machine);
+        if (ethernet) pump_ethernet(machine);
         if (serial.mode == SERIAL_TCP && serial_link_attached(&serial) != machine_serial_connected(machine)) machine_serial_connect(machine, serial_link_attached(&serial));
         cycles -= step;
     }
@@ -137,7 +150,7 @@ typedef struct {
     double send_times[8];
     const char *send_text[8];
     int send_count;
-    bool net, pty;
+    bool net, pty, ethernet;
     const char *rapi_socket;
     const char *user_agent;
     const char *dictionary;
@@ -148,7 +161,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -160,6 +173,7 @@ static const option_t OPTIONS[] = {
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
+    [OPT_ETHERNET] = { "ethernet", NULL, "insert an NE2000 Ethernet card in the HP's PC Card slot (moving --card to the CF slot), on its own network with DHCP", 0 },
     [OPT_DICTIONARY] = { "dictionary", "IMAGE", "map the Casio A-51's dictionary ROM image at physical 0x04000000", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
     [OPT_RAPI] = { "rapi", "SOCKET", "expose the device's RAPI port on a Unix socket, for sh3emu-rapi --socket", 0 },
@@ -218,6 +232,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
+    case OPT_ETHERNET: run->ethernet = true; return true;
     case OPT_DICTIONARY: run->dictionary = value; return true;
     case OPT_RAPI: run->rapi_socket = value; return true;
     case OPT_USER_AGENT: run->user_agent = value; return true;
@@ -396,6 +411,13 @@ int main(int argc, char **argv) {
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
     if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
+    if (run.ethernet) {
+        net_gateway_options_t options = { NET_GATEWAY_DEFAULT_USER_AGENT, NULL, 0, true };
+        if (!net_gateway_available()) { fprintf(stderr, "headless: --ethernet needs a build with libslirp\n"); return 2; }
+        if (!machine_insert_ethernet(machine, ETHERNET_MAC)) { fprintf(stderr, "headless: --ethernet needs an HP machine\n"); return 2; }
+        ethernet = net_gateway_create(log_stderr, &options);
+        if (!ethernet) { fprintf(stderr, "headless: cannot start the Ethernet network\n"); return 1; }
+    }
     for (int w = 0; w < run.watch_count; w++) machine_watch_pc(machine, run.watches[w]);
     FILE *wav_file = run.wav ? fopen(run.wav, "wb") : NULL;
     if (run.wav && !wav_file) { fprintf(stderr, "cannot write %s\n", run.wav); return 1; }
@@ -545,6 +567,7 @@ int main(int argc, char **argv) {
     gdb_destroy(debugger);
     agent_destroy(agent);
     serial_link_close(&serial);
+    if (ethernet) net_gateway_destroy(ethernet);
     machine_destroy(machine);
     free(rom);
     return 0;

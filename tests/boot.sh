@@ -46,6 +46,64 @@ card_check() {
     rm -f "$socket"
     if cmp -s "$OUT/$name/files/HELLO.TXT" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
 }
+ethernet_check() {
+    name=$1; rom=$2; net_at=$3; files=$4
+    socket=/tmp/sh3emu-ethernet-$$.sock
+    rm -f "$socket" "$OUT/$name.state" "$OUT/$name.reply"
+    ./headless "$rom" --seconds=600 --net="$net_at" --rapi="$socket" --realtime=4 --save="$OUT/$name.state" > "$OUT/$name.log" 2>&1 &
+    EMULATOR=$!
+    for attempt in $(seq 1 200); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
+    sleep 2
+    PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+    for file in arp.dll dhcp.dll ndis.dll SocketLpe.dll tcpprobe.exe; do
+        rapi_tool --socket="$socket" put "$files/$file" "\\Windows\\$file" > /dev/null 2>&1 || true
+    done
+    target="\\Windows\\tcpprobe.exe 10.0.2.2 $PORT"
+    printf '%s#%s' "${#target}" "$target" > "$OUT/$name.lnk"
+    rapi_tool --socket="$socket" put "$OUT/$name.lnk" "\\Windows\\StartUp\\tcpprobe.lnk" > /dev/null 2>&1 || true
+    card='HKEY_LOCAL_MACHINE\Drivers\PCMCIA\Low_Power_Ethernet_CF-Socket_Communications,_Inc-0D17'
+    driver='HKEY_LOCAL_MACHINE\Comm\SOCKETLPE'
+    while read -r key value kind data; do
+        rapi_tool --socket="$socket" reg set "$key" "$value" "$kind" "$data" < /dev/null > /dev/null 2>&1 || true
+    done <<SETTINGS
+$card Dll string ndis.dll
+$card Prefix string NDS
+$card Miniport string SOCKETLPE
+$driver DisplayName string Socket LP-E Driver
+$driver Group string NDIS
+$driver ImagePath string SocketLpe.dll
+$driver\Linkage Route string SOCKETLPE1
+${driver}1 DisplayName string Socket LP-E Driver
+${driver}1 Group string NDIS
+${driver}1 ImagePath string SocketLpe.dll
+${driver}1\Parms BusType dword 8
+${driver}1\Parms BusNumber dword 0
+${driver}1\Parms CardType dword 1
+${driver}1\Parms Transceiver dword 3
+${driver}1\Parms IoBaseAddress dword 768
+${driver}1\Parms InterruptNumber dword 3
+${driver}1\Parms\TcpIp EnableDHCP dword 1
+${driver}1\Parms\TcpIp IpAddress multi 0.0.0.0
+${driver}1\Parms\TcpIp Subnetmask multi 0.0.0.0
+SETTINGS
+    rapi_tool --socket="$socket" reg set 'HKEY_LOCAL_MACHINE\Comm\Tcpip\Linkage' Bind multi ppp SOCKETLPE1 > /dev/null 2>&1 || true
+    kill $EMULATOR 2>/dev/null || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$socket"
+    python3 -c 'import socket, sys
+listener = socket.create_server(("127.0.0.1", int(sys.argv[1])))
+listener.settimeout(300)
+connection = listener.accept()[0]
+connection.settimeout(30)
+line = connection.recv(100)
+connection.sendall(b"hello from the host\n")
+open(sys.argv[2], "wb").write(line)' "$PORT" "$OUT/$name.reply" &
+    LISTENER=$!
+    ./headless "$rom" --load="$OUT/$name.state" --ethernet --soft-reset=3 --seconds=150 > "$OUT/$name.reset.log" 2>&1
+    kill $LISTENER 2>/dev/null || true
+    wait $LISTENER 2>/dev/null || true
+    if grep -q "hello from tcpprobe" "$OUT/$name.reply" 2>/dev/null; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.reset.log"; exit 1; fi
+}
 debugmgr_check() {
     name=$1; rom=$2; net_at=$3
     socket=/tmp/sh3emu-rapi-$$.sock
@@ -200,6 +258,7 @@ HP_TYPE_HASH=d652dcdc9cff536ae0fc01193f8ca0faf85a38342c7c555fadb0f684372ad912
 HP_OPTIMISED_HASH=5e02270b4d18fc8ad071b54b434d69af4b13ad227535a7b052f9b56118ef7fcd
 HP_WAKE_HASH=8237b8c876580260482c7d32973b1f4a26184742b12fb3171c171b9b166547f3
 HP_TOUCH_HASH=5e02270b4d18fc8ad071b54b434d69af4b13ad227535a7b052f9b56118ef7fcd
+ETHERNET_FILES=${ETHERNET_FILES:-rom/socket-lpe}
 if [ -f "$HP_ROM" ]; then
     if ./build/native-check "$HP_ROM" > "$OUT/hp_native.log" 2>&1; then echo "ok   hp_native"; else echo "FAIL hp_native"; cat "$OUT/hp_native.log"; exit 1; fi
     ./headless "$HP_ROM" --debug-output --seconds=20 --pgm="$OUT/hp.pgm" > "$OUT/hp.log" 2>&1
@@ -242,6 +301,11 @@ if [ -f "$HP_ROM" ]; then
         debugmgr_check hp_debugmgr "$HP_ROM" 20
         tcp_check hp_tcp "$HP_ROM" 8
         card_check hp_card "$HP_ROM" 22 "Storage Card"
+        if [ -d "$ETHERNET_FILES" ]; then
+            ethernet_check hp_ethernet "$HP_ROM" 22 "$ETHERNET_FILES"
+        else
+            echo "skip hp_ethernet: no $ETHERNET_FILES (Socket LP-E CF SH3 driver files and tcpprobe.exe)"
+        fi
     fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"

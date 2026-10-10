@@ -404,7 +404,8 @@ static bool card_access(casio_t *board, const casio_host_t *host, uint32_t pa, i
     pccard_address_t address;
     if (!pccard_decode(pa, &address)) return false;
     bool present = card_present(host, address.socket) && address.space != PCCARD_UNUSED;
-    pccard_access(present ? host->card : NULL, &address, size, write, value);
+    pccard_slot_t slot = { present ? host->card : NULL, NULL };
+    pccard_access(&slot, &address, size, write, value);
     if (present) casio_update(board, host);
     else if (host->trace) host->trace(host->context, write, pa, size, *value);
     return true;

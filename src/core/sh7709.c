@@ -347,14 +347,13 @@ void sh7709_set_pcc_status(sh7709_t *chip, int socket, uint8_t status) {
 void sh7709_set_pcc_irq(sh7709_t *chip, int socket, bool asserted) {
     if (socket < 0 || socket >= SH7709_PCC_SOCKETS || chip->pcc_card_irq[socket] == asserted) return;
     chip->pcc_card_irq[socket] = asserted;
-    if (asserted) chip->pcc[socket * PCC_STRIDE / 2 + PCC_CHANGE] |= PCC_IREQ;
     sh7709_update_interrupts(chip);
 }
 
 static bool pcc_pending(const sh7709_t *chip, int socket) {
     const uint8_t *registers = &chip->pcc[socket * PCC_STRIDE / 2];
     uint8_t changes = registers[PCC_CHANGE], enables = registers[PCC_ENABLE];
-    return (changes & enables & PCC_CHANGES) || ((changes & PCC_IREQ) && (enables & PCC_IREQ_ENABLE));
+    return (changes & enables & PCC_CHANGES) || (chip->pcc_card_irq[socket] && (enables & PCC_IREQ_ENABLE));
 }
 
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
@@ -854,7 +853,12 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     case DACR: *value = chip->dac_control; return true;
     default: break;
     }
-    if (offset >= 0x0E0 && offset < 0x100) { *value = chip->pcc[(offset - 0x0E0) / 2]; return true; }
+    if (offset >= 0x0E0 && offset < 0x100) {
+        uint32_t index = (offset - 0x0E0) / 2;
+        *value = chip->pcc[index];
+        if (index % (PCC_STRIDE / 2) == PCC_CHANGE && chip->pcc_card_irq[index / (PCC_STRIDE / 2)]) *value |= PCC_IREQ;
+        return true;
+    }
     if (offset >= 0x100 && offset < 0x140) {
         *value = port_value(chip, (offset - 0x100) / 2);
         return true;

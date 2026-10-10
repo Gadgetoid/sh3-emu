@@ -21,11 +21,18 @@ bool pccard_decode(uint32_t pa, pccard_address_t *address) {
     return true;
 }
 
-void pccard_access(cfcard_slot_t *slot, const pccard_address_t *address, int size, bool write, uint32_t *value) {
-    if (!slot || !slot->state->inserted || address->space == PCCARD_UNUSED) {
-        if (!write) *value = size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu;
-        return;
-    }
+bool pccard_present(const pccard_slot_t *slot) {
+    if (!slot) return false;
+    return (slot->storage && slot->storage->state->inserted) || (slot->ethernet && slot->ethernet->inserted);
+}
+
+bool pccard_interrupt(const pccard_slot_t *slot) {
+    if (!pccard_present(slot)) return false;
+    if (slot->storage && slot->storage->state->inserted) return cfcard_io_mode(slot->storage->state) && cfcard_interrupt(slot->storage->state);
+    return ne2000_interrupt(slot->ethernet);
+}
+
+static void storage_access(cfcard_slot_t *slot, const pccard_address_t *address, int size, bool write, uint32_t *value) {
     switch (address->space) {
     case PCCARD_ATTRIBUTE:
         if (write) cfcard_attribute_write(slot, address->offset, size, *value);
@@ -40,4 +47,29 @@ void pccard_access(cfcard_slot_t *slot, const pccard_address_t *address, int siz
         else *value = cfcard_io_read(slot, address->offset, size);
         break;
     }
+}
+
+static void ethernet_access(ne2000_t *card, const pccard_address_t *address, int size, bool write, uint32_t *value) {
+    switch (address->space) {
+    case PCCARD_ATTRIBUTE:
+        if (write) ne2000_attribute_write(card, address->offset, size, *value);
+        else *value = ne2000_attribute_read(card, address->offset, size);
+        break;
+    case PCCARD_IO:
+        if (write) ne2000_io_write(card, address->offset, size, *value);
+        else *value = ne2000_io_read(card, address->offset, size);
+        break;
+    default:
+        if (!write) *value = size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu;
+        break;
+    }
+}
+
+void pccard_access(const pccard_slot_t *slot, const pccard_address_t *address, int size, bool write, uint32_t *value) {
+    if (!pccard_present(slot) || address->space == PCCARD_UNUSED) {
+        if (!write) *value = size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu;
+        return;
+    }
+    if (slot->storage && slot->storage->state->inserted) storage_access(slot->storage, address, size, write, value);
+    else ethernet_access(slot->ethernet, address, size, write, value);
 }
