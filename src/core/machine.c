@@ -255,9 +255,9 @@ static void skip_ahead(machine_t *m) {
 
 static pccard_slot_t hp_socket(machine_t *m, int socket) {
     pccard_slot_t slot = { NULL, NULL };
-    bool ethernet = m->ethernet.inserted;
+    bool ethernet = m->ethernet.inserted, cf_slot = m->hp_model != HP_MODEL_300LX;
     if (socket == HP320LX_PC_CARD_SOCKET && ethernet) slot.ethernet = &m->ethernet;
-    else if (socket == HP320LX_PC_CARD_SOCKET || (socket == HP320LX_CF_SOCKET && ethernet)) slot.storage = &m->card_slot;
+    else if (socket == HP320LX_PC_CARD_SOCKET || (socket == HP320LX_CF_SOCKET && ethernet && cf_slot)) slot.storage = &m->card_slot;
     return slot;
 }
 

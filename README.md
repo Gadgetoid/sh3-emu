@@ -37,7 +37,7 @@ Each option is its own argument: in zsh, `KEYS="--key=... --type=..."; ./headles
 
 ## Storage card
 
-The Casio A-51's PC Card slot takes a CompactFlash card in ATA mode, backed by a raw disk image, which CE mounts as `\Storage Card`. Make one, optionally copying folders onto it, and insert it with `--card` (after `--load`, if both are given; a state keeps its card, and a different image is swapped in a second later so CE sees the removal):
+The PC Card slot takes a CompactFlash card in ATA mode, backed by a raw disk image, which CE mounts as `\Storage Card` (`\PC Card` on the HP 300LX). Make one, optionally copying folders onto it, and insert it with `--card` (after `--load`, if both are given; a state keeps its card, and a different image is swapped in a second later so CE sees the removal):
 
 ```
 tools/mkcard.sh card.img 16 ~/some/folder
@@ -47,6 +47,16 @@ tools/mkcard.sh card.img 16 ~/some/folder
 `mkcard.sh` uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. To read the image on the host, `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` on macOS or `mcopy -i card.img@@512` on Linux.
 
 The card has a CompactFlash CIS, a configuration option register, and ATA IDENTIFY, READ and WRITE SECTORS (LBA and CHS) through memory, contiguous I/O or primary/secondary I/O decoding.
+
+## Ethernet card
+
+On the HPs, `--ethernet` puts an NE2000-compatible card in the PC Card slot, with a `--card` image moving to the 320LX's CompactFlash slot. It's on its own libslirp network, as with `--net`, with DHCP giving CE 10.0.2.15. The card's CIS identifies it as a Socket Communications Low Power Ethernet CF, so Socket's LP-E driver for CE 2.0 SH3 (`SocketLpe.dll` with `ndis.dll`, `arp.dll` and `dhcp.dll`) claims it. CE binds TCP/IP to a network card only when it starts, so install the driver, add `SOCKETLPE1` to `HKLM\Comm\Tcpip\Linkage\Bind`, and soft reset with the card in:
+
+```
+./headless rom/nk-hp320lx.bin --load=driver.state --ethernet --soft-reset=3 --seconds=60
+```
+
+`make test` installs the driver over RAPI and checks a TCP connection from CE to the host, if the driver files and `tcpprobe.exe` (from `../c1-ata/probe`) are in `rom/socket-lpe` (or `ETHERNET_FILES=PATH`).
 
 ## Network
 
@@ -138,7 +148,7 @@ The A-51's dictionary app (`dic.exe`, G-天王星) reads its English-Japanese di
 
 ## HP 320LX
 
-A ROM image containing `hplib.dll` runs on the HP 320LX: the Windows CE 2.0 H/PC with an SH7709. The one tested is `nk-hp320lx.bin` (sha256 `d675014fcd73bd8a3842e97142b153a27b2eb71cce436d77ddb3b04c50f50016`), the first `physlast` bytes of a full 32 MB dump, which also runs as it is; `make test` uses it from `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard, with the keyboard and the touch panel working. There's no PC Card yet.
+A ROM image containing `hplib.dll` runs on the HP 320LX: the Windows CE 2.0 H/PC with an SH7709. The one tested is `nk-hp320lx.bin` (sha256 `d675014fcd73bd8a3842e97142b153a27b2eb71cce436d77ddb3b04c50f50016`), the first `physlast` bytes of a full 32 MB dump, which also runs as it is; `make test` uses it from `rom/nk-hp320lx.bin` (or `HP_ROM=PATH`) if it's there. It boots to the H/PC Setup Wizard, with the keyboard and the touch panel working. `--card` and `--ethernet` put cards in the PC Card slot.
 
 ```
 ./headless rom/nk-hp320lx.bin --seconds=45 --key=20.5:5A --key=22:5A --tap=24:320:120:1.5 --tap=27:128:48:1.5 --tap=30:128:192:1.5 \
@@ -178,7 +188,7 @@ A ROM image without `hplib.dll` but with `hpst.exe` runs as the HP 300LX: HP's W
 
 Guest time is the instruction count at 58.98 MHz. The peripheral clock is 10 MHz on the Casio A-51 and 11.0592 MHz on the HP 320LX, which give both kernels their 25 ms tick and the HP's serial driver its exact baud rates.
 
-Not yet: the IR port, the HP 320LX's PC Card slot, and cards other than CompactFlash.
+Not yet: the IR port, an I/O card in the 320LX's CompactFlash slot (Card Services won't map windows for one there), and cards other than CompactFlash storage and the NE2000.
 
 ## GUI
 
