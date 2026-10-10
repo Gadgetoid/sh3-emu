@@ -12,6 +12,23 @@
 #define ICR1_RISING  1u
 #define ICR1_LEVEL   2u
 #define PCC_NO_CARD 0x0Cu
+#define WTCSR_IOVF  0x08u
+#define WDT_INTERVAL_CODE 0x560u
+#define PCC0_STATUS 0x0E0u
+#define PCC1_STATUS 0x0F0u
+#define PCC_STRIDE  0x10u
+#define PCC_CHANGE  2
+#define PCC_CONTROL 1
+#define PCC_DRIVE   0x80u
+#define PCC_UNPOWERED 0x40u
+#define PCC_DETECT  0x0Cu
+#define PCC_DETECT_CHANGED 0x08u
+#define PCC_ENABLE  3
+#define PCC_CHANGES 0x0Fu
+#define PCC_IREQ    0x20u
+#define PCC_IREQ_ENABLE 0x60u
+#define PCC_PRIORITY 0x01Cu
+#define PCC_CODE    0xA00u
 #define DMA_BASE    0x020u
 #define DMA_STRIDE  0x010u
 #define DMA_END     0x060u
@@ -319,6 +336,27 @@ void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t 
     sh7709_update_interrupts(chip);
 }
 
+void sh7709_set_pcc_status(sh7709_t *chip, int socket, uint8_t status) {
+    if (socket < 0 || socket >= SH7709_PCC_SOCKETS) return;
+    uint8_t previous = chip->pcc_status[socket] ? chip->pcc_status[socket] : PCC_NO_CARD;
+    if ((previous ^ status) & PCC_DETECT) chip->pcc[socket * PCC_STRIDE / 2 + PCC_CHANGE] |= PCC_DETECT_CHANGED;
+    chip->pcc_status[socket] = status;
+    sh7709_update_interrupts(chip);
+}
+
+void sh7709_set_pcc_irq(sh7709_t *chip, int socket, bool asserted) {
+    if (socket < 0 || socket >= SH7709_PCC_SOCKETS || chip->pcc_card_irq[socket] == asserted) return;
+    chip->pcc_card_irq[socket] = asserted;
+    if (asserted) chip->pcc[socket * PCC_STRIDE / 2 + PCC_CHANGE] |= PCC_IREQ;
+    sh7709_update_interrupts(chip);
+}
+
+static bool pcc_pending(const sh7709_t *chip, int socket) {
+    const uint8_t *registers = &chip->pcc[socket * PCC_STRIDE / 2];
+    uint8_t changes = registers[PCC_CHANGE], enables = registers[PCC_ENABLE];
+    return (changes & enables & PCC_CHANGES) || ((changes & PCC_IREQ) && (enables & PCC_IREQ_ENABLE));
+}
+
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
     if (channel < 0 || channel > 3) return;
     chip->adc_input[channel] = value & 0x3FFu;
@@ -485,6 +523,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     consider(&best, rtc_level, 0x4C0, (chip->rtc_control1 & RCR1_CF) && (chip->rtc_control1 & RCR1_CIE));
     uint32_t offset;
     if (sci_pending(&chip->sci, &offset)) consider(&best, (iprb >> 4) & 15, 0x4E0 + offset, true);
+    consider(&best, (iprb >> 12) & 15, WDT_INTERVAL_CODE, (chip->watchdog_control & WTCSR_IOVF) != 0);
     if (chip->scif_alias && scif_pending(&chip->scif[1], &offset)) consider(&best, chip->scif_alias_priority, SCIF_ALIAS_CODE + offset, true);
     if (chip->variant == SH7709) {
         uint16_t iprc = chip->priority[2], iprd = chip->priority[3], ipre = chip->priority[4];
@@ -502,6 +541,10 @@ void sh7709_update_interrupts(sh7709_t *chip) {
             consider_leveled(&best, (ipre >> 12) & 15, DEI_CODE + (uint32_t)channel * 0x20, (control & (CHCR_TE | CHCR_IE)) == (CHCR_TE | CHCR_IE));
         }
         consider_leveled(&best, ipre & 15, 0x980, (chip->adc_control & ADCSR_ADF) && (chip->adc_control & ADCSR_ADIE));
+        for (int socket = 0; socket < SH7709_PCC_SOCKETS; socket++) {
+            uint32_t level = (chip->pcc_priority >> ((SH7709_PCC_SOCKETS - 1 - socket) * 4)) & 15;
+            consider_leveled(&best, level, PCC_CODE + (uint32_t)socket * 0x20, pcc_pending(chip, socket));
+        }
     }
     sh3_set_interrupt(chip->cpu, best.level, best.code);
     chip->cpu->interrupt_source = best.source;
@@ -767,11 +810,19 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     case 0x018: *value = chip->priority[3]; return true;
     case 0x01A: *value = chip->priority[4]; return true;
     case 0x0B0: *value = chip->ccr2; return true;
+    case PCC_PRIORITY: *value = chip->pcc_priority; return true;
     case LCD_INDEX: *value = chip->lcd_index; return true;
     case LCD_CONTROL: *value = chip->lcd_control[chip->lcd_index % SH7709_LCD_CONTROLS]; return true;
     case LCD_PALETTE: *value = chip->lcd_index < SH7709_LCD_PALETTE ? chip->lcd_palette[chip->lcd_index] : 0; return true;
     case LCD_FRAME: *value = chip->lcd_frame[chip->lcd_index % SH7709_LCD_FRAMES]; return true;
-    case 0x0E0: case 0x0F0: *value = PCC_NO_CARD; return true;
+    case PCC0_STATUS: case PCC1_STATUS: {
+        int socket = (int)((offset - PCC0_STATUS) / PCC_STRIDE);
+        uint8_t status = chip->pcc_status[socket];
+        bool unpowered = !(chip->pcc[socket * PCC_STRIDE / 2 + PCC_CONTROL] & PCC_DRIVE);
+        if (status && !(status & PCC_DETECT) && unpowered) status |= PCC_UNPOWERED;
+        *value = status ? status : PCC_NO_CARD;
+        return true;
+    }
     default: break;
     }
     if (offset >= 0x080 && offset < 0x090) {
@@ -834,6 +885,10 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     case 0x018: chip->priority[3] = (uint16_t)value; return true;
     case 0x01A: chip->priority[4] = (uint16_t)value; return true;
     case 0x0B0: chip->ccr2 = value; return true;
+    case PCC_PRIORITY:
+        chip->pcc_priority = (uint16_t)value;
+        sh7709_update_interrupts(chip);
+        return true;
     case LCD_INDEX: chip->lcd_index = (uint16_t)value; return true;
     case LCD_CONTROL: chip->lcd_control[chip->lcd_index % SH7709_LCD_CONTROLS] = (uint16_t)value; return true;
     case LCD_PALETTE:
@@ -895,7 +950,11 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     case DACR: chip->dac_control = (uint8_t)value; return true;
     default: break;
     }
-    if (offset >= 0x0E0 && offset < 0x100) { chip->pcc[(offset - 0x0E0) / 2] = (uint8_t)value; return true; }
+    if (offset >= 0x0E0 && offset < 0x100) {
+        chip->pcc[(offset - 0x0E0) / 2] = (uint8_t)value;
+        sh7709_update_interrupts(chip);
+        return true;
+    }
     if (offset >= 0x100 && offset < 0x140) {
         chip->ports[(offset - 0x100) / 2] = (uint16_t)value;
         if (chip->ports_written) chip->ports_written(chip->transmit_context);
@@ -965,8 +1024,11 @@ bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
         switch (pa) {
         case CPG_BASE + 0x0: chip->frqcr = (uint16_t)value; break;
         case CPG_BASE + 0x2: chip->stbcr = (uint8_t)value; break;
-        case CPG_BASE + 0x4: if ((value >> 8) == 0x5A) chip->watchdog_count = value & 0xFF; break;
-        case CPG_BASE + 0x6: if ((value >> 8) == 0xA5) chip->watchdog_control = value & 0xFF; break;
+        case CPG_BASE + 0x4: if (((value >> 8) & 0xFF) == 0x5A) chip->watchdog_count = value & 0xFF; break;
+        case CPG_BASE + 0x6:
+            if (((value >> 8) & 0xFF) == 0xA5) chip->watchdog_control = value & 0xFF;
+            sh7709_update_interrupts(chip);
+            break;
         case CPG_BASE + 0x8: chip->stbcr2 = (uint8_t)value; break;
         case CCR_ADDRESS: chip->ccr = value & 0x2F; break;
         default: if (pa < 0xFFFFFF00u) return false; break;

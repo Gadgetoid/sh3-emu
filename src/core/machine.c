@@ -11,6 +11,7 @@
 #include "core/casio.h"
 #include "core/ce.h"
 #include "core/hp320lx.h"
+#include "core/pccard.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/optimiser.h"
@@ -251,6 +252,22 @@ static void skip_ahead(machine_t *m) {
     if (when > m->cpu.cycles) m->cpu.cycles = when;
 }
 
+static bool hp_card_access(machine_t *m, uint32_t pa, int size, bool write, uint32_t *value) {
+    pccard_address_t address;
+    if (!pccard_decode(pa, &address)) return false;
+    bool ours = address.socket == HP320LX_CARD_SOCKET;
+    pccard_access(ours ? &m->card_slot : NULL, &address, size, write, value);
+    if (ours) sh7709_set_pcc_irq(&m->chip, address.socket, m->card.inserted && cfcard_io_mode(&m->card) && cfcard_interrupt(&m->card));
+    return true;
+}
+
+static void hp_card_changed(machine_t *m) {
+    for (int socket = 0; socket < PCCARD_SOCKETS; socket++) {
+        bool present = socket == HP320LX_CARD_SOCKET && m->card.inserted;
+        sh7709_set_pcc_status(&m->chip, socket, present ? HP320LX_CARD_READY : HP320LX_CARD_EMPTY);
+    }
+}
+
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (m->optimisations && optimiser_polled(&m->optimiser, pa, m->cpu.cycles)) skip_ahead(m);
@@ -267,6 +284,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     }
     pa &= AREA_MASK;
     if (sh7709_read(&m->chip, pa, size, value)) return true;
+    if (m->hp && hp_card_access(m, pa, size, false, value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_read(&m->hp_board, &m->hp_host, pa, size, value);
     }
@@ -309,6 +327,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     }
     pa &= AREA_MASK;
     if (sh7709_write(&m->chip, pa, size, value)) return true;
+    if (m->hp && hp_card_access(m, pa, size, true, &value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_write(&m->hp_board, &m->hp_host, pa, size, value);
     }
@@ -644,6 +663,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
         hp_ports_written(m);
     }
     cfcard_reset(&m->card_slot);
+    if (m->hp) hp_card_changed(m);
     set_serial_lines(m);
     m->serial_rx_count = m->serial_tx_count = 0;
 }
@@ -848,6 +868,7 @@ static bool insert_card_now(machine_t *m, const char *path) {
     cfcard_insert(&m->card_slot, image);
     snprintf(m->card_path, sizeof m->card_path, "%s", path);
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
+    if (m->hp) hp_card_changed(m);
     return true;
 }
 
@@ -875,6 +896,7 @@ void machine_eject_card(machine_t *m) {
     cfcard_eject(&m->card_slot);
     m->card_path[0] = 0;
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
+    if (m->hp) hp_card_changed(m);
 }
 
 bool machine_card_inserted(machine_t *m) {
@@ -1128,7 +1150,7 @@ static bool state_header_matches(const machine_t *m, const uint8_t *data, size_t
 }
 
 static bool grown_record(const char *name, uint32_t size) {
-    return !strcmp(name, "chip") && size == offsetof(sh7709_t, lcd_index);
+    return !strcmp(name, "chip") && (size == offsetof(sh7709_t, lcd_index) || size == offsetof(sh7709_t, pcc_status));
 }
 
 static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length) {

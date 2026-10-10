@@ -30,6 +30,22 @@ rapi_check() {
     rm -f "$socket"
     if cmp -s "$OUT/$name.txt" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
 }
+card_check() {
+    name=$1; rom=$2; net_at=$3; folder=$4
+    socket=/tmp/sh3emu-card-$$.sock
+    rm -rf "$socket" "$OUT/$name" "$OUT/$name.back" && mkdir -p "$OUT/$name/files"
+    echo "hello from the host" > "$OUT/$name/files/HELLO.TXT"
+    sh tools/mkcard.sh "$OUT/$name.img" 16 "$OUT/$name/files" > /dev/null
+    ./headless "$rom" --card="$OUT/$name.img" --seconds=300 --net="$net_at" --rapi="$socket" --realtime=4 > "$OUT/$name.log" 2>&1 &
+    EMULATOR=$!
+    for attempt in $(seq 1 200); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
+    sleep 2
+    rapi_tool --socket="$socket" get "\\$folder\\FILES\\HELLO.TXT" "$OUT/$name.back" > /dev/null 2>&1 || true
+    kill $EMULATOR 2>/dev/null || true
+    wait $EMULATOR 2>/dev/null || true
+    rm -f "$socket"
+    if cmp -s "$OUT/$name/files/HELLO.TXT" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
+}
 debugmgr_check() {
     name=$1; rom=$2; net_at=$3
     socket=/tmp/sh3emu-rapi-$$.sock
@@ -225,6 +241,7 @@ if [ -f "$HP_ROM" ]; then
         rapi_check hp_rapi "$HP_ROM" 20
         debugmgr_check hp_debugmgr "$HP_ROM" 20
         tcp_check hp_tcp "$HP_ROM" 8
+        card_check hp_card "$HP_ROM" 22 "Storage Card"
     fi
 else
     echo "skip hp: no $HP_ROM (HP 320LX ROM image)"
@@ -236,6 +253,11 @@ if [ -f "$HP300_ROM" ]; then
         --tap=58:128:192:0.8 --tap=60:512:192:0.8 --tap=62:512:48:0.8 --pgm="$OUT/hp300.pgm" > "$OUT/hp300.log" 2>&1
     actual=$(shasum -a 256 "$OUT/hp300.pgm" | cut -d' ' -f1)
     if grep -q "^debug: Pegasus Luke OEMInit() completed" "$OUT/hp300.log" && [ "$actual" = "$HP300_HASH" ]; then echo "ok   hp300"; else echo "FAIL hp300 $actual"; exit 1; fi
+    if ./headless "$HP300_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
+        echo "skip hp300_card: headless built without libslirp"
+    else
+        card_check hp300_card "$HP300_ROM" 50 "PC Card"
+    fi
 else
     echo "skip hp300: no $HP300_ROM (HP 300LX ROM image)"
 fi

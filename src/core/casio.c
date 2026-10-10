@@ -3,6 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/pccard.h"
+
 #define ASIC_PA         0x10000000u
 #define ASIC_SIZE       (CASIO_ASIC_WORDS * 2u)
 
@@ -44,13 +46,6 @@
 #define CARD_VECTOR     3u
 #define CARD_CHANGE_INTERRUPT 0x0100u
 #define CARD_CHANGE_VECTOR 14u
-#define CARD_AREA5_PA   0x14000000u
-#define CARD_AREA6_PA   0x18000000u
-#define CARD_AREA_SIZE  0x04000000u
-#define CARD_WINDOW_SIZE 0x01000000u
-#define CARD_ATTRIBUTE  0
-#define CARD_COMMON     1
-#define CARD_IO         2
 #define SLOT0_STATUS    0x326u
 #define SLOT0_EMPTY     0x0006u
 #define SLOT1_STATUS    0x282u
@@ -406,39 +401,12 @@ static bool vram_access(casio_t *board, const casio_host_t *host, uint32_t pa, i
 }
 
 static bool card_access(casio_t *board, const casio_host_t *host, uint32_t pa, int size, bool write, uint32_t *value) {
-    int socket;
-    uint32_t offset;
-    if (pa - CARD_AREA5_PA < CARD_AREA_SIZE) {
-        socket = 1;
-        offset = pa - CARD_AREA5_PA;
-    } else if (pa - CARD_AREA6_PA < CARD_AREA_SIZE) {
-        socket = 0;
-        offset = pa - CARD_AREA6_PA;
-    } else {
-        return false;
-    }
-    uint32_t window = offset / CARD_WINDOW_SIZE, within = offset % CARD_WINDOW_SIZE;
-    if (!card_present(host, socket) || window > CARD_IO) {
-        if (!write) *value = size == 1 ? 0xFFu : size == 2 ? 0xFFFFu : 0xFFFFFFFFu;
-        if (host->trace) host->trace(host->context, write, pa, size, *value);
-        return true;
-    }
-    cfcard_slot_t *slot = host->card;
-    switch (window) {
-    case CARD_ATTRIBUTE:
-        if (write) cfcard_attribute_write(slot, within, size, *value);
-        else *value = cfcard_attribute_read(slot, within, size);
-        break;
-    case CARD_COMMON:
-        if (write) cfcard_common_write(slot, within, size, *value);
-        else *value = cfcard_common_read(slot, within, size);
-        break;
-    default:
-        if (write) cfcard_io_write(slot, within, size, *value);
-        else *value = cfcard_io_read(slot, within, size);
-        break;
-    }
-    casio_update(board, host);
+    pccard_address_t address;
+    if (!pccard_decode(pa, &address)) return false;
+    bool present = card_present(host, address.socket) && address.space != PCCARD_UNUSED;
+    pccard_access(present ? host->card : NULL, &address, size, write, value);
+    if (present) casio_update(board, host);
+    else if (host->trace) host->trace(host->context, write, pa, size, *value);
     return true;
 }
 
