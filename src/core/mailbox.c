@@ -1,3 +1,4 @@
+/* Buffer and exchange framed messages between the emulator and its agent. */
 #include "core/mailbox.h"
 
 #include <stdlib.h>

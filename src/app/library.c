@@ -1,3 +1,4 @@
+/* Discover, import, and report available ROM images. */
 #include "app/library.h"
 
 #include <SDL3/SDL.h>

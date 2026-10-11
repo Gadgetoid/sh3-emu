@@ -1,3 +1,4 @@
+/* Detect ROM screen layouts and plan reversible display-size patches. */
 #include "core/screen.h"
 
 #include <stdio.h>

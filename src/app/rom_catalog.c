@@ -1,3 +1,4 @@
+/* Inspect ROM images and cache their machine and display metadata. */
 #include "app/rom_catalog.h"
 
 #include <dirent.h>

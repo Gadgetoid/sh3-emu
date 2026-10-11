@@ -1,3 +1,4 @@
+/* Compile the stb_image decoder for PNG, JPEG, GIF, and BMP inputs. */
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
 #define STBI_ONLY_JPEG

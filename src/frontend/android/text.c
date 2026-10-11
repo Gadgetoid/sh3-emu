@@ -1,3 +1,4 @@
+/* Render and measure text in the Android frontend. */
 #include "frontend/android/text.h"
 
 #include <math.h>

@@ -1,3 +1,4 @@
+/* Parse command-line options and report invalid argument values. */
 #include "util/options.h"
 
 #include <errno.h>

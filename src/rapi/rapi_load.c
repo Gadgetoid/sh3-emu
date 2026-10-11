@@ -1,3 +1,4 @@
+/* Parse installation manifests and deploy their files through RAPI. */
 #include "rapi/rapi_load.h"
 #include "rapi/rapi_project.h"
 

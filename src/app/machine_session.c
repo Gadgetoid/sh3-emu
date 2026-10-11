@@ -1,3 +1,4 @@
+/* Resolve machine-state paths and migrate profiles between session formats. */
 #include "app/machine_session.h"
 
 #include <stdio.h>

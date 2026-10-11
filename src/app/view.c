@@ -1,3 +1,4 @@
+/* Present the emulated display through the SDL window and renderer. */
 #include "app/view.h"
 #include "core/lcd.h"
 

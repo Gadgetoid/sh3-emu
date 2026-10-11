@@ -1,3 +1,4 @@
+/* Render and handle Android dialogs for machine configuration and file selection. */
 #include "frontend/common/dialog.h"
 
 #include <dirent.h>

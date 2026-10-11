@@ -1,3 +1,4 @@
+/* Queue host input and translate events for the emulated machine. */
 #include "app/input.h"
 
 #include <math.h>

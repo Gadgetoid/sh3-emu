@@ -1,3 +1,4 @@
+/* Provide operating-system dialogs, path actions, and host information. */
 #include "app/host.h"
 
 #include <arpa/inet.h>

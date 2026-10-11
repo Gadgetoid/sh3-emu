@@ -1,3 +1,4 @@
+/* Read, write, and inspect filesystem paths used by the emulator. */
 #include "util/file.h"
 
 #include <stdio.h>

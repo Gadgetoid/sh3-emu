@@ -1,3 +1,4 @@
+/* Load, store, and select per-ROM machine profiles. */
 #include "app/profiles.h"
 
 #include <ctype.h>

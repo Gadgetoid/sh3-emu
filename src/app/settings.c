@@ -1,3 +1,4 @@
+/* Load and save persistent application settings. */
 #include "app/settings.h"
 
 #include <stdio.h>

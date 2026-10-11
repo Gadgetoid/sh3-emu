@@ -1,3 +1,4 @@
+/* Fetch guest web requests and serve responses over a local proxy socket. */
 #include "net/web_proxy.h"
 #include "net/web_image.h"
 

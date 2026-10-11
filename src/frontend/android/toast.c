@@ -1,3 +1,4 @@
+/* Display transient status messages in the Android frontend. */
 #include "frontend/android/toast.h"
 
 #include <math.h>

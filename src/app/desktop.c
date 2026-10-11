@@ -1,3 +1,4 @@
+/* Coordinate desktop file transfer and device synchronization over RAPI. */
 #include "app/desktop.h"
 #include "rapi/debugmgr_images.h"
 #include "rapi/rapi.h"

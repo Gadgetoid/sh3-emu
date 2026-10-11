@@ -1,3 +1,4 @@
+/* Decode web images and convert them to guest-display-compatible data. */
 #include "net/web_image.h"
 
 #include <ctype.h>

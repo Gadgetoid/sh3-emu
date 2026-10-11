@@ -1,3 +1,4 @@
+/* Build and render interactive Android menus from shared menu state. */
 #include "frontend/common/menu.h"
 
 #include "frontend/android/keystrip.h"

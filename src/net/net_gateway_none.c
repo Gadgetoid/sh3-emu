@@ -1,3 +1,4 @@
+/* Provide unavailable-operation stubs when network gateway support is disabled. */
 #include "net/net_gateway.h"
 
 #include <stddef.h>

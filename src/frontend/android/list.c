@@ -1,3 +1,4 @@
+/* Render and handle selectable lists in Android dialogs. */
 #include "frontend/android/list.h"
 
 #include <math.h>

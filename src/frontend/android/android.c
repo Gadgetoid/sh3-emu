@@ -1,3 +1,4 @@
+/* Integrate Android platform events and native services with SDL. */
 #include <SDL3/SDL.h>
 #include <jni.h>
 #include <stdio.h>

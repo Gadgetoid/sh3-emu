@@ -1,3 +1,4 @@
+/* Apply and verify ROM-specific execution hooks and polling optimizations. */
 #include "core/optimiser.h"
 
 #include <stdarg.h>

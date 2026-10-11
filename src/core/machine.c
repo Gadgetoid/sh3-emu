@@ -1,3 +1,4 @@
+/* Integrate the SH-3 CPU, board hardware, memory map, and machine lifecycle. */
 #include "core/machine.h"
 
 #include <stdarg.h>

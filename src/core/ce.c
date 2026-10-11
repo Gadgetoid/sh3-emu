@@ -1,3 +1,4 @@
+/* Inspect Windows CE process and module data, and translate guest addresses. */
 #include "core/ce.h"
 
 #include <string.h>

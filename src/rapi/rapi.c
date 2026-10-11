@@ -1,3 +1,4 @@
+/* Implement RAPI transport, message encoding, and remote operation helpers. */
 #include "rapi/rapi.h"
 #include "rapi/rapi_project.h"
 

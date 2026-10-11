@@ -1,3 +1,4 @@
+/* Configure the connection speed and web proxy, and install debugmgr, through RAPI. */
 #include "rapi/rapi_setup.h"
 
 #include <stdio.h>

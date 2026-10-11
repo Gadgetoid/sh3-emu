@@ -1,3 +1,4 @@
+/* Model HP 300LX and 320LX board hardware, input, and display behavior. */
 #include "core/hp320lx.h"
 
 #include <string.h>

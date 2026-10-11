@@ -1,3 +1,4 @@
+/* Bridge guest serial traffic to host serial devices and network sockets. */
 #include "net/serial_link.h"
 
 #include <dirent.h>

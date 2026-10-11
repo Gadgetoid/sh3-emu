@@ -1,3 +1,4 @@
+/* Resolve application data, settings, and local socket paths. */
 #include "app/paths.h"
 
 #include <SDL3/SDL.h>

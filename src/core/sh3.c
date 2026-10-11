@@ -1,3 +1,4 @@
+/* Execute SH-3 instructions and manage translation, exceptions, and interrupts. */
 #include "core/sh3.h"
 
 #include <string.h>

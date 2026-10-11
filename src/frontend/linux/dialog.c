@@ -1,3 +1,4 @@
+/* Render and handle Linux dialogs for machine configuration and file selection. */
 #include "frontend/common/dialog.h"
 
 #include <math.h>

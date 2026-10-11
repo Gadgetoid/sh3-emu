@@ -1,3 +1,4 @@
+/* Format and route application log messages. */
 #include "app/log.h"
 
 #include <SDL3/SDL.h>

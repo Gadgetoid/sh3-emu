@@ -1,3 +1,4 @@
+/* Run host versions of CE routines, such as CE 1.0's compression, on guest memory. */
 #include "native/native.h"
 
 #include <string.h>

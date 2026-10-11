@@ -1,3 +1,4 @@
+/* Decompress LZW-encoded data used by machine software. */
 #include "native/lzw.h"
 
 #include <string.h>

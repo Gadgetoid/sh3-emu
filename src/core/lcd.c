@@ -1,3 +1,4 @@
+/* Compose LCD pixels with display response, backlight, and palette effects. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>

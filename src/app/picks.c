@@ -1,3 +1,4 @@
+/* Handle file-picker selections and dropped files. */
 #include "app/picks.h"
 
 #include <stdio.h>

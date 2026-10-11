@@ -1,3 +1,4 @@
+/* Emulate NE2000 registers, packet memory, and Ethernet frame transfer. */
 #include "core/ne2000.h"
 
 #include <string.h>

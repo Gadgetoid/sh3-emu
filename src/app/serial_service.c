@@ -1,3 +1,4 @@
+/* Configure and manage host serial connections for the emulated machine. */
 #include "app/serial_service.h"
 
 #include <SDL3/SDL.h>

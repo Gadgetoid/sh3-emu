@@ -1,3 +1,4 @@
+/* Copy emulated screens to the clipboard and save screenshot files. */
 #include "app/capture.h"
 
 #include <SDL3/SDL.h>

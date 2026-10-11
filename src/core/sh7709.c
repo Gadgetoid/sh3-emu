@@ -1,3 +1,4 @@
+/* Emulate SH7709 peripheral registers, timers, and clocked hardware. */
 #include "core/sh7709.h"
 
 #include <string.h>

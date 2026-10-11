@@ -1,3 +1,4 @@
+/* Model Casio board registers, keyboard scanning, and peripheral signals. */
 #include "core/casio.h"
 
 #include <stdlib.h>

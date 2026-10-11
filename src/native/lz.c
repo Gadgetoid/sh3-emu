@@ -1,3 +1,4 @@
+/* Decompress LZ-encoded data used by machine software. */
 #include "native/lz.h"
 
 #include <string.h>

@@ -1,3 +1,4 @@
+/* Parse launch options and resolve startup machine configuration. */
 #include "app/launch.h"
 
 #include <stdio.h>

@@ -1,3 +1,4 @@
+/* Build and render interactive Linux menus from shared menu state. */
 #include "frontend/common/menu_layout.h"
 #include "frontend/common/menu_queue.h"
 #include "frontend/common/menu_state.h"

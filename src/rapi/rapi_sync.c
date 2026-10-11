@@ -1,3 +1,4 @@
+/* Compare local and remote trees and synchronize files through RAPI. */
 #include "rapi/rapi_sync.h"
 #include "rapi/rapi_project.h"
 

@@ -1,3 +1,4 @@
+/* Map Unicode text to machine-specific keyboard events. */
 #include "core/key_text.h"
 
 #include <stddef.h>

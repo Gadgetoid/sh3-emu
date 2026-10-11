@@ -1,3 +1,4 @@
+/* Draw Linux frontend controls, text, and themed UI primitives. */
 #include "frontend/linux/ui.h"
 
 #include <math.h>

@@ -1,3 +1,4 @@
+/* Serve the GDB remote protocol for machine debugging and process control. */
 #include "core/gdb.h"
 
 #include <arpa/inet.h>

@@ -1,3 +1,4 @@
+/* Bridge guest PPP traffic and Ethernet frames to the host network through libslirp. */
 #include "net/net_gateway.h"
 #include "net/web_proxy.h"
 

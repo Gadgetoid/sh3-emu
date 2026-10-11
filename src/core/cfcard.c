@@ -1,3 +1,4 @@
+/* Emulate CompactFlash attribute, common, and I/O space accesses. */
 #include "core/cfcard.h"
 
 #include <string.h>

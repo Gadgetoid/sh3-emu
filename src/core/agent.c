@@ -1,3 +1,4 @@
+/* Exchange debugger-agent messages with a host process over a Unix socket. */
 #include "core/agent.h"
 
 #include <errno.h>

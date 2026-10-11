@@ -1,3 +1,4 @@
+/* Queue menu selections for polling by the application. */
 #include "frontend/common/menu_queue.h"
 
 #include <string.h>

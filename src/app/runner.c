@@ -1,3 +1,4 @@
+/* Run the machine thread and synchronize access to its execution state. */
 #include "app/runner.h"
 
 #include <SDL3/SDL.h>

@@ -1,3 +1,4 @@
+/* Encode image pixels as PNG data and write PNG files. */
 #include "util/png.h"
 
 #include <stdlib.h>

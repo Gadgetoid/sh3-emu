@@ -1,3 +1,4 @@
+/* Hold the status message shown over the screen until it expires. */
 #include "app/notices.h"
 
 #include <SDL3/SDL.h>

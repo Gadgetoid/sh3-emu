@@ -1,3 +1,4 @@
+/* Store shared menu titles, visibility, enabled state, and selections. */
 #include "frontend/common/menu_state.h"
 
 #include <SDL3/SDL.h>

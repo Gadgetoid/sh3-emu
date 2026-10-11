@@ -1,3 +1,4 @@
+/* Store machine-state snapshots and manage their backup rotation. */
 #include "app/snapshot_store.h"
 
 #include <SDL3/SDL.h>

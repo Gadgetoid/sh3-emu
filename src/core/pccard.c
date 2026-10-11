@@ -1,3 +1,4 @@
+/* Decode PC Card bus addresses and dispatch accesses to inserted devices. */
 #include "core/pccard.h"
 
 #define AREA5_PA    0x14000000u

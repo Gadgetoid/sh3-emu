@@ -1,3 +1,4 @@
+/* Define shared dialog labels, options, and machine configuration data. */
 #include "frontend/common/dialog.h"
 
 #ifdef __APPLE__

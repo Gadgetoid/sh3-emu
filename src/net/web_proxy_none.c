@@ -1,3 +1,4 @@
+/* Provide unavailable-operation stubs when web proxy support is disabled. */
 #include "net/web_proxy.h"
 
 #include <stddef.h>

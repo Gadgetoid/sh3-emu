@@ -1,3 +1,4 @@
+/* Render and handle the Android on-screen keyboard strip. */
 #include "frontend/android/keystrip.h"
 
 #include <math.h>

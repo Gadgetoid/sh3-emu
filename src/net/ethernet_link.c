@@ -1,3 +1,4 @@
+/* Connect the emulated Ethernet adapter to the host network gateway. */
 #include "net/ethernet_link.h"
 
 #include <string.h>

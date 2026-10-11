@@ -1,3 +1,4 @@
+/* Convert host text into key events accepted by the emulated machine. */
 #include "app/typer.h"
 #include "core/key_text.h"
 

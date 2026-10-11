@@ -1,3 +1,4 @@
+/* Embed debugmgr.exe for CE 1.0 and CE 2.0, for installing over RAPI. */
 #include "rapi/debugmgr_images.h"
 
 const uint8_t DEBUGMGR_CE1[] = {
