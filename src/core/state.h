@@ -3,12 +3,15 @@
 #include <stddef.h>
 #include <stdint.h>
 
+typedef bool (*state_migrate_fn)(void *data, const uint8_t *old, uint32_t size);
+
 typedef struct {
     const char *name;
     void *data;
     uint32_t size;
     const uint32_t *older_sizes;
     size_t older_count;
+    state_migrate_fn migrate;
 } state_field_t;
 
 typedef struct {

@@ -132,6 +132,10 @@ void state_apply(const state_file_t *file, const state_field_t *fields, size_t c
     while (next_entry(&reader, &entry) > 0) {
         for (size_t i = 0; i < count; i++) {
             if (strcmp(entry.name, fields[i].name) || !size_accepted(&fields[i], entry.size)) continue;
+            if (entry.size != fields[i].size && fields[i].migrate) {
+                fields[i].migrate(fields[i].data, entry.data, entry.size);
+                continue;
+            }
             memset(fields[i].data, 0, fields[i].size);
             memcpy(fields[i].data, entry.data, entry.size);
         }

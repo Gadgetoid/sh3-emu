@@ -18,18 +18,18 @@
 #define PCC0_STATUS 0x0E0u
 #define PCC1_STATUS 0x0F0u
 #define PCC_STRIDE  0x10u
-#define PCC_CHANGE  2
-#define PCC_CONTROL 1
-#define PCC_DRIVE   0x80u
-#define PCC_UNPOWERED 0x40u
-#define PCC_DETECT  0x0Cu
-#define PCC_DETECT_CHANGED 0x08u
-#define PCC_ENABLE  3
-#define PCC_CHANGES 0x0Fu
-#define PCC_IREQ    0x20u
-#define PCC_IREQ_ENABLE 0x60u
-#define PCC_PRIORITY 0x01Cu
-#define PCC_CODE    0xA00u
+#define PCC_GCR     1
+#define PCC_CSCR    2
+#define PCC_CSCIER  3
+#define PCC_GCR_DRVE 0x80u
+#define PCC_ISR_MWP 0x40u
+#define PCC_ISR_CD  0x0Cu
+#define PCC_CSCR_CDC 0x08u
+#define PCC_CSCR_CHANGES 0x1Fu
+#define PCC_CSCR_IREQ 0x20u
+#define PCC_CSCIER_IREQE 0x60u
+#define IPRF        0x01Cu
+#define PCC_CODE    0x9C0u
 #define DMA_BASE    0x020u
 #define DMA_STRIDE  0x010u
 #define DMA_END     0x060u
@@ -109,6 +109,8 @@
 #define ADCSR_CH    0x07u
 #define ADCR_SCAN   0x20u
 #define LCD_INDEX   0x0C0u
+#define LCD_INDEX_MASK 0x0Fu
+#define LCD_PALETTE_MASK 0x0FFFu
 #define LCD_CONTROL 0x0C2u
 #define LCD_PALETTE 0x0C6u
 #define LCD_FRAME   0x0CEu
@@ -340,7 +342,7 @@ void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t 
 void sh7709_set_pcc_status(sh7709_t *chip, int socket, uint8_t status) {
     if (socket < 0 || socket >= SH7709_PCC_SOCKETS) return;
     uint8_t previous = chip->pcc_status[socket] ? chip->pcc_status[socket] : PCC_NO_CARD;
-    if ((previous ^ status) & PCC_DETECT) chip->pcc[socket * PCC_STRIDE / 2 + PCC_CHANGE] |= PCC_DETECT_CHANGED;
+    if ((previous ^ status) & PCC_ISR_CD) chip->pcc[socket * PCC_STRIDE / 2 + PCC_CSCR] |= PCC_CSCR_CDC;
     chip->pcc_status[socket] = status;
     sh7709_update_interrupts(chip);
 }
@@ -353,8 +355,8 @@ void sh7709_set_pcc_irq(sh7709_t *chip, int socket, bool asserted) {
 
 static bool pcc_pending(const sh7709_t *chip, int socket) {
     const uint8_t *registers = &chip->pcc[socket * PCC_STRIDE / 2];
-    uint8_t changes = registers[PCC_CHANGE], enables = registers[PCC_ENABLE];
-    return (changes & enables & PCC_CHANGES) || (chip->pcc_card_irq[socket] && (enables & PCC_IREQ_ENABLE));
+    uint8_t changes = registers[PCC_CSCR], enables = registers[PCC_CSCIER];
+    return (changes & enables & PCC_CSCR_CHANGES) || (chip->pcc_card_irq[socket] && (enables & PCC_CSCIER_IREQE));
 }
 
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
@@ -542,7 +544,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
         }
         consider_leveled(&best, ipre & 15, 0x980, (chip->adc_control & ADCSR_ADF) && (chip->adc_control & ADCSR_ADIE));
         for (int socket = 0; socket < SH7709_PCC_SOCKETS; socket++) {
-            uint32_t level = (chip->pcc_priority >> ((SH7709_PCC_SOCKETS - 1 - socket) * 4)) & 15;
+            uint32_t level = (chip->iprf >> ((SH7709_PCC_SOCKETS - 1 - socket) * 4)) & 15;
             consider_leveled(&best, level, PCC_CODE + (uint32_t)socket * 0x20, pcc_pending(chip, socket));
         }
     }
@@ -810,16 +812,16 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     case 0x018: *value = chip->priority[3]; return true;
     case 0x01A: *value = chip->priority[4]; return true;
     case 0x0B0: *value = chip->ccr2; return true;
-    case PCC_PRIORITY: *value = chip->pcc_priority; return true;
+    case IPRF: *value = chip->iprf; return true;
     case LCD_INDEX: *value = chip->lcd_index; return true;
-    case LCD_CONTROL: *value = chip->lcd_control[chip->lcd_index % SH7709_LCD_CONTROLS]; return true;
-    case LCD_PALETTE: *value = chip->lcd_index < SH7709_LCD_PALETTE ? chip->lcd_palette[chip->lcd_index] : 0; return true;
-    case LCD_FRAME: *value = chip->lcd_frame[chip->lcd_index % SH7709_LCD_FRAMES]; return true;
+    case LCD_CONTROL: *value = chip->lcd_index < SH7709_LCD_CONTROLS ? chip->lcd_control[chip->lcd_index] : 0; return true;
+    case LCD_PALETTE: *value = chip->lcd_palette[chip->lcd_index]; return true;
+    case LCD_FRAME: *value = chip->lcd_index < SH7709_LCD_FRAMES ? chip->lcd_frame[chip->lcd_index] : 0; return true;
     case PCC0_STATUS: case PCC1_STATUS: {
         int socket = (int)((offset - PCC0_STATUS) / PCC_STRIDE);
         uint8_t status = chip->pcc_status[socket];
-        bool unpowered = !(chip->pcc[socket * PCC_STRIDE / 2 + PCC_CONTROL] & PCC_DRIVE);
-        if (status && !(status & PCC_DETECT) && unpowered) status |= PCC_UNPOWERED;
+        bool undriven = !(chip->pcc[socket * PCC_STRIDE / 2 + PCC_GCR] & PCC_GCR_DRVE);
+        if (status && !(status & PCC_ISR_CD) && undriven) status |= PCC_ISR_MWP;
         *value = status ? status : PCC_NO_CARD;
         return true;
     }
@@ -857,7 +859,7 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     if (offset >= 0x0E0 && offset < 0x100) {
         uint32_t index = (offset - 0x0E0) / 2;
         *value = chip->pcc[index];
-        if (index % (PCC_STRIDE / 2) == PCC_CHANGE && chip->pcc_card_irq[index / (PCC_STRIDE / 2)]) *value |= PCC_IREQ;
+        if (index % (PCC_STRIDE / 2) == PCC_CSCR && chip->pcc_card_irq[index / (PCC_STRIDE / 2)]) *value |= PCC_CSCR_IREQ;
         return true;
     }
     if (offset >= 0x100 && offset < 0x140) {
@@ -890,16 +892,20 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     case 0x018: chip->priority[3] = (uint16_t)value; return true;
     case 0x01A: chip->priority[4] = (uint16_t)value; return true;
     case 0x0B0: chip->ccr2 = value; return true;
-    case PCC_PRIORITY:
-        chip->pcc_priority = (uint16_t)value;
+    case IPRF:
+        chip->iprf = (uint16_t)value;
         sh7709_update_interrupts(chip);
         return true;
-    case LCD_INDEX: chip->lcd_index = (uint16_t)value; return true;
-    case LCD_CONTROL: chip->lcd_control[chip->lcd_index % SH7709_LCD_CONTROLS] = (uint16_t)value; return true;
-    case LCD_PALETTE:
-        if (chip->lcd_index < SH7709_LCD_PALETTE) chip->lcd_palette[chip->lcd_index] = (uint16_t)value;
+    case LCD_INDEX: chip->lcd_index = (uint16_t)(value & LCD_INDEX_MASK); return true;
+    case LCD_CONTROL:
+        if (chip->lcd_index < SH7709_LCD_CONTROLS) chip->lcd_control[chip->lcd_index] = (uint16_t)value;
         return true;
-    case LCD_FRAME: chip->lcd_frame[chip->lcd_index % SH7709_LCD_FRAMES] = (uint16_t)value; return true;
+    case LCD_PALETTE:
+        chip->lcd_palette[chip->lcd_index] = (uint16_t)(value & LCD_PALETTE_MASK);
+        return true;
+    case LCD_FRAME:
+        if (chip->lcd_index < SH7709_LCD_FRAMES) chip->lcd_frame[chip->lcd_index] = (uint16_t)value;
+        return true;
     default: break;
     }
     if (offset == 0x090) {
@@ -1041,4 +1047,37 @@ bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
     }
     sh7709_update_interrupts(chip);
     return handled;
+}
+
+#define OLD_LCD_CONTROLS 16
+#define OLD_LCD_PALETTE  4
+#define OLD_LCD_FRAMES   8
+#define OLD_LCD_BYTES    (2 + 2 * (OLD_LCD_CONTROLS + OLD_LCD_PALETTE + OLD_LCD_FRAMES))
+#define OLD_PCC_BYTES    (2 * SH7709_PCC_SOCKETS + 2)
+#define OLD_FULL_BYTES   ((offsetof(sh7709_t, lcd_index) + OLD_LCD_BYTES + OLD_PCC_BYTES + 7) & ~(size_t)7)
+
+const uint32_t SH7709_OLDER_STATE_SIZES[3] = { offsetof(sh7709_t, lcd_index), offsetof(sh7709_t, lcd_index) + OLD_LCD_BYTES, OLD_FULL_BYTES };
+
+static void copy_words(uint16_t *to, size_t to_count, const uint8_t *from, size_t from_count) {
+    for (size_t i = 0; i < to_count && i < from_count; i++) memcpy(&to[i], from + i * 2, 2);
+}
+
+bool sh7709_load_older_state(void *data, const uint8_t *old, uint32_t size) {
+    sh7709_t *chip = data;
+    size_t prefix = offsetof(sh7709_t, lcd_index);
+    if (size != SH7709_OLDER_STATE_SIZES[0] && size != SH7709_OLDER_STATE_SIZES[1] && size != SH7709_OLDER_STATE_SIZES[2]) return false;
+    memset(chip, 0, sizeof *chip);
+    memcpy(chip, old, prefix);
+    if (size == prefix) return true;
+    const uint8_t *lcd = old + prefix;
+    memcpy(&chip->lcd_index, lcd, 2);
+    copy_words(chip->lcd_control, SH7709_LCD_CONTROLS, lcd + 2, OLD_LCD_CONTROLS);
+    copy_words(chip->lcd_palette, SH7709_LCD_PALETTE, lcd + 2 + 2 * OLD_LCD_CONTROLS, OLD_LCD_PALETTE);
+    copy_words(chip->lcd_frame, SH7709_LCD_FRAMES, lcd + 2 + 2 * (OLD_LCD_CONTROLS + OLD_LCD_PALETTE), OLD_LCD_FRAMES);
+    if (size == SH7709_OLDER_STATE_SIZES[1]) return true;
+    const uint8_t *pcc = lcd + OLD_LCD_BYTES;
+    memcpy(chip->pcc_status, pcc, SH7709_PCC_SOCKETS);
+    memcpy(chip->pcc_card_irq, pcc + SH7709_PCC_SOCKETS, SH7709_PCC_SOCKETS);
+    memcpy(&chip->iprf, pcc + 2 * SH7709_PCC_SOCKETS, 2);
+    return true;
 }

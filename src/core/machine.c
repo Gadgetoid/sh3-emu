@@ -1102,20 +1102,18 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-static const uint32_t CHIP_OLDER_SIZES[] = { offsetof(sh7709_t, lcd_index), offsetof(sh7709_t, pcc_status) };
-
 #define STATE_FIELD_COUNT 8
 
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
-        { "cpu", &m->cpu, sizeof m->cpu, NULL, 0 },
-        { "chip", &m->chip, sizeof m->chip, CHIP_OLDER_SIZES, sizeof CHIP_OLDER_SIZES / sizeof CHIP_OLDER_SIZES[0] },
-        { "card", &m->card, sizeof m->card, NULL, 0 },
-        { "card_path", m->card_path, sizeof m->card_path, NULL, 0 },
-        { "casio_board", &m->casio_board, sizeof m->casio_board, NULL, 0 },
-        { "casio_audio", &m->casio_audio, sizeof m->casio_audio, NULL, 0 },
-        { "hp_board", &m->hp_board, sizeof m->hp_board, NULL, 0 },
-        { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0 },
+        { "cpu", &m->cpu, sizeof m->cpu, NULL, 0, NULL },
+        { "chip", &m->chip, sizeof m->chip, SH7709_OLDER_STATE_SIZES, 3, sh7709_load_older_state },
+        { "card", &m->card, sizeof m->card, NULL, 0, NULL },
+        { "card_path", m->card_path, sizeof m->card_path, NULL, 0, NULL },
+        { "casio_board", &m->casio_board, sizeof m->casio_board, NULL, 0, NULL },
+        { "casio_audio", &m->casio_audio, sizeof m->casio_audio, NULL, 0, NULL },
+        { "hp_board", &m->hp_board, sizeof m->hp_board, NULL, 0, NULL },
+        { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
 }
@@ -1123,7 +1121,7 @@ static void state_fields(machine_t *m, state_field_t *fields) {
 bool machine_save(machine_t *m, const char *path, int64_t host_time) {
     state_field_t fields[STATE_FIELD_COUNT + 1];
     state_fields(m, fields);
-    fields[STATE_FIELD_COUNT] = (state_field_t){ "dram", m->dram, m->dram_size, NULL, 0 };
+    fields[STATE_FIELD_COUNT] = (state_field_t){ "dram", m->dram, m->dram_size, NULL, 0, NULL };
     return state_save(path, m->rom_hash, host_time, fields, STATE_FIELD_COUNT + 1);
 }
 

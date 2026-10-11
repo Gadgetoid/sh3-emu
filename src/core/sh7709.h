@@ -10,9 +10,9 @@ typedef enum {
     SH7709,
 } sh7709_variant_t;
 
-#define SH7709_LCD_CONTROLS 16
-#define SH7709_LCD_PALETTE  4
-#define SH7709_LCD_FRAMES   8
+#define SH7709_LCD_CONTROLS 14
+#define SH7709_LCD_PALETTE  16
+#define SH7709_LCD_FRAMES   5
 #define SH7709_PCC_SOCKETS  2
 
 typedef struct {
@@ -107,7 +107,7 @@ typedef struct {
 
     uint8_t pcc_status[SH7709_PCC_SOCKETS];
     bool pcc_card_irq[SH7709_PCC_SOCKETS];
-    uint16_t pcc_priority;
+    uint16_t iprf;
 } sh7709_t;
 
 void sh7709_init(sh7709_t *chip, sh3_cpu_t *cpu, sh7709_variant_t variant, uint32_t cpu_hz, uint32_t peripheral_hz);
@@ -132,3 +132,6 @@ void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t 
 void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value);
 void sh7709_set_pcc_status(sh7709_t *chip, int socket, uint8_t status);
 void sh7709_set_pcc_irq(sh7709_t *chip, int socket, bool asserted);
+
+extern const uint32_t SH7709_OLDER_STATE_SIZES[3];
+bool sh7709_load_older_state(void *chip, const uint8_t *old, uint32_t size);
