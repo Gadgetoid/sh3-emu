@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <zlib.h>
 
 #include "core/casio.h"
 #include "core/ce.h"
@@ -17,6 +16,7 @@
 #include "core/mailbox.h"
 #include "core/optimiser.h"
 #include "core/sh7709.h"
+#include "core/state.h"
 #include "util/file.h"
 
 #define DRAM_PA            0x0C000000u
@@ -53,7 +53,6 @@
 
 #define UNKNOWN_SEEN       4096
 
-#define STATE_MAGIC        "SH3ODO01"
 
 #define MAILBOX_FAULT_TRIES 4
 #define MAILBOX_PAGES      ((MAILBOX_MESSAGE_MAX >> 10) + 2)
@@ -1175,144 +1174,65 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-#define STATE_FIELDS(X) \
-    X(cpu, m->cpu) X(chip, m->chip) X(card, m->card) X(card_path, m->card_path) X(casio_board, m->casio_board) X(casio_audio, m->casio_audio) X(hp_board, m->hp_board) X(ethernet, m->ethernet)
+static const uint32_t CHIP_OLDER_SIZES[] = { offsetof(sh7709_t, lcd_index), offsetof(sh7709_t, pcc_status) };
 
-static bool write_bytes(gzFile file, const void *data, uint32_t size) {
-    return size == 0 || gzwrite(file, data, size) == (int)size;
-}
+#define STATE_FIELD_COUNT 8
 
-static bool write_record(gzFile file, const char *name, const void *data, uint32_t size) {
-    uint8_t length = (uint8_t)strlen(name);
-    return write_bytes(file, &length, 1) && write_bytes(file, name, length) && write_bytes(file, &size, sizeof size) && write_bytes(file, data, size);
+static void state_fields(machine_t *m, state_field_t *fields) {
+    state_field_t list[STATE_FIELD_COUNT] = {
+        { "cpu", &m->cpu, sizeof m->cpu, NULL, 0 },
+        { "chip", &m->chip, sizeof m->chip, CHIP_OLDER_SIZES, sizeof CHIP_OLDER_SIZES / sizeof CHIP_OLDER_SIZES[0] },
+        { "card", &m->card, sizeof m->card, NULL, 0 },
+        { "card_path", m->card_path, sizeof m->card_path, NULL, 0 },
+        { "casio_board", &m->casio_board, sizeof m->casio_board, NULL, 0 },
+        { "casio_audio", &m->casio_audio, sizeof m->casio_audio, NULL, 0 },
+        { "hp_board", &m->hp_board, sizeof m->hp_board, NULL, 0 },
+        { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0 },
+    };
+    memcpy(fields, list, sizeof list);
 }
 
 bool machine_save(machine_t *m, const char *path, int64_t host_time) {
-    char temporary[1100];
-    int written = snprintf(temporary, sizeof temporary, "%s.tmp", path);
-    if (written < 0 || (size_t)written >= sizeof temporary) return false;
-    gzFile file = gzopen(temporary, "wb1");
-    if (!file) return false;
-    bool ok = write_bytes(file, STATE_MAGIC, sizeof STATE_MAGIC) && write_bytes(file, &m->rom_hash, sizeof m->rom_hash) &&
-              write_bytes(file, &host_time, sizeof host_time);
-#define SAVE_FIELD(key, field) ok = ok && write_record(file, #key, &(field), (uint32_t)sizeof(field));
-    STATE_FIELDS(SAVE_FIELD)
-#undef SAVE_FIELD
-    ok = ok && write_record(file, "dram", m->dram, m->dram_size);
-    uint8_t end = 0;
-    ok = ok && write_bytes(file, &end, 1);
-    ok = gzclose(file) == Z_OK && ok;
-    if (ok) ok = rename(temporary, path) == 0;
-    else remove(temporary);
-    return ok;
-}
-
-static uint8_t *read_state(const char *path, size_t *length) {
-    gzFile file = gzopen(path, "rb");
-    if (!file) return NULL;
-    size_t capacity = 1 << 20, used = 0;
-    uint8_t *data = malloc(capacity);
-    while (data) {
-        if (used == capacity) {
-            uint8_t *grown = realloc(data, capacity * 2);
-            if (!grown) { free(data); data = NULL; break; }
-            data = grown;
-            capacity *= 2;
-        }
-        int got = gzread(file, data + used, (unsigned)(capacity - used));
-        if (got <= 0) break;
-        used += (size_t)got;
-    }
-    gzclose(file);
-    *length = used;
-    return data;
-}
-
-static bool state_header_matches(const machine_t *m, const uint8_t *data, size_t length) {
-    return length >= sizeof STATE_MAGIC + 16 && !memcmp(data, STATE_MAGIC, sizeof STATE_MAGIC) &&
-           !memcmp(data + sizeof STATE_MAGIC, &m->rom_hash, 8);
-}
-
-static bool grown_record(const char *name, uint32_t size) {
-    return !strcmp(name, "chip") && (size == offsetof(sh7709_t, lcd_index) || size == offsetof(sh7709_t, pcc_status));
-}
-
-static bool state_fields_match(machine_t *m, const uint8_t *data, size_t length) {
-    memset(&m->ethernet, 0, sizeof m->ethernet);
-    m->pending_ethernet = false;
-    const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
-    while (cursor < end) {
-        uint8_t name_length = *cursor++;
-        if (!name_length || end - cursor < name_length + 4) break;
-        char name[256];
-        memcpy(name, cursor, name_length);
-        name[name_length] = 0;
-        cursor += name_length;
-        uint32_t size;
-        memcpy(&size, cursor, 4);
-        cursor += 4;
-        if ((size_t)(end - cursor) < size) return false;
-#define CHECK_FIELD(key, field) if (!strcmp(name, #key) && size != sizeof(field) && !grown_record(name, size)) return false;
-        STATE_FIELDS(CHECK_FIELD)
-#undef CHECK_FIELD
-        cursor += size;
-    }
-    return true;
-}
-
-static bool state_usable(machine_t *m, const uint8_t *data, size_t length) {
-    return state_header_matches(m, data, length) && state_fields_match(m, data, length);
+    state_field_t fields[STATE_FIELD_COUNT + 1];
+    state_fields(m, fields);
+    fields[STATE_FIELD_COUNT] = (state_field_t){ "dram", m->dram, m->dram_size, NULL, 0 };
+    return state_save(path, m->rom_hash, host_time, fields, STATE_FIELD_COUNT + 1);
 }
 
 bool machine_state_matches(machine_t *m, const char *path) {
-    size_t length;
-    uint8_t *data = read_state(path, &length);
-    bool matches = data && state_usable(m, data, length);
-    free(data);
+    state_file_t file;
+    state_field_t fields[STATE_FIELD_COUNT];
+    state_fields(m, fields);
+    bool matches = state_read(path, &file) && state_usable(&file, m->rom_hash, fields, STATE_FIELD_COUNT);
+    state_free(&file);
     return matches;
 }
 
 bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
-    size_t length;
-    uint8_t *data = read_state(path, &length);
-    if (!data) return false;
-    if (!state_usable(m, data, length)) {
-        free(data);
+    state_file_t file;
+    state_field_t fields[STATE_FIELD_COUNT];
+    state_fields(m, fields);
+    if (!state_read(path, &file) || !state_usable(&file, m->rom_hash, fields, STATE_FIELD_COUNT)) {
+        state_free(&file);
         return false;
     }
-    if (host_time) memcpy(host_time, data + sizeof STATE_MAGIC + 8, 8);
+    if (host_time) *host_time = state_host_time(&file);
     m->agent_poll_at = 0;
     sh3_debug_t *debug = m->cpu.debug;
-    const uint8_t *cursor = data + sizeof STATE_MAGIC + 16, *end = data + length;
-    while (cursor < end) {
-        uint8_t name_length = *cursor++;
-        if (!name_length || end - cursor < name_length + 4) break;
-        char name[256];
-        memcpy(name, cursor, name_length);
-        name[name_length] = 0;
-        cursor += name_length;
-        uint32_t size;
-        memcpy(&size, cursor, 4);
-        cursor += 4;
-        if ((size_t)(end - cursor) < size) break;
-#define LOAD_FIELD(key, field) \
-    if (!strcmp(name, #key) && (size == sizeof(field) || grown_record(name, size))) { \
-        memset(&(field), 0, sizeof(field)); \
-        memcpy(&(field), cursor, size); \
-    }
-        STATE_FIELDS(LOAD_FIELD)
-#undef LOAD_FIELD
-        if (!strcmp(name, "dram")) {
-            if (size != m->dram_size) {
-                free(m->dram);
-                m->dram = calloc(1, size);
-                m->dram_size = m->dram_size_next = size;
-            }
-            memcpy(m->dram, cursor, size);
+    memset(&m->ethernet, 0, sizeof m->ethernet);
+    m->pending_ethernet = false;
+    state_apply(&file, fields, STATE_FIELD_COUNT);
+    uint32_t dram_size = 0;
+    const uint8_t *dram = state_record(&file, "dram", &dram_size);
+    if (dram) {
+        if (dram_size != m->dram_size) {
+            free(m->dram);
+            m->dram = calloc(1, dram_size);
+            m->dram_size = m->dram_size_next = dram_size;
         }
-        cursor += size;
+        memcpy(m->dram, dram, dram_size);
     }
-    free(data);
+    state_free(&file);
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.debug = debug;
     m->cpu.on_watch = on_watch;
