@@ -7,9 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "net/net_gateway.h"
 #include "rapi/rapi.h"
 #include "rapi/rapi_project.h"
+#include "util/socket_path.h"
 
 #define SETTINGS_FILE "sh3emu.ini"
 
@@ -35,7 +35,7 @@ void app_settings_path(char *path, size_t size) {
 
 bool app_rapi_socket_path(char *path, size_t size) {
 #ifdef __ANDROID__
-    return net_gateway_socket_path(path, size, RAPI_TOOL);
+    return socket_path(path, size, RAPI_TOOL);
 #else
     return rapi_data_path("rapi.sock", path, size);
 #endif

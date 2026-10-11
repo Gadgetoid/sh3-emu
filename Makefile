@@ -44,7 +44,7 @@ SRC_MENU  = src/frontend/linux/menu.c src/frontend/linux/dialog.c src/frontend/l
 endif
 
 ifeq ($(shell $(PKG_CONFIG) --exists slirp && echo yes),yes)
-SRC_NET   = src/net/net_gateway.c src/net/ppp_gateway.c src/net/ethernet_gateway.c src/net/serial_link.c src/net/ethernet_link.c
+SRC_NET   = src/util/socket_path.c src/net/net_gateway.c src/net/ppp_gateway.c src/net/ethernet_gateway.c src/net/serial_link.c src/net/ethernet_link.c
 CFLAGS   += $(shell $(PKG_CONFIG) --cflags slirp)
 NET_LIBS  = $(shell $(PKG_CONFIG) --libs slirp)
 ifeq ($(shell $(PKG_CONFIG) --exists libcurl && echo yes),yes)
@@ -55,7 +55,7 @@ else
 SRC_NET  += src/net/web_proxy_none.c
 endif
 else
-SRC_NET   = src/net/net_gateway_none.c src/net/ppp_gateway.c src/net/ethernet_gateway.c src/net/web_proxy_none.c src/net/serial_link.c src/net/ethernet_link.c
+SRC_NET   = src/util/socket_path.c src/net/net_gateway_none.c src/net/ppp_gateway.c src/net/ethernet_gateway.c src/net/web_proxy_none.c src/net/serial_link.c src/net/ethernet_link.c
 endif
 
 SRC_MACHINE = src/core/sh3.c src/core/optimiser.c src/native/native.c src/native/lz.c src/native/lzw.c src/core/sh7709.c src/core/machine.c src/core/casio.c src/core/hp320lx.c src/core/cfcard.c src/core/pccard.c src/core/ne2000.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
