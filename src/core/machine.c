@@ -43,8 +43,6 @@
 #define DICTIONARY_PA      0x04000000u
 #define AUDIO_RATE         22050u
 #define AUDIO_RING         65536u
-#define AUDIO_GAP_CYCLES   (MACHINE_CLOCK_HZ / 20)
-#define AUDIO_CHANNEL      1
 #define POLL_WINDOW        (MACHINE_CLOCK_HZ / 1000)
 #define DICTIONARY_MAX     (8u << 20)
 #define SERIAL_TICKS_PER_SECOND 1000u
@@ -81,7 +79,7 @@ struct machine {
     bool hp;
     hp_model_t hp_model;
     hp320lx_t hp_board;
-    bool hp_on_key;
+    hp320lx_runtime_t hp_runtime;
     hp320lx_host_t hp_host;
     uint8_t  *flash;
     casio_t casio_board;
@@ -96,8 +94,6 @@ struct machine {
     uint8_t  *dictionary;
     int16_t audio[AUDIO_RING];
     uint32_t audio_head, audio_count;
-    uint64_t audio_clock, audio_last;
-    int16_t audio_level;
     uint32_t audio_phase;
     size_t dictionary_size;
     char pending_card[CARD_PATH_MAX];
@@ -255,42 +251,6 @@ static void skip_ahead(machine_t *m) {
     if (when > m->cpu.cycles) m->cpu.cycles = when;
 }
 
-static pccard_slot_t hp_socket(machine_t *m, int socket) {
-    pccard_slot_t slot = { NULL, NULL };
-    bool ethernet = m->ethernet.inserted, cf_slot = m->hp_model != HP_MODEL_300LX;
-    if (socket == HP320LX_PC_CARD_SOCKET && ethernet) slot.ethernet = &m->ethernet;
-    else if (socket == HP320LX_PC_CARD_SOCKET || (socket == HP320LX_CF_SOCKET && ethernet && cf_slot)) slot.storage = &m->card_slot;
-    return slot;
-}
-
-static void hp_card_lines(machine_t *m, int socket) {
-    pccard_slot_t slot = hp_socket(m, socket);
-    bool interrupt = pccard_interrupt(&slot);
-    uint8_t status = HP320LX_CARD_EMPTY;
-    if (pccard_present(&slot)) {
-        bool rdy_high = !interrupt;
-        if (socket == HP320LX_CF_SOCKET) rdy_high = !rdy_high;
-        status = HP320LX_CARD_PRESENT | (rdy_high ? HP320LX_CARD_RDY_PIN : 0);
-    }
-    sh7709_set_pcc_status(&m->chip, socket, status);
-    sh7709_set_pcc_irq(&m->chip, socket, interrupt);
-}
-
-static bool hp_card_access(machine_t *m, uint32_t pa, int size, bool write, uint32_t *value) {
-    pccard_address_t address;
-    if (!pccard_decode(pa, &address)) return false;
-    pccard_slot_t slot = hp_socket(m, address.socket);
-    pccard_access(&slot, &address, size, write, value);
-    hp_card_lines(m, address.socket);
-    return true;
-}
-
-static void hp_card_changed(machine_t *m) {
-    for (int socket = 0; socket < PCCARD_SOCKETS; socket++) {
-        hp_card_lines(m, socket);
-    }
-}
-
 static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (m->optimisations && optimiser_polled(&m->optimiser, pa, m->cpu.cycles)) skip_ahead(m);
@@ -307,7 +267,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     }
     pa &= AREA_MASK;
     if (sh7709_read(&m->chip, pa, size, value)) return true;
-    if (m->hp && hp_card_access(m, pa, size, false, value)) return true;
+    if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, false, value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_read(&m->hp_board, &m->hp_host, pa, size, value);
     }
@@ -350,7 +310,7 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     }
     pa &= AREA_MASK;
     if (sh7709_write(&m->chip, pa, size, value)) return true;
-    if (m->hp && hp_card_access(m, pa, size, true, &value)) return true;
+    if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, true, &value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_write(&m->hp_board, &m->hp_host, pa, size, value);
     }
@@ -395,13 +355,7 @@ static void onchip_transmit(void *context, int port, uint8_t byte) {
 
 static void hp_ports_written(void *context) {
     machine_t *m = context;
-    uint16_t columns = hp320lx_key_columns(&m->hp_board, m->chip.ports);
-    sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
-    sh7709_set_port_input(&m->chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
-    hp320lx_touch_t touch = hp320lx_touch_inputs(&m->hp_board, m->chip.ports);
-    sh7709_set_adc(&m->chip, 0, touch.channel_a);
-    sh7709_set_adc(&m->chip, 1, touch.channel_b);
-    if (touch.pen_interrupt != (((m->chip.irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(&m->chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
+    hp320lx_ports_written(&m->hp_board, &m->hp_host);
 }
 
 static void audio_push(machine_t *m, int16_t sample) {
@@ -415,16 +369,11 @@ static void audio_push(machine_t *m, int16_t sample) {
 
 static void hp_dac_written(void *context, int channel, uint8_t value, uint64_t cycle) {
     machine_t *m = context;
-    if (channel != AUDIO_CHANNEL) return;
-    uint64_t scaled = cycle * AUDIO_RATE;
-    bool resumed = !m->audio_last || cycle - m->audio_last > AUDIO_GAP_CYCLES || scaled < m->audio_clock;
-    if (resumed) m->audio_clock = scaled;
-    while (m->audio_clock < scaled) {
-        audio_push(m, m->audio_level);
-        m->audio_clock += MACHINE_CLOCK_HZ;
-    }
-    m->audio_level = (int16_t)(((int)value - 128) * 256);
-    m->audio_last = cycle;
+    hp320lx_dac_written(&m->hp_host, channel, value, cycle);
+}
+
+static void hp_sample(void *context, int16_t sample) {
+    audio_push(context, sample);
 }
 
 static void casio_samples(void *context, const int16_t *samples, uint32_t count, uint32_t rate) {
@@ -669,25 +618,18 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     casio_reset(&m->casio_board);
     memset(&m->casio_audio, 0, sizeof m->casio_audio);
     hp320lx_reset(&m->hp_board);
-    if (m->hp) {
-        for (int channel = 0; channel < 4; channel++) sh7709_set_adc(&m->chip, channel, HP320LX_ADC_HEALTHY);
-        sh7709_set_port_input(&m->chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, m->hp_model == HP_MODEL_300LX ? HP300LX_MODEL_PINS : HP320LX_MODEL_PINS);
-        sh7709_set_port_input(&m->chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
-        sh7709_set_irq_active_high(&m->chip, 1u << HP320LX_PEN_IRQ);
-    }
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
     m->audio_count = 0;
-    m->audio_last = 0;
     m->audio_phase = 0;
+    cfcard_reset(&m->card_slot);
+    ne2000_power_on(&m->ethernet);
     if (m->hp) {
         m->chip.dac_written = hp_dac_written;
         m->chip.ports_written = hp_ports_written;
-        hp_ports_written(m);
+        hp320lx_power_on(&m->hp_board, &m->hp_host);
+        hp320lx_cards_changed(&m->hp_host);
     }
-    cfcard_reset(&m->card_slot);
-    ne2000_power_on(&m->ethernet);
-    if (m->hp) hp_card_changed(m);
     set_serial_lines(m);
     m->serial_rx_count = m->serial_tx_count = 0;
 }
@@ -702,7 +644,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->hp_model = hp320lx_detect(rom, rom_size);
     m->hp = m->hp_model != HP_MODEL_NONE;
     m->casio = !m->hp;
-    m->hp_host = (hp320lx_host_t){ hp_trace, board_debug_line, m };
+    m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
+                                   .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
     if (!load_flash(m, error, error_size)) {
@@ -857,18 +800,7 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
         casio_key(&m->casio_board, &m->casio_host, scancode, up);
         return;
     }
-    if (m->hp) {
-        if (!up && machine_suspended(m)) {
-            m->hp_on_key = true;
-            hp320lx_woken(&m->hp_board);
-        }
-        if (m->hp_on_key) {
-            sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, !up);
-            if (up) m->hp_on_key = false;
-            return;
-        }
-        if (hp320lx_key(&m->hp_board, scancode, up)) hp_ports_written(m);
-    }
+    if (m->hp) hp320lx_key(&m->hp_board, &m->hp_host, scancode, up, machine_suspended(m));
 }
 
 void machine_touch(machine_t *m, bool down, int x, int y) {
@@ -876,10 +808,7 @@ void machine_touch(machine_t *m, bool down, int x, int y) {
         casio_touch(&m->casio_board, &m->casio_host, down, x, y);
         return;
     }
-    if (m->hp) {
-        hp320lx_touch(&m->hp_board, down, x, y);
-        hp_ports_written(m);
-    }
+    if (m->hp) hp320lx_touch(&m->hp_board, &m->hp_host, down, x, y);
 }
 bool machine_suspended(machine_t *m) {
     if (m->casio && (m->cpu.sr & SH3_SR_IMASK) != SH3_SR_IMASK) return false;
@@ -892,7 +821,7 @@ static bool insert_card_now(machine_t *m, const char *path) {
     cfcard_insert(&m->card_slot, image);
     snprintf(m->card_path, sizeof m->card_path, "%s", path);
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
-    if (m->hp) hp_card_changed(m);
+    if (m->hp) hp320lx_cards_changed(&m->hp_host);
     return true;
 }
 
@@ -914,7 +843,7 @@ static void pending_card_event(machine_t *m) {
     if (m->pending_ethernet) {
         m->pending_ethernet = false;
         ne2000_insert(&m->ethernet, m->pending_ethernet_mac);
-        hp_card_changed(m);
+        hp320lx_cards_changed(&m->hp_host);
     }
     if (m->pending_card[0] && !insert_card_now(m, m->pending_card)) machine_logf(m, "card: cannot open %s\n", m->pending_card);
     m->pending_card[0] = 0;
@@ -927,18 +856,22 @@ static void swap_cards_later(machine_t *m) {
     m->pending_card_at = m->cpu.cycles + MACHINE_CLOCK_HZ;
 }
 
+bool machine_has_ethernet_slot(machine_t *m) {
+    return m->hp;
+}
+
 bool machine_insert_ethernet(machine_t *m, const uint8_t mac[6]) {
-    if (!m->hp) return false;
+    if (!machine_has_ethernet_slot(m)) return false;
     if (m->ethernet.inserted || m->pending_ethernet) return true;
     if (m->card.inserted) {
         swap_cards_later(m);
         m->pending_ethernet = true;
         memcpy(m->pending_ethernet_mac, mac, 6);
-        hp_card_changed(m);
+        hp320lx_cards_changed(&m->hp_host);
         return true;
     }
     ne2000_insert(&m->ethernet, mac);
-    hp_card_changed(m);
+    hp320lx_cards_changed(&m->hp_host);
     return true;
 }
 
@@ -947,7 +880,7 @@ void machine_eject_ethernet(machine_t *m) {
     if (!m->ethernet.inserted) return;
     if (m->card.inserted) swap_cards_later(m);
     ne2000_eject(&m->ethernet);
-    if (m->hp) hp_card_changed(m);
+    if (m->hp) hp320lx_cards_changed(&m->hp_host);
 }
 
 bool machine_ethernet_inserted(machine_t *m) {
@@ -960,7 +893,7 @@ size_t machine_ethernet_take(machine_t *m, uint8_t *frame, size_t max) {
 
 void machine_ethernet_give(machine_t *m, const uint8_t *frame, size_t length) {
     if (!ne2000_receive(&m->ethernet, frame, length) || !m->hp) return;
-    hp_card_lines(m, HP320LX_PC_CARD_SOCKET);
+    hp320lx_cards_changed(&m->hp_host);
 }
 
 void machine_eject_card(machine_t *m) {
@@ -970,7 +903,7 @@ void machine_eject_card(machine_t *m) {
     cfcard_eject(&m->card_slot);
     m->card_path[0] = 0;
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
-    if (m->hp) hp_card_changed(m);
+    if (m->hp) hp320lx_cards_changed(&m->hp_host);
 }
 
 bool machine_card_inserted(machine_t *m) {
@@ -988,7 +921,7 @@ bool machine_serial_connected(machine_t *m) {
 }
 
 bool machine_serial_dtr(machine_t *m) {
-    if (m->hp) return !(m->chip.ports[HP320LX_SERIAL_CONTROL_PORT] & HP320LX_SERIAL_DTR);
+    if (m->hp) return hp320lx_serial_dtr(&m->hp_host);
     return m->serial_connected;
 }
 
@@ -1109,12 +1042,7 @@ uint64_t machine_rom_hash(machine_t *m) {
 }
 void machine_power_button(machine_t *m, bool down) {
     if (m->hp) {
-        bool suspended = machine_suspended(m);
-        if (down && suspended) hp320lx_woken(&m->hp_board);
-        sh7709_set_irq(&m->chip, HP320LX_ON_IRQ, down);
-        if (!down || suspended) return;
-        m->chip.nmi = true;
-        sh7709_update_interrupts(&m->chip);
+        hp320lx_power_button(&m->hp_board, &m->hp_host, down, machine_suspended(m));
         return;
     }
     if (!m->casio) return;
@@ -1252,7 +1180,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->chip.ports_written = m->hp ? hp_ports_written : NULL;
     m->chip.dac_written = m->hp ? hp_dac_written : NULL;
     m->audio_count = 0;
-    m->audio_last = 0;
+    memset(&m->hp_runtime, 0, sizeof m->hp_runtime);
     sh3_flush_translations(&m->cpu);
     return true;
 }

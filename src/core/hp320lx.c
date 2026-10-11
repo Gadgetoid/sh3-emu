@@ -3,6 +3,8 @@
 
 #include <string.h>
 
+#include "core/pccard.h"
+
 #define LINE_BYTES         (HP320LX_SCREEN_WIDTH / 4)
 #define LEVEL_STEP         5u
 #define CONTROLLER_COMMAND 0x0200000Au
@@ -28,6 +30,12 @@
 #define TOUCH_PEN_LEVEL    0x3FFu
 #define LCD_LEVEL_MASK     0xFu
 #define LCD_MODE_BYTE_ORDER 0x8000u
+#define AUDIO_GAP_DIVISOR  20u
+
+typedef struct {
+    uint16_t channel_a, channel_b;
+    bool pen_interrupt;
+} hp320lx_touch_t;
 
 typedef struct {
     uint8_t control, data, bit;
@@ -138,11 +146,11 @@ static void apply_key_events(hp320lx_t *board) {
     board->key_changed_scan = board->scans;
 }
 
-void hp320lx_woken(hp320lx_t *board) {
+static void woken(hp320lx_t *board) {
     board->key_changed_scan = UINT32_MAX;
 }
 
-bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up) {
+static bool queue_key(hp320lx_t *board, uint8_t scancode, bool up) {
     for (size_t i = 0; i < sizeof key_map / sizeof key_map[0]; i++) {
         const hp320lx_keymap_t *key = &key_map[i];
         if (key->scancode != scancode) continue;
@@ -161,7 +169,7 @@ static bool row_driven_low(const hp320lx_row_t *row, const uint16_t *ports) {
     return mode == 1 && !(ports[row->data] & (1u << row->bit));
 }
 
-uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports) {
+static uint16_t key_columns(hp320lx_t *board, const uint16_t *ports) {
     uint8_t driven = 0;
     for (uint32_t row = 0; row < HP320LX_KEY_ROWS; row++) {
         if (row_driven_low(&key_rows[row], ports)) driven |= (uint8_t)(1u << row);
@@ -185,13 +193,13 @@ static uint16_t touch_raw(int pixel, int size) {
     return (uint16_t)(TOUCH_RAW_MIN + (uint32_t)pixel * TOUCH_RAW_SPAN / (uint32_t)size);
 }
 
-void hp320lx_touch(hp320lx_t *board, bool down, int x, int y) {
+static void set_pen(hp320lx_t *board, bool down, int x, int y) {
     board->pen_down = down;
     board->pen_x = touch_raw(x, HP320LX_SCREEN_WIDTH);
     board->pen_y = touch_raw(y, HP320LX_SCREEN_HEIGHT);
 }
 
-hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *ports) {
+static hp320lx_touch_t touch_inputs(const hp320lx_t *board, const uint16_t *ports) {
     hp320lx_touch_t inputs = { 0, 0, false };
     if (!board->pen_down) return inputs;
     uint16_t drive = ports[PORT_H_DATA] & TOUCH_DRIVE, select = ports[PORT_K_DATA] & (TOUCH_X_SELECT | TOUCH_Y_SELECT);
@@ -220,4 +228,104 @@ void hp320lx_screen(const uint8_t *framebuffer, const uint16_t *palette, uint16_
             levels[y * HP320LX_SCREEN_WIDTH + x] = shades[pixel];
         }
     }
+}
+
+void hp320lx_ports_written(hp320lx_t *board, const hp320lx_host_t *host) {
+    sh7709_t *chip = host->chip;
+    uint16_t columns = key_columns(board, chip->ports);
+    sh7709_set_port_input(chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
+    sh7709_set_port_input(chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
+    hp320lx_touch_t touch = touch_inputs(board, chip->ports);
+    sh7709_set_adc(chip, 0, touch.channel_a);
+    sh7709_set_adc(chip, 1, touch.channel_b);
+    if (touch.pen_interrupt != (((chip->irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
+}
+
+void hp320lx_dac_written(const hp320lx_host_t *host, int channel, uint8_t value, uint64_t cycle) {
+    hp320lx_runtime_t *runtime = host->runtime;
+    if (channel != HP320LX_SOUND_DAC) return;
+    uint64_t scaled = cycle * host->sample_rate;
+    bool resumed = !runtime->audio_last || cycle - runtime->audio_last > host->cpu_hz / AUDIO_GAP_DIVISOR || scaled < runtime->audio_clock;
+    if (resumed) runtime->audio_clock = scaled;
+    while (runtime->audio_clock < scaled) {
+        host->sample(host->context, runtime->audio_level);
+        runtime->audio_clock += host->cpu_hz;
+    }
+    runtime->audio_level = (int16_t)(((int)value - 128) * 256);
+    runtime->audio_last = cycle;
+}
+
+static pccard_slot_t card_socket(const hp320lx_host_t *host, int socket) {
+    pccard_slot_t slot = { NULL, NULL };
+    bool ethernet = host->ethernet->inserted, cf_slot = host->model != HP_MODEL_300LX;
+    if (socket == HP320LX_PC_CARD_SOCKET && ethernet) slot.ethernet = host->ethernet;
+    else if (socket == HP320LX_PC_CARD_SOCKET || (socket == HP320LX_CF_SOCKET && ethernet && cf_slot)) slot.storage = host->card;
+    return slot;
+}
+
+static void card_lines(const hp320lx_host_t *host, int socket) {
+    pccard_slot_t slot = card_socket(host, socket);
+    bool interrupt = pccard_interrupt(&slot);
+    uint8_t status = HP320LX_CARD_EMPTY;
+    if (pccard_present(&slot)) {
+        bool rdy_high = !interrupt;
+        if (socket == HP320LX_CF_SOCKET) rdy_high = !rdy_high;
+        status = HP320LX_CARD_PRESENT | (rdy_high ? HP320LX_CARD_RDY_PIN : 0);
+    }
+    sh7709_set_pcc_status(host->chip, socket, status);
+    sh7709_set_pcc_irq(host->chip, socket, interrupt);
+}
+
+bool hp320lx_card_access(const hp320lx_host_t *host, uint32_t pa, int size, bool write, uint32_t *value) {
+    pccard_address_t address;
+    if (!pccard_decode(pa, &address)) return false;
+    pccard_slot_t slot = card_socket(host, address.socket);
+    pccard_access(&slot, &address, size, write, value);
+    card_lines(host, address.socket);
+    return true;
+}
+
+void hp320lx_cards_changed(const hp320lx_host_t *host) {
+    for (int socket = 0; socket < PCCARD_SOCKETS; socket++) card_lines(host, socket);
+}
+
+void hp320lx_power_on(hp320lx_t *board, const hp320lx_host_t *host) {
+    sh7709_t *chip = host->chip;
+    for (int channel = 0; channel < 4; channel++) sh7709_set_adc(chip, channel, HP320LX_ADC_HEALTHY);
+    sh7709_set_port_input(chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, host->model == HP_MODEL_300LX ? HP300LX_MODEL_PINS : HP320LX_MODEL_PINS);
+    sh7709_set_port_input(chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
+    sh7709_set_irq_active_high(chip, 1u << HP320LX_PEN_IRQ);
+    memset(host->runtime, 0, sizeof *host->runtime);
+    hp320lx_ports_written(board, host);
+}
+
+void hp320lx_key(hp320lx_t *board, const hp320lx_host_t *host, uint8_t scancode, bool up, bool suspended) {
+    hp320lx_runtime_t *runtime = host->runtime;
+    if (!up && suspended) {
+        runtime->on_key = true;
+        woken(board);
+    }
+    if (runtime->on_key) {
+        sh7709_set_irq(host->chip, HP320LX_ON_IRQ, !up);
+        if (up) runtime->on_key = false;
+        return;
+    }
+    if (queue_key(board, scancode, up)) hp320lx_ports_written(board, host);
+}
+
+void hp320lx_touch(hp320lx_t *board, const hp320lx_host_t *host, bool down, int x, int y) {
+    set_pen(board, down, x, y);
+    hp320lx_ports_written(board, host);
+}
+
+void hp320lx_power_button(hp320lx_t *board, const hp320lx_host_t *host, bool down, bool suspended) {
+    if (down && suspended) woken(board);
+    sh7709_set_irq(host->chip, HP320LX_ON_IRQ, down);
+    if (!down || suspended) return;
+    host->chip->nmi = true;
+    sh7709_update_interrupts(host->chip);
+}
+
+bool hp320lx_serial_dtr(const hp320lx_host_t *host) {
+    return !(host->chip->ports[HP320LX_SERIAL_CONTROL_PORT] & HP320LX_SERIAL_DTR);
 }

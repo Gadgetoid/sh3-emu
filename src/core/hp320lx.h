@@ -3,6 +3,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/cfcard.h"
+#include "core/ne2000.h"
+#include "core/sh7709.h"
+
 #define HP320LX_SCREEN_WIDTH  640
 #define HP320LX_SCREEN_HEIGHT 240
 #define HP320LX_REGISTERS     4096
@@ -39,15 +43,30 @@
 #define HP320LX_LCD_FRAME_HIGH 1
 #define HP320LX_LCD_MODE       4
 #define HP320LX_ON_IRQ        0
+#define HP320LX_SOUND_DAC     1
 
 typedef enum { HP_MODEL_NONE, HP_MODEL_320LX, HP_MODEL_300LX } hp_model_t;
 
 typedef void (*hp320lx_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*hp320lx_line_fn)(void *context, const char *line);
+typedef void (*hp320lx_sample_fn)(void *context, int16_t sample);
+
+typedef struct {
+    uint64_t audio_clock, audio_last;
+    int16_t audio_level;
+    bool on_key;
+} hp320lx_runtime_t;
 
 typedef struct {
     hp320lx_trace_fn trace;
     hp320lx_line_fn debug_line;
+    hp320lx_sample_fn sample;
+    hp_model_t model;
+    uint32_t cpu_hz, sample_rate;
+    sh7709_t *chip;
+    cfcard_slot_t *card;
+    ne2000_t *ethernet;
+    hp320lx_runtime_t *runtime;
     void            *context;
 } hp320lx_host_t;
 
@@ -71,18 +90,17 @@ typedef struct {
     uint16_t pen_x, pen_y;
 } hp320lx_t;
 
-typedef struct {
-    uint16_t channel_a, channel_b;
-    bool pen_interrupt;
-} hp320lx_touch_t;
-
 hp_model_t hp320lx_detect(const uint8_t *image, size_t size);
 void hp320lx_reset(hp320lx_t *board);
 bool hp320lx_read(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t *value);
 bool hp320lx_write(hp320lx_t *board, const hp320lx_host_t *host, uint32_t pa, int size, uint32_t value);
-void hp320lx_woken(hp320lx_t *board);
-bool hp320lx_key(hp320lx_t *board, uint8_t scancode, bool up);
-uint16_t hp320lx_key_columns(hp320lx_t *board, const uint16_t *ports);
-void hp320lx_touch(hp320lx_t *board, bool down, int x, int y);
-hp320lx_touch_t hp320lx_touch_inputs(const hp320lx_t *board, const uint16_t *ports);
+void hp320lx_power_on(hp320lx_t *board, const hp320lx_host_t *host);
+void hp320lx_ports_written(hp320lx_t *board, const hp320lx_host_t *host);
+void hp320lx_dac_written(const hp320lx_host_t *host, int channel, uint8_t value, uint64_t cycle);
+bool hp320lx_card_access(const hp320lx_host_t *host, uint32_t pa, int size, bool write, uint32_t *value);
+void hp320lx_cards_changed(const hp320lx_host_t *host);
+void hp320lx_key(hp320lx_t *board, const hp320lx_host_t *host, uint8_t scancode, bool up, bool suspended);
+void hp320lx_touch(hp320lx_t *board, const hp320lx_host_t *host, bool down, int x, int y);
+void hp320lx_power_button(hp320lx_t *board, const hp320lx_host_t *host, bool down, bool suspended);
+bool hp320lx_serial_dtr(const hp320lx_host_t *host);
 void hp320lx_screen(const uint8_t *framebuffer, const uint16_t *palette, uint16_t mode, uint8_t *levels);
