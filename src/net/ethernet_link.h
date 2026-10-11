@@ -3,12 +3,12 @@
 #include <stdint.h>
 
 #include "core/machine.h"
-#include "net/net_gateway.h"
+#include "net/ethernet_gateway.h"
 
 extern const uint8_t ETHERNET_LINK_MAC[6];
 
 typedef struct {
-    net_gateway_t *gateway;
+    ethernet_gateway_t *gateway;
     net_gateway_log_fn log;
     const char *user_agent;
 } ethernet_link_t;

@@ -15,8 +15,8 @@ void ethernet_link_init(ethernet_link_t *link, net_gateway_log_fn log, const cha
 
 static bool open_gateway(ethernet_link_t *link) {
     if (link->gateway) return true;
-    net_gateway_options_t options = { link->user_agent, NULL, 0, true };
-    link->gateway = net_gateway_create(link->log, &options);
+    net_gateway_options_t options = { link->user_agent, NULL, 0 };
+    link->gateway = ethernet_gateway_create(link->log, &options);
     return link->gateway != NULL;
 }
 
@@ -35,13 +35,13 @@ void ethernet_link_pump(ethernet_link_t *link, machine_t *machine) {
     if (!open_gateway(link)) return;
     uint8_t frame[NE2000_FRAME_MAX];
     size_t length;
-    while ((length = machine_ethernet_take(machine, frame, sizeof frame)) > 0) net_gateway_frame_from_guest(link->gateway, frame, length);
-    net_gateway_poll(link->gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
-    while ((length = net_gateway_frame_to_guest(link->gateway, frame, sizeof frame)) > 0) machine_ethernet_give(machine, frame, length);
+    while ((length = machine_ethernet_take(machine, frame, sizeof frame)) > 0) ethernet_gateway_from_guest(link->gateway, frame, length);
+    ethernet_gateway_poll(link->gateway, machine_cycles(machine) / (MACHINE_CLOCK_HZ / 1000));
+    while ((length = ethernet_gateway_to_guest(link->gateway, frame, sizeof frame)) > 0) machine_ethernet_give(machine, frame, length);
 }
 
 void ethernet_link_close(ethernet_link_t *link) {
     if (!link->gateway) return;
-    net_gateway_destroy(link->gateway);
+    ethernet_gateway_destroy(link->gateway);
     link->gateway = NULL;
 }

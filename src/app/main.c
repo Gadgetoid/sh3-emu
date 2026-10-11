@@ -34,6 +34,7 @@
 #include "frontend/common/dialog.h"
 #include "frontend/common/menu.h"
 #include "net/net_gateway.h"
+#include "net/ppp_gateway.h"
 #include "rapi/rapi.h"
 #include "util/file.h"
 #include "util/options.h"
@@ -693,7 +694,7 @@ static void handle_picked(app_t *app) {
 static void poll_desktop(app_t *app, bool device_online) {
     machine_t *machine = app->session.machine;
     serial_link_t *link = &app->serial.link;
-    if (link->gateway && net_gateway_take_desktop_connected(link->gateway)) {
+    if (link->gateway && net_gateway_take_desktop_connected(ppp_gateway_network(link->gateway))) {
         if (app->settings.shared_folder[0]) desktop_sync(app->desktop, app->settings.shared_folder);
         app->debugmgr_wanted = app->debugger != NULL;
     }

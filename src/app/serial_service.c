@@ -8,7 +8,7 @@
 
 #include "app/host.h"
 #include "app/paths.h"
-#include "net/net_gateway.h"
+#include "net/ppp_gateway.h"
 
 #define CABLE_REPLUG_SECONDS 2
 #define CABLE_BOOT_SECONDS   20
@@ -97,7 +97,7 @@ void serial_service_update_rapi(serial_service_t *service, machine_t *machine) {
 }
 
 bool serial_service_online(const serial_service_t *service) {
-    return service->link.gateway && net_gateway_online(service->link.gateway);
+    return service->link.gateway && ppp_gateway_online(service->link.gateway);
 }
 
 void serial_service_step(serial_service_t *service, machine_t *machine, notice_t *notice) {
