@@ -1,5 +1,5 @@
-/* Emulate SH7709 peripheral registers, timers, and clocked hardware. */
-#include "core/sh7709.h"
+/* Emulate the SH7707 and SH7708 on-chip peripherals: their registers, interrupts, timers and clocked hardware. */
+#include "core/sh770x.h"
 
 #include <string.h>
 
@@ -127,28 +127,28 @@ enum {
     RTC_SECOND, RTC_MINUTE, RTC_HOUR, RTC_WEEKDAY, RTC_DAY, RTC_MONTH, RTC_YEAR,
 };
 
-void sh7709_init(sh7709_t *chip, sh3_cpu_t *cpu, sh7709_variant_t variant, uint32_t cpu_hz, uint32_t peripheral_hz) {
+void sh770x_init(sh770x_t *chip, sh3_cpu_t *cpu, sh770x_variant_t variant, uint32_t cpu_hz, uint32_t peripheral_hz) {
     memset(chip, 0, sizeof *chip);
     chip->cpu = cpu;
     chip->variant = variant;
     chip->cpu_hz = cpu_hz;
     chip->peripheral_hz = peripheral_hz;
     chip->rtc_control2 = RCR2_RTCEN | RCR2_START;
-    sh7709_reset(chip);
+    sh770x_reset(chip);
 }
 
-void sh7709_reset(sh7709_t *chip) {
+void sh770x_reset(sh770x_t *chip) {
     uint8_t counter[7], alarm[6];
     memcpy(counter, chip->rtc_counter, sizeof counter);
     memcpy(alarm, chip->rtc_alarm, sizeof alarm);
     uint8_t control2 = chip->rtc_control2;
     sh3_cpu_t *cpu = chip->cpu;
-    sh7709_variant_t variant = chip->variant;
+    sh770x_variant_t variant = chip->variant;
     uint32_t cpu_hz = chip->cpu_hz, peripheral_hz = chip->peripheral_hz;
-    sh7709_transmit_fn transmit = chip->transmit;
+    sh770x_transmit_fn transmit = chip->transmit;
     void *transmit_context = chip->transmit_context;
-    sh7709_ports_fn ports_written = chip->ports_written;
-    sh7709_dac_fn dac_written = chip->dac_written;
+    sh770x_ports_fn ports_written = chip->ports_written;
+    sh770x_dac_fn dac_written = chip->dac_written;
     uint16_t adc_input[4], port_input_mask[64], port_input[64];
     uint32_t irq_active_high = chip->irq_active_high;
     memcpy(adc_input, chip->adc_input, sizeof adc_input);
@@ -184,7 +184,7 @@ void sh7709_reset(sh7709_t *chip) {
     chip->last_cycle = cpu ? cpu->cycles : 0;
 }
 
-static uint32_t timer_hz(const sh7709_t *chip, const sh7709_timer_t *timer) {
+static uint32_t timer_hz(const sh770x_t *chip, const sh770x_timer_t *timer) {
     switch (timer->control & TCR_TPSC) {
     case 0: return chip->peripheral_hz / 4;
     case 1: return chip->peripheral_hz / 16;
@@ -195,8 +195,8 @@ static uint32_t timer_hz(const sh7709_t *chip, const sh7709_timer_t *timer) {
     }
 }
 
-static void advance_timer(sh7709_t *chip, int index, uint64_t elapsed) {
-    sh7709_timer_t *timer = &chip->timer[index];
+static void advance_timer(sh770x_t *chip, int index, uint64_t elapsed) {
+    sh770x_timer_t *timer = &chip->timer[index];
     if (!(chip->timer_start & (1u << index))) return;
     uint32_t hz = timer_hz(chip, timer);
     if (!hz) return;
@@ -234,7 +234,7 @@ static int days_in_month(int month, int year) {
     return days[month - 1];
 }
 
-static void check_alarm(sh7709_t *chip) {
+static void check_alarm(sh770x_t *chip) {
     static const int fields[] = { RTC_SECOND, RTC_MINUTE, RTC_HOUR, RTC_WEEKDAY, RTC_DAY, RTC_MONTH };
     bool any = false;
     for (int i = 0; i < 6; i++) {
@@ -246,7 +246,7 @@ static void check_alarm(sh7709_t *chip) {
     if (any) chip->rtc_control1 |= RCR1_AF;
 }
 
-static void rtc_second(sh7709_t *chip) {
+static void rtc_second(sh770x_t *chip) {
     uint8_t *counter = chip->rtc_counter;
     chip->rtc_control1 |= RCR1_CF;
     counter[RTC_SECOND] = bcd_increment(counter[RTC_SECOND]);
@@ -277,7 +277,7 @@ static void rtc_second(sh7709_t *chip) {
     check_alarm(chip);
 }
 
-static uint32_t periodic_ticks(const sh7709_t *chip) {
+static uint32_t periodic_ticks(const sh770x_t *chip) {
     switch ((chip->rtc_control2 & RCR2_PES) >> 4) {
     case 1: case 2: return 1;
     case 3: return 4;
@@ -289,7 +289,7 @@ static uint32_t periodic_ticks(const sh7709_t *chip) {
     }
 }
 
-static void advance_rtc(sh7709_t *chip, uint64_t elapsed) {
+static void advance_rtc(sh770x_t *chip, uint64_t elapsed) {
     if (!(chip->rtc_control2 & RCR2_START)) return;
     chip->rtc_remainder += elapsed * RTC_TICK_HZ;
     uint64_t ticks = chip->rtc_remainder / chip->cpu_hz;
@@ -302,13 +302,13 @@ static void advance_rtc(sh7709_t *chip, uint64_t elapsed) {
     }
 }
 
-static uint64_t adc_cycle_length(const sh7709_t *chip) {
+static uint64_t adc_cycle_length(const sh770x_t *chip) {
     uint32_t last = chip->adc_control & ADCSR_CH & 3u;
     uint32_t channels = (chip->adc_control & ADCSR_MULTI) ? last + 1 : 1;
     return (uint64_t)channels * (chip->cpu_hz / ADC_CHANNEL_HZ);
 }
 
-static void advance_adc(sh7709_t *chip, uint64_t now) {
+static void advance_adc(sh770x_t *chip, uint64_t now) {
     if (!(chip->adc_control & ADCSR_ADST) || now < chip->adc_done) return;
     uint32_t last = chip->adc_control & ADCSR_CH & 3u;
     uint32_t first = (chip->adc_control & ADCSR_MULTI) ? 0 : last;
@@ -318,65 +318,65 @@ static void advance_adc(sh7709_t *chip, uint64_t now) {
     else chip->adc_control &= (uint8_t) ~ADCSR_ADST;
 }
 
-static void start_adc(sh7709_t *chip) {
+static void start_adc(sh770x_t *chip) {
     chip->adc_done = chip->cpu->cycles + adc_cycle_length(chip);
 }
 
-static uint16_t port_value(const sh7709_t *chip, uint32_t index) {
+static uint16_t port_value(const sh770x_t *chip, uint32_t index) {
     return (uint16_t)((chip->ports[index] & ~chip->port_input_mask[index]) | (chip->port_input[index] & chip->port_input_mask[index]));
 }
 
-static uint16_t pint_pending(const sh7709_t *chip) {
+static uint16_t pint_pending(const sh770x_t *chip) {
     uint16_t pins = (uint16_t)((port_value(chip, PORT_A_DATA) & 0xFFu) | (port_value(chip, PORT_B_DATA) & 0xFFu) << 8);
     return (uint16_t)(chip->pinter & ~(pins ^ chip->icr2));
 }
 
-void sh7709_set_port_input(sh7709_t *chip, uint32_t pa, uint16_t mask, uint16_t value) {
+void sh770x_set_port_input(sh770x_t *chip, uint32_t pa, uint16_t mask, uint16_t value) {
     uint32_t offset = (pa & 0x1FFFFFFFu) - AREA1_BASE;
     if (offset < 0x100 || offset >= 0x140) return;
     chip->port_input_mask[(offset - 0x100) / 2] = mask;
     chip->port_input[(offset - 0x100) / 2] = value;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-void sh7709_set_pcc_status(sh7709_t *chip, int socket, uint8_t status) {
-    if (socket < 0 || socket >= SH7709_PCC_SOCKETS) return;
+void sh770x_set_pcc_status(sh770x_t *chip, int socket, uint8_t status) {
+    if (socket < 0 || socket >= SH770X_PCC_SOCKETS) return;
     uint8_t previous = chip->pcc_status[socket] ? chip->pcc_status[socket] : PCC_NO_CARD;
     if ((previous ^ status) & PCC_ISR_CD) chip->pcc[socket * PCC_STRIDE / 2 + PCC_CSCR] |= PCC_CSCR_CDC;
     chip->pcc_status[socket] = status;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-void sh7709_set_pcc_irq(sh7709_t *chip, int socket, bool asserted) {
-    if (socket < 0 || socket >= SH7709_PCC_SOCKETS || chip->pcc_card_irq[socket] == asserted) return;
+void sh770x_set_pcc_irq(sh770x_t *chip, int socket, bool asserted) {
+    if (socket < 0 || socket >= SH770X_PCC_SOCKETS || chip->pcc_card_irq[socket] == asserted) return;
     chip->pcc_card_irq[socket] = asserted;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-static bool pcc_pending(const sh7709_t *chip, int socket) {
+static bool pcc_pending(const sh770x_t *chip, int socket) {
     const uint8_t *registers = &chip->pcc[socket * PCC_STRIDE / 2];
     uint8_t changes = registers[PCC_CSCR], enables = registers[PCC_CSCIER];
     return (changes & enables & PCC_CSCR_CHANGES) || (chip->pcc_card_irq[socket] && (enables & PCC_CSCIER_IREQE));
 }
 
-void sh7709_set_adc(sh7709_t *chip, int channel, uint16_t value) {
+void sh770x_set_adc(sh770x_t *chip, int channel, uint16_t value) {
     if (channel < 0 || channel > 3) return;
     chip->adc_input[channel] = value & 0x3FFu;
 }
 
-static uint32_t cmt_hz(const sh7709_t *chip) {
+static uint32_t cmt_hz(const sh770x_t *chip) {
     static const uint32_t dividers[] = { 4, 8, 16, 64 };
     return chip->peripheral_hz / dividers[chip->cmt_control & CMCSR_CKS];
 }
 
-static bool dma_on_cmt(const sh7709_t *chip, int channel) {
+static bool dma_on_cmt(const sh770x_t *chip, int channel) {
     uint32_t control = chip->dma_control[channel];
     bool running = (chip->dma_operation & (DMAOR_DME | DMAOR_NMIF | DMAOR_AE)) == DMAOR_DME;
     return running && (control & (CHCR_DE | CHCR_TE)) == CHCR_DE && (control & CHCR_RS) == CHCR_RS_CMT;
 }
 
-static int cmt_channel(const sh7709_t *chip) {
-    for (int channel = 0; channel < SH7709_DMA_CHANNELS; channel++) {
+static int cmt_channel(const sh770x_t *chip) {
+    for (int channel = 0; channel < SH770X_DMA_CHANNELS; channel++) {
         if (dma_on_cmt(chip, channel)) return channel;
     }
     return -1;
@@ -388,7 +388,7 @@ static uint32_t step_address(uint32_t address, uint32_t mode, uint32_t size) {
     return address;
 }
 
-static void dma_transfer(sh7709_t *chip, int channel, uint64_t cycle) {
+static void dma_transfer(sh770x_t *chip, int channel, uint64_t cycle) {
     uint32_t control = chip->dma_control[channel];
     uint32_t size = 1u << ((control & CHCR_TS) >> CHCR_TS_SHIFT);
     if (size > 4) size = 4;
@@ -404,7 +404,7 @@ static void dma_transfer(sh7709_t *chip, int channel, uint64_t cycle) {
     if (!chip->dma_count[channel]) chip->dma_control[channel] |= CHCR_TE;
 }
 
-static void advance_cmt(sh7709_t *chip, uint64_t elapsed) {
+static void advance_cmt(sh770x_t *chip, uint64_t elapsed) {
     if (!(chip->cmt_start & CMSTR_STR)) return;
     uint32_t hz = cmt_hz(chip);
     if (!hz) return;
@@ -425,7 +425,7 @@ static void advance_cmt(sh7709_t *chip, uint64_t elapsed) {
     chip->cmt_count = ticks >= to_match ? (uint16_t)past : (uint16_t)(chip->cmt_count + ticks);
 }
 
-static uint64_t cmt_next_event(const sh7709_t *chip) {
+static uint64_t cmt_next_event(const sh770x_t *chip) {
     if (!(chip->cmt_start & CMSTR_STR)) return UINT64_MAX;
     int channel = cmt_channel(chip);
     uint32_t hz = cmt_hz(chip);
@@ -437,7 +437,7 @@ static uint64_t cmt_next_event(const sh7709_t *chip) {
     return chip->last_cycle + (ticks * chip->cpu_hz - chip->cmt_remainder + hz - 1) / hz;
 }
 
-void sh7709_advance(sh7709_t *chip) {
+void sh770x_advance(sh770x_t *chip) {
     uint64_t now = chip->cpu->cycles;
     if (now > chip->last_cycle) {
         uint64_t elapsed = now - chip->last_cycle;
@@ -447,13 +447,13 @@ void sh7709_advance(sh7709_t *chip) {
     }
     advance_adc(chip, now);
     chip->last_cycle = now;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-uint64_t sh7709_next_event(sh7709_t *chip) {
+uint64_t sh770x_next_event(sh770x_t *chip) {
     uint64_t now = chip->last_cycle, next = UINT64_MAX;
     for (int i = 0; i < 3; i++) {
-        const sh7709_timer_t *timer = &chip->timer[i];
+        const sh770x_timer_t *timer = &chip->timer[i];
         if (!(chip->timer_start & (1u << i)) || !(timer->control & TCR_UNIE)) continue;
         uint32_t hz = timer_hz(chip, timer);
         if (!hz) continue;
@@ -494,7 +494,7 @@ static void consider_leveled(candidate_t *best, uint32_t level, uint32_t source,
     }
 }
 
-static bool sci_pending(const sh7709_serial_t *sci, uint32_t *code_offset) {
+static bool sci_pending(const sh770x_serial_t *sci, uint32_t *code_offset) {
     if ((sci->status & (SCI_ORER | SCI_FER | SCI_PER)) && (sci->control & SCR_RIE)) { *code_offset = 0x00; return true; }
     if ((sci->status & SCI_RDRF) && (sci->control & SCR_RIE)) { *code_offset = 0x20; return true; }
     if ((sci->status & SCI_TDRE) && (sci->control & SCR_TIE)) { *code_offset = 0x40; return true; }
@@ -502,14 +502,14 @@ static bool sci_pending(const sh7709_serial_t *sci, uint32_t *code_offset) {
     return false;
 }
 
-static bool scif_pending(const sh7709_serial_t *scif, uint32_t *code_offset) {
+static bool scif_pending(const sh770x_serial_t *scif, uint32_t *code_offset) {
     if ((scif->status & (SCIF_ER | SCIF_BRK)) && (scif->control & SCR_RIE)) { *code_offset = 0x00; return true; }
     if ((scif->status & (SCIF_RDF | SCIF_DR)) && (scif->control & SCR_RIE)) { *code_offset = 0x20; return true; }
     if ((scif->status & SCIF_TDFE) && (scif->control & SCR_TIE)) { *code_offset = 0x60; return true; }
     return false;
 }
 
-void sh7709_update_interrupts(sh7709_t *chip) {
+void sh770x_update_interrupts(sh770x_t *chip) {
     candidate_t best = { 0, 0, 0 };
     uint16_t ipra = chip->priority[0], iprb = chip->priority[1];
     if (chip->nmi) consider(&best, 16, 0x1C0, true);
@@ -527,7 +527,7 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     if (sci_pending(&chip->sci, &offset)) consider(&best, (iprb >> 4) & 15, 0x4E0 + offset, true);
     consider(&best, (iprb >> 12) & 15, WDT_INTERVAL_CODE, (chip->watchdog_control & WTCSR_IOVF) != 0);
     if (chip->scif_alias && scif_pending(&chip->scif[1], &offset)) consider(&best, chip->scif_alias_priority, SCIF_ALIAS_CODE + offset, true);
-    if (chip->variant == SH7709) {
+    if (chip->variant == SH7707) {
         uint16_t iprc = chip->priority[2], iprd = chip->priority[3], ipre = chip->priority[4];
         for (int line = 0; line < 6; line++) {
             uint32_t level = line < 4 ? (iprc >> (line * 4)) & 15 : (iprd >> ((line - 4) * 4)) & 15;
@@ -538,13 +538,13 @@ void sh7709_update_interrupts(sh7709_t *chip) {
         consider_leveled(&best, (iprd >> 8) & 15, 0x720, (pint & 0xFF00u) != 0);
         if (scif_pending(&chip->scif[0], &offset)) consider_leveled(&best, (ipre >> 8) & 15, 0x880 + offset, true);
         if (scif_pending(&chip->scif[1], &offset)) consider_leveled(&best, (ipre >> 4) & 15, 0x900 + offset, true);
-        for (int channel = 0; channel < SH7709_DMA_CHANNELS; channel++) {
+        for (int channel = 0; channel < SH770X_DMA_CHANNELS; channel++) {
             uint32_t control = chip->dma_control[channel];
             consider_leveled(&best, (ipre >> 12) & 15, DEI_CODE + (uint32_t)channel * 0x20, (control & (CHCR_TE | CHCR_IE)) == (CHCR_TE | CHCR_IE));
         }
         consider_leveled(&best, ipre & 15, 0x980, (chip->adc_control & ADCSR_ADF) && (chip->adc_control & ADCSR_ADIE));
-        for (int socket = 0; socket < SH7709_PCC_SOCKETS; socket++) {
-            uint32_t level = (chip->iprf >> ((SH7709_PCC_SOCKETS - 1 - socket) * 4)) & 15;
+        for (int socket = 0; socket < SH770X_PCC_SOCKETS; socket++) {
+            uint32_t level = (chip->iprf >> ((SH770X_PCC_SOCKETS - 1 - socket) * 4)) & 15;
             consider_leveled(&best, level, PCC_CODE + (uint32_t)socket * 0x20, pcc_pending(chip, socket));
         }
     }
@@ -553,18 +553,18 @@ void sh7709_update_interrupts(sh7709_t *chip) {
     chip->cpu->standby_wakes_blocked = (chip->stbcr & STBCR_STBY) != 0;
 }
 
-void sh7709_set_irl(sh7709_t *chip, uint32_t level) {
+void sh770x_set_irl(sh770x_t *chip, uint32_t level) {
     chip->irl_level = level & 15;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-void sh7709_set_extra(sh7709_t *chip, uint32_t level, uint32_t code) {
+void sh770x_set_extra(sh770x_t *chip, uint32_t level, uint32_t code) {
     chip->extra_level = level & 15;
     chip->extra_code = code;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-void sh7709_set_irq(sh7709_t *chip, int line, bool asserted) {
+void sh770x_set_irq(sh770x_t *chip, int line, bool asserted) {
     if (line < 0 || line > 5) return;
     uint32_t bit = 1u << line;
     uint32_t sense = (chip->icr1 >> (line * 2)) & 3;
@@ -578,20 +578,20 @@ void sh7709_set_irq(sh7709_t *chip, int line, bool asserted) {
     } else if (changed && pin_low == (sense == ICR1_FALLING)) {
         chip->irr0 |= (uint8_t)bit;
     }
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-void sh7709_set_irq_active_high(sh7709_t *chip, uint32_t lines) {
+void sh770x_set_irq_active_high(sh770x_t *chip, uint32_t lines) {
     chip->irq_active_high = lines;
 }
 
-static void serial_push(sh7709_serial_t *serial, uint8_t byte) {
+static void serial_push(sh770x_serial_t *serial, uint8_t byte) {
     if (serial->received_count >= sizeof serial->received) return;
     serial->received[(serial->received_head + serial->received_count) % sizeof serial->received] = byte;
     serial->received_count++;
 }
 
-static uint8_t serial_pop(sh7709_serial_t *serial) {
+static uint8_t serial_pop(sh770x_serial_t *serial) {
     if (!serial->received_count) return 0;
     uint8_t byte = serial->received[serial->received_head];
     serial->received_head = (serial->received_head + 1) % sizeof serial->received;
@@ -599,9 +599,9 @@ static uint8_t serial_pop(sh7709_serial_t *serial) {
     return byte;
 }
 
-void sh7709_receive(sh7709_t *chip, int port, uint8_t byte) {
+void sh770x_receive(sh770x_t *chip, int port, uint8_t byte) {
     if (port == 0) {
-        sh7709_serial_t *sci = &chip->sci;
+        sh770x_serial_t *sci = &chip->sci;
         if (sci->status & SCI_RDRF) {
             serial_push(sci, byte);
         } else {
@@ -609,41 +609,41 @@ void sh7709_receive(sh7709_t *chip, int port, uint8_t byte) {
             sci->status |= SCI_RDRF;
         }
     } else if (port <= 2) {
-        sh7709_serial_t *scif = &chip->scif[port - 1];
+        sh770x_serial_t *scif = &chip->scif[port - 1];
         serial_push(scif, byte);
         scif->status |= SCIF_RDF | SCIF_DR;
     }
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-static const sh7709_serial_t *serial_port(const sh7709_t *chip, int port) {
+static const sh770x_serial_t *serial_port(const sh770x_t *chip, int port) {
     if (port == 0) return &chip->sci;
     if (port <= 2) return &chip->scif[port - 1];
     return NULL;
 }
 
-void sh7709_set_scif_alias(sh7709_t *chip, uint32_t pa, uint32_t priority) {
+void sh770x_set_scif_alias(sh770x_t *chip, uint32_t pa, uint32_t priority) {
     if (chip->scif_alias == pa && chip->scif_alias_priority == priority) return;
     chip->scif_alias = pa;
     chip->scif_alias_priority = priority;
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-size_t sh7709_receive_room(const sh7709_t *chip, int port) {
-    const sh7709_serial_t *serial = serial_port(chip, port);
+size_t sh770x_receive_room(const sh770x_t *chip, int port) {
+    const sh770x_serial_t *serial = serial_port(chip, port);
     if (!serial) return 0;
     if (port == 0) return (serial->status & SCI_RDRF) ? 0 : 1;
     return serial->received_count < SCIF_FIFO ? SCIF_FIFO - serial->received_count : 0;
 }
 
-uint32_t sh7709_baud(const sh7709_t *chip, int port) {
-    const sh7709_serial_t *serial = serial_port(chip, port);
+uint32_t sh770x_baud(const sh770x_t *chip, int port) {
+    const sh770x_serial_t *serial = serial_port(chip, port);
     if (!serial) return 0;
     uint32_t divider = (port == 0 ? 64u : 32u) << (2 * (serial->mode & SMR_CKS));
     return chip->peripheral_hz / (divider * ((uint32_t)serial->bit_rate + 1));
 }
 
-void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second) {
+void sh770x_set_time(sh770x_t *chip, int year, int month, int day, int weekday, int hour, int minute, int second) {
     chip->rtc_counter[RTC_SECOND] = to_bcd(second);
     chip->rtc_counter[RTC_MINUTE] = to_bcd(minute);
     chip->rtc_counter[RTC_HOUR] = to_bcd(hour);
@@ -654,17 +654,17 @@ void sh7709_set_time(sh7709_t *chip, int year, int month, int day, int weekday, 
     chip->rtc_control2 |= RCR2_START;
 }
 
-void sh7709_add_seconds(sh7709_t *chip, uint32_t seconds) {
+void sh770x_add_seconds(sh770x_t *chip, uint32_t seconds) {
     while (seconds--) rtc_second(chip);
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
 }
 
-uint32_t sh7709_timer_count(sh7709_t *chip, int index) {
-    sh7709_advance(chip);
+uint32_t sh770x_timer_count(sh770x_t *chip, int index) {
+    sh770x_advance(chip);
     return chip->timer[index & 3].count;
 }
 
-static uint32_t sci_read(sh7709_serial_t *sci, uint32_t offset) {
+static uint32_t sci_read(sh770x_serial_t *sci, uint32_t offset) {
     switch (offset) {
     case 0x0: return sci->mode;
     case 0x2: return sci->bit_rate;
@@ -676,8 +676,8 @@ static uint32_t sci_read(sh7709_serial_t *sci, uint32_t offset) {
     }
 }
 
-static void sci_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
-    sh7709_serial_t *sci = &chip->sci;
+static void sci_write(sh770x_t *chip, uint32_t offset, uint32_t value) {
+    sh770x_serial_t *sci = &chip->sci;
     switch (offset) {
     case 0x0: sci->mode = (uint8_t)value; break;
     case 0x2: sci->bit_rate = (uint8_t)value; break;
@@ -700,7 +700,7 @@ static void sci_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     }
 }
 
-static uint32_t scif_read(sh7709_serial_t *scif, uint32_t offset) {
+static uint32_t scif_read(sh770x_serial_t *scif, uint32_t offset) {
     switch (offset) {
     case 0x0: return scif->mode;
     case 0x2: return scif->bit_rate;
@@ -716,8 +716,8 @@ static uint32_t scif_read(sh7709_serial_t *scif, uint32_t offset) {
     }
 }
 
-static void scif_write(sh7709_t *chip, int port, uint32_t offset, uint32_t value) {
-    sh7709_serial_t *scif = &chip->scif[port];
+static void scif_write(sh770x_t *chip, int port, uint32_t offset, uint32_t value) {
+    sh770x_serial_t *scif = &chip->scif[port];
     switch (offset) {
     case 0x0: scif->mode = (uint8_t)value; break;
     case 0x2: scif->bit_rate = (uint8_t)value; break;
@@ -737,23 +737,23 @@ static void scif_write(sh7709_t *chip, int port, uint32_t offset, uint32_t value
     }
 }
 
-static uint32_t tmu_read(sh7709_t *chip, uint32_t offset) {
+static uint32_t tmu_read(sh770x_t *chip, uint32_t offset) {
     if (offset == 0x0) return chip->timer_output;
     if (offset == 0x2) return chip->timer_start;
     if (offset == 0x28) return chip->timer_capture;
     if (offset < 0x4 || offset > 0x24) return 0;
     int index = (int)(offset - 0x4) / 0xC;
-    sh7709_timer_t *timer = &chip->timer[index];
+    sh770x_timer_t *timer = &chip->timer[index];
     switch ((offset - 0x4) % 0xC) {
     case 0x0: return timer->constant;
-    case 0x4: sh7709_advance(chip); return timer->count;
-    case 0x8: sh7709_advance(chip); return timer->control;
+    case 0x4: sh770x_advance(chip); return timer->count;
+    case 0x8: sh770x_advance(chip); return timer->control;
     default: return 0;
     }
 }
 
-static void tmu_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
-    sh7709_advance(chip);
+static void tmu_write(sh770x_t *chip, uint32_t offset, uint32_t value) {
+    sh770x_advance(chip);
     if (offset == 0x0) { chip->timer_output = (uint8_t)value; return; }
     if (offset == 0x2) {
         for (int i = 0; i < 3; i++)
@@ -763,7 +763,7 @@ static void tmu_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     }
     if (offset < 0x4 || offset > 0x24) return;
     int index = (int)(offset - 0x4) / 0xC;
-    sh7709_timer_t *timer = &chip->timer[index];
+    sh770x_timer_t *timer = &chip->timer[index];
     switch ((offset - 0x4) % 0xC) {
     case 0x0: timer->constant = value; break;
     case 0x4: timer->count = value; break;
@@ -772,17 +772,17 @@ static void tmu_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     }
 }
 
-static uint32_t rtc_read(sh7709_t *chip, uint32_t offset) {
-    if (offset == 0x00) { sh7709_advance(chip); return chip->rtc_64hz; }
-    if (offset >= 0x02 && offset <= 0x0E) { sh7709_advance(chip); return chip->rtc_counter[(offset - 0x02) / 2]; }
+static uint32_t rtc_read(sh770x_t *chip, uint32_t offset) {
+    if (offset == 0x00) { sh770x_advance(chip); return chip->rtc_64hz; }
+    if (offset >= 0x02 && offset <= 0x0E) { sh770x_advance(chip); return chip->rtc_counter[(offset - 0x02) / 2]; }
     if (offset >= 0x10 && offset <= 0x1A) return chip->rtc_alarm[(offset - 0x10) / 2];
     if (offset == 0x1C) return chip->rtc_control1;
     if (offset == 0x1E) return chip->rtc_control2;
     return 0;
 }
 
-static void rtc_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
-    sh7709_advance(chip);
+static void rtc_write(sh770x_t *chip, uint32_t offset, uint32_t value) {
+    sh770x_advance(chip);
     if (offset >= 0x02 && offset <= 0x0E) { chip->rtc_counter[(offset - 0x02) / 2] = (uint8_t)value; return; }
     if (offset >= 0x10 && offset <= 0x1A) { chip->rtc_alarm[(offset - 0x10) / 2] = (uint8_t)value; return; }
     if (offset == 0x1C) {
@@ -799,7 +799,7 @@ static void rtc_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     }
 }
 
-static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
+static bool area1_read(sh770x_t *chip, uint32_t offset, uint32_t *value) {
     switch (offset) {
     case 0x000: *value = chip->cpu->intevt2; return true;
     case 0x004: *value = chip->irr0; return true;
@@ -814,9 +814,9 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     case 0x0B0: *value = chip->ccr2; return true;
     case IPRF: *value = chip->iprf; return true;
     case LCD_INDEX: *value = chip->lcd_index; return true;
-    case LCD_CONTROL: *value = chip->lcd_index < SH7709_LCD_CONTROLS ? chip->lcd_control[chip->lcd_index] : 0; return true;
+    case LCD_CONTROL: *value = chip->lcd_index < SH770X_LCD_CONTROLS ? chip->lcd_control[chip->lcd_index] : 0; return true;
     case LCD_PALETTE: *value = chip->lcd_palette[chip->lcd_index]; return true;
-    case LCD_FRAME: *value = chip->lcd_index < SH7709_LCD_FRAMES ? chip->lcd_frame[chip->lcd_index] : 0; return true;
+    case LCD_FRAME: *value = chip->lcd_index < SH770X_LCD_FRAMES ? chip->lcd_frame[chip->lcd_index] : 0; return true;
     case PCC0_STATUS: case PCC1_STATUS: {
         int socket = (int)((offset - PCC0_STATUS) / PCC_STRIDE);
         uint8_t status = chip->pcc_status[socket];
@@ -839,7 +839,7 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     }
     if (offset == 0x092) { *value = chip->adc_config; return true; }
     if (offset >= DMA_BASE && offset < DMA_END) {
-        sh7709_advance(chip);
+        sh770x_advance(chip);
         int channel = (int)((offset - DMA_BASE) / DMA_STRIDE);
         uint32_t fields[] = { chip->dma_source[channel], chip->dma_dest[channel], chip->dma_count[channel], chip->dma_control[channel] };
         *value = fields[(offset & 0xC) / 4];
@@ -848,8 +848,8 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     switch (offset) {
     case DMAOR: *value = chip->dma_operation; return true;
     case CMSTR: *value = chip->cmt_start; return true;
-    case CMCSR: sh7709_advance(chip); *value = chip->cmt_control; return true;
-    case CMCNT: sh7709_advance(chip); *value = chip->cmt_count; return true;
+    case CMCSR: sh770x_advance(chip); *value = chip->cmt_control; return true;
+    case CMCNT: sh770x_advance(chip); *value = chip->cmt_count; return true;
     case CMCOR: *value = chip->cmt_constant; return true;
     case DADR0: *value = chip->dac[0]; return true;
     case DADR1: *value = chip->dac[1]; return true;
@@ -872,7 +872,7 @@ static bool area1_read(sh7709_t *chip, uint32_t offset, uint32_t *value) {
     return true;
 }
 
-static uint32_t level_sensed(const sh7709_t *chip) {
+static uint32_t level_sensed(const sh770x_t *chip) {
     uint32_t lines = 0;
     for (int line = 0; line < 6; line++) {
         if (((chip->icr1 >> (line * 2)) & 3) >= ICR1_LEVEL) lines |= 1u << line;
@@ -880,7 +880,7 @@ static uint32_t level_sensed(const sh7709_t *chip) {
     return lines;
 }
 
-static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
+static bool area1_write(sh770x_t *chip, uint32_t offset, uint32_t value) {
     switch (offset) {
     case 0x004: chip->irr0 &= (uint8_t)(value | ((chip->irq_lines ^ chip->irq_active_high) & level_sensed(chip))); return true;
     case 0x006: chip->irr1 &= (uint8_t)value; return true;
@@ -894,17 +894,17 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     case 0x0B0: chip->ccr2 = value; return true;
     case IPRF:
         chip->iprf = (uint16_t)value;
-        sh7709_update_interrupts(chip);
+        sh770x_update_interrupts(chip);
         return true;
     case LCD_INDEX: chip->lcd_index = (uint16_t)(value & LCD_INDEX_MASK); return true;
     case LCD_CONTROL:
-        if (chip->lcd_index < SH7709_LCD_CONTROLS) chip->lcd_control[chip->lcd_index] = (uint16_t)value;
+        if (chip->lcd_index < SH770X_LCD_CONTROLS) chip->lcd_control[chip->lcd_index] = (uint16_t)value;
         return true;
     case LCD_PALETTE:
         chip->lcd_palette[chip->lcd_index] = (uint16_t)(value & LCD_PALETTE_MASK);
         return true;
     case LCD_FRAME:
-        if (chip->lcd_index < SH7709_LCD_FRAMES) chip->lcd_frame[chip->lcd_index] = (uint16_t)value;
+        if (chip->lcd_index < SH770X_LCD_FRAMES) chip->lcd_frame[chip->lcd_index] = (uint16_t)value;
         return true;
     default: break;
     }
@@ -912,12 +912,12 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
         uint8_t flag = chip->adc_control & ADCSR_ADF & (uint8_t)value;
         chip->adc_control = (uint8_t)((value & ~ADCSR_ADF) | flag);
         if (value & ADCSR_ADST) start_adc(chip);
-        sh7709_update_interrupts(chip);
+        sh770x_update_interrupts(chip);
         return true;
     }
     if (offset == 0x092) { chip->adc_config = (uint8_t)value; return true; }
     if (offset >= DMA_BASE && offset < DMA_END) {
-        sh7709_advance(chip);
+        sh770x_advance(chip);
         int channel = (int)((offset - DMA_BASE) / DMA_STRIDE);
         switch (offset & 0xC) {
         case 0x0: chip->dma_source[channel] = value; break;
@@ -929,28 +929,28 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
             break;
         }
         }
-        sh7709_update_interrupts(chip);
+        sh770x_update_interrupts(chip);
         return true;
     }
     switch (offset) {
     case DMAOR: {
-        sh7709_advance(chip);
+        sh770x_advance(chip);
         uint16_t flags = chip->dma_operation & (uint16_t)value & (DMAOR_NMIF | DMAOR_AE);
         chip->dma_operation = (uint16_t)((value & ~(uint32_t)(DMAOR_NMIF | DMAOR_AE)) | flags);
         return true;
     }
     case CMSTR:
-        sh7709_advance(chip);
+        sh770x_advance(chip);
         chip->cmt_start = (uint16_t)value;
         return true;
     case CMCSR: {
-        sh7709_advance(chip);
+        sh770x_advance(chip);
         uint16_t flag = chip->cmt_control & (uint16_t)value & CMCSR_CMF;
         chip->cmt_control = (uint16_t)((value & ~(uint32_t)CMCSR_CMF) | flag);
         return true;
     }
-    case CMCNT: sh7709_advance(chip); chip->cmt_count = (uint16_t)value; return true;
-    case CMCOR: sh7709_advance(chip); chip->cmt_constant = (uint16_t)value; return true;
+    case CMCNT: sh770x_advance(chip); chip->cmt_count = (uint16_t)value; return true;
+    case CMCOR: sh770x_advance(chip); chip->cmt_constant = (uint16_t)value; return true;
     case DADR0:
     case DADR1: {
         int channel = offset == DADR1;
@@ -963,13 +963,13 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     }
     if (offset >= 0x0E0 && offset < 0x100) {
         chip->pcc[(offset - 0x0E0) / 2] = (uint8_t)value;
-        sh7709_update_interrupts(chip);
+        sh770x_update_interrupts(chip);
         return true;
     }
     if (offset >= 0x100 && offset < 0x140) {
         chip->ports[(offset - 0x100) / 2] = (uint16_t)value;
         if (chip->ports_written) chip->ports_written(chip->transmit_context);
-        sh7709_update_interrupts(chip);
+        sh770x_update_interrupts(chip);
         return true;
     }
     if (offset >= 0x140 && offset < 0x150) { scif_write(chip, 0, offset - 0x140, value); return true; }
@@ -977,13 +977,13 @@ static bool area1_write(sh7709_t *chip, uint32_t offset, uint32_t value) {
     return true;
 }
 
-bool sh7709_read(sh7709_t *chip, uint32_t pa, int size, uint32_t *value) {
+bool sh770x_read(sh770x_t *chip, uint32_t pa, int size, uint32_t *value) {
     if (chip->scif_alias && pa - chip->scif_alias < SCIF_SIZE) {
         *value = scif_read(&chip->scif[1], pa - chip->scif_alias);
         return true;
     }
     (void)size;
-    if (chip->variant == SH7709 && pa - AREA1_BASE < AREA1_SIZE) return area1_read(chip, pa - AREA1_BASE, value);
+    if (chip->variant == SH7707 && pa - AREA1_BASE < AREA1_SIZE) return area1_read(chip, pa - AREA1_BASE, value);
     if (pa < SCI_BASE) return false;
     if (pa < TMU_BASE) { *value = sci_read(&chip->sci, pa - SCI_BASE); return true; }
     if (pa < RTC_BASE) { *value = tmu_read(chip, pa - TMU_BASE); return true; }
@@ -1012,15 +1012,15 @@ bool sh7709_read(sh7709_t *chip, uint32_t pa, int size, uint32_t *value) {
     return false;
 }
 
-bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
+bool sh770x_write(sh770x_t *chip, uint32_t pa, int size, uint32_t value) {
     if (chip->scif_alias && pa - chip->scif_alias < SCIF_SIZE) {
         scif_write(chip, 1, pa - chip->scif_alias, value);
-        sh7709_update_interrupts(chip);
+        sh770x_update_interrupts(chip);
         return true;
     }
     (void)size;
     bool handled = true;
-    if (chip->variant == SH7709 && pa - AREA1_BASE < AREA1_SIZE) handled = area1_write(chip, pa - AREA1_BASE, value);
+    if (chip->variant == SH7707 && pa - AREA1_BASE < AREA1_SIZE) handled = area1_write(chip, pa - AREA1_BASE, value);
     else if (pa < SCI_BASE) return false;
     else if (pa < TMU_BASE) sci_write(chip, pa - SCI_BASE, value);
     else if (pa < RTC_BASE) tmu_write(chip, pa - TMU_BASE, value);
@@ -1038,14 +1038,14 @@ bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
         case CPG_BASE + 0x4: if (((value >> 8) & 0xFF) == 0x5A) chip->watchdog_count = value & 0xFF; break;
         case CPG_BASE + 0x6:
             if (((value >> 8) & 0xFF) == 0xA5) chip->watchdog_control = value & 0xFF;
-            sh7709_update_interrupts(chip);
+            sh770x_update_interrupts(chip);
             break;
         case CPG_BASE + 0x8: chip->stbcr2 = (uint8_t)value; break;
         case CCR_ADDRESS: chip->ccr = value & 0x2F; break;
         default: if (pa < 0xFFFFFF00u) return false; break;
         }
     }
-    sh7709_update_interrupts(chip);
+    sh770x_update_interrupts(chip);
     return handled;
 }
 
@@ -1053,31 +1053,31 @@ bool sh7709_write(sh7709_t *chip, uint32_t pa, int size, uint32_t value) {
 #define OLD_LCD_PALETTE  4
 #define OLD_LCD_FRAMES   8
 #define OLD_LCD_BYTES    (2 + 2 * (OLD_LCD_CONTROLS + OLD_LCD_PALETTE + OLD_LCD_FRAMES))
-#define OLD_PCC_BYTES    (2 * SH7709_PCC_SOCKETS + 2)
-#define OLD_FULL_BYTES   ((offsetof(sh7709_t, lcd_index) + OLD_LCD_BYTES + OLD_PCC_BYTES + 7) & ~(size_t)7)
+#define OLD_PCC_BYTES    (2 * SH770X_PCC_SOCKETS + 2)
+#define OLD_FULL_BYTES   ((offsetof(sh770x_t, lcd_index) + OLD_LCD_BYTES + OLD_PCC_BYTES + 7) & ~(size_t)7)
 
-const uint32_t SH7709_OLDER_STATE_SIZES[3] = { offsetof(sh7709_t, lcd_index), offsetof(sh7709_t, lcd_index) + OLD_LCD_BYTES, OLD_FULL_BYTES };
+const uint32_t SH770X_OLDER_STATE_SIZES[3] = { offsetof(sh770x_t, lcd_index), offsetof(sh770x_t, lcd_index) + OLD_LCD_BYTES, OLD_FULL_BYTES };
 
 static void copy_words(uint16_t *to, size_t to_count, const uint8_t *from, size_t from_count) {
     for (size_t i = 0; i < to_count && i < from_count; i++) memcpy(&to[i], from + i * 2, 2);
 }
 
-bool sh7709_load_older_state(void *data, const uint8_t *old, uint32_t size) {
-    sh7709_t *chip = data;
-    size_t prefix = offsetof(sh7709_t, lcd_index);
-    if (size != SH7709_OLDER_STATE_SIZES[0] && size != SH7709_OLDER_STATE_SIZES[1] && size != SH7709_OLDER_STATE_SIZES[2]) return false;
+bool sh770x_load_older_state(void *data, const uint8_t *old, uint32_t size) {
+    sh770x_t *chip = data;
+    size_t prefix = offsetof(sh770x_t, lcd_index);
+    if (size != SH770X_OLDER_STATE_SIZES[0] && size != SH770X_OLDER_STATE_SIZES[1] && size != SH770X_OLDER_STATE_SIZES[2]) return false;
     memset(chip, 0, sizeof *chip);
     memcpy(chip, old, prefix);
     if (size == prefix) return true;
     const uint8_t *lcd = old + prefix;
     memcpy(&chip->lcd_index, lcd, 2);
-    copy_words(chip->lcd_control, SH7709_LCD_CONTROLS, lcd + 2, OLD_LCD_CONTROLS);
-    copy_words(chip->lcd_palette, SH7709_LCD_PALETTE, lcd + 2 + 2 * OLD_LCD_CONTROLS, OLD_LCD_PALETTE);
-    copy_words(chip->lcd_frame, SH7709_LCD_FRAMES, lcd + 2 + 2 * (OLD_LCD_CONTROLS + OLD_LCD_PALETTE), OLD_LCD_FRAMES);
-    if (size == SH7709_OLDER_STATE_SIZES[1]) return true;
+    copy_words(chip->lcd_control, SH770X_LCD_CONTROLS, lcd + 2, OLD_LCD_CONTROLS);
+    copy_words(chip->lcd_palette, SH770X_LCD_PALETTE, lcd + 2 + 2 * OLD_LCD_CONTROLS, OLD_LCD_PALETTE);
+    copy_words(chip->lcd_frame, SH770X_LCD_FRAMES, lcd + 2 + 2 * (OLD_LCD_CONTROLS + OLD_LCD_PALETTE), OLD_LCD_FRAMES);
+    if (size == SH770X_OLDER_STATE_SIZES[1]) return true;
     const uint8_t *pcc = lcd + OLD_LCD_BYTES;
-    memcpy(chip->pcc_status, pcc, SH7709_PCC_SOCKETS);
-    memcpy(chip->pcc_card_irq, pcc + SH7709_PCC_SOCKETS, SH7709_PCC_SOCKETS);
-    memcpy(&chip->iprf, pcc + 2 * SH7709_PCC_SOCKETS, 2);
+    memcpy(chip->pcc_status, pcc, SH770X_PCC_SOCKETS);
+    memcpy(chip->pcc_card_irq, pcc + SH770X_PCC_SOCKETS, SH770X_PCC_SOCKETS);
+    memcpy(&chip->iprf, pcc + 2 * SH770X_PCC_SOCKETS, 2);
     return true;
 }

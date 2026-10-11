@@ -5,7 +5,7 @@
 
 #include "core/cfcard.h"
 #include "core/ne2000.h"
-#include "core/sh7709.h"
+#include "core/sh770x.h"
 
 #define HP320LX_SCREEN_WIDTH  640
 #define HP320LX_SCREEN_HEIGHT 240
@@ -63,7 +63,7 @@ typedef struct {
     hp320lx_sample_fn sample;
     hp_model_t model;
     uint32_t cpu_hz, sample_rate;
-    sh7709_t *chip;
+    sh770x_t *chip;
     cfcard_slot_t *card;
     ne2000_t *ethernet;
     hp320lx_runtime_t *runtime;

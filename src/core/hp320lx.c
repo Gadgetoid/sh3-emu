@@ -231,14 +231,14 @@ void hp320lx_screen(const uint8_t *framebuffer, const uint16_t *palette, uint16_
 }
 
 void hp320lx_ports_written(hp320lx_t *board, const hp320lx_host_t *host) {
-    sh7709_t *chip = host->chip;
+    sh770x_t *chip = host->chip;
     uint16_t columns = key_columns(board, chip->ports);
-    sh7709_set_port_input(chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
-    sh7709_set_port_input(chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
+    sh770x_set_port_input(chip, HP320LX_KEY_COLUMNS_LOW, 0x00FFu, columns & 0xFFu);
+    sh770x_set_port_input(chip, HP320LX_KEY_COLUMNS_HIGH, 0x0007u, columns >> 8);
     hp320lx_touch_t touch = touch_inputs(board, chip->ports);
-    sh7709_set_adc(chip, 0, touch.channel_a);
-    sh7709_set_adc(chip, 1, touch.channel_b);
-    if (touch.pen_interrupt != (((chip->irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh7709_set_irq(chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
+    sh770x_set_adc(chip, 0, touch.channel_a);
+    sh770x_set_adc(chip, 1, touch.channel_b);
+    if (touch.pen_interrupt != (((chip->irq_lines >> HP320LX_PEN_IRQ) & 1) != 0)) sh770x_set_irq(chip, HP320LX_PEN_IRQ, touch.pen_interrupt);
 }
 
 void hp320lx_dac_written(const hp320lx_host_t *host, int channel, uint8_t value, uint64_t cycle) {
@@ -272,8 +272,8 @@ static void card_lines(const hp320lx_host_t *host, int socket) {
         if (socket == HP320LX_CF_SOCKET) rdy_high = !rdy_high;
         status = HP320LX_CARD_PRESENT | (rdy_high ? HP320LX_CARD_RDY_PIN : 0);
     }
-    sh7709_set_pcc_status(host->chip, socket, status);
-    sh7709_set_pcc_irq(host->chip, socket, interrupt);
+    sh770x_set_pcc_status(host->chip, socket, status);
+    sh770x_set_pcc_irq(host->chip, socket, interrupt);
 }
 
 bool hp320lx_card_access(const hp320lx_host_t *host, uint32_t pa, int size, bool write, uint32_t *value) {
@@ -290,11 +290,11 @@ void hp320lx_cards_changed(const hp320lx_host_t *host) {
 }
 
 void hp320lx_power_on(hp320lx_t *board, const hp320lx_host_t *host) {
-    sh7709_t *chip = host->chip;
-    for (int channel = 0; channel < 4; channel++) sh7709_set_adc(chip, channel, HP320LX_ADC_HEALTHY);
-    sh7709_set_port_input(chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, host->model == HP_MODEL_300LX ? HP300LX_MODEL_PINS : HP320LX_MODEL_PINS);
-    sh7709_set_port_input(chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
-    sh7709_set_irq_active_high(chip, 1u << HP320LX_PEN_IRQ);
+    sh770x_t *chip = host->chip;
+    for (int channel = 0; channel < 4; channel++) sh770x_set_adc(chip, channel, HP320LX_ADC_HEALTHY);
+    sh770x_set_port_input(chip, HP320LX_MODEL_PORT, HP320LX_MODEL_PINS, host->model == HP_MODEL_300LX ? HP300LX_MODEL_PINS : HP320LX_MODEL_PINS);
+    sh770x_set_port_input(chip, HP320LX_POWER_PORT, HP320LX_POWER_AC, HP320LX_POWER_AC);
+    sh770x_set_irq_active_high(chip, 1u << HP320LX_PEN_IRQ);
     memset(host->runtime, 0, sizeof *host->runtime);
     hp320lx_ports_written(board, host);
 }
@@ -306,7 +306,7 @@ void hp320lx_key(hp320lx_t *board, const hp320lx_host_t *host, uint8_t scancode,
         woken(board);
     }
     if (runtime->on_key) {
-        sh7709_set_irq(host->chip, HP320LX_ON_IRQ, !up);
+        sh770x_set_irq(host->chip, HP320LX_ON_IRQ, !up);
         if (up) runtime->on_key = false;
         return;
     }
@@ -320,10 +320,10 @@ void hp320lx_touch(hp320lx_t *board, const hp320lx_host_t *host, bool down, int 
 
 void hp320lx_power_button(hp320lx_t *board, const hp320lx_host_t *host, bool down, bool suspended) {
     if (down && suspended) woken(board);
-    sh7709_set_irq(host->chip, HP320LX_ON_IRQ, down);
+    sh770x_set_irq(host->chip, HP320LX_ON_IRQ, down);
     if (!down || suspended) return;
     host->chip->nmi = true;
-    sh7709_update_interrupts(host->chip);
+    sh770x_update_interrupts(host->chip);
 }
 
 bool hp320lx_serial_dtr(const hp320lx_host_t *host) {

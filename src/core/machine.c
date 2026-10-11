@@ -15,7 +15,7 @@
 #include "core/cfcard.h"
 #include "core/mailbox.h"
 #include "core/optimiser.h"
-#include "core/sh7709.h"
+#include "core/sh770x.h"
 #include "core/state.h"
 #include "util/file.h"
 
@@ -67,7 +67,7 @@ typedef struct {
 
 struct machine {
     sh3_cpu_t cpu;
-    sh7709_t chip;
+    sh770x_t chip;
     uint8_t  *dram;
     uint32_t dram_size;
     uint32_t dram_size_next;
@@ -188,12 +188,12 @@ static uint64_t casio_cycles(void *context) {
 static void casio_irl(void *context, uint32_t level, uint32_t code) {
     machine_t *m = context;
     (void)code;
-    if (m->chip.irl_level != level) sh7709_set_irl(&m->chip, level);
+    if (m->chip.irl_level != level) sh770x_set_irl(&m->chip, level);
 }
 
 static void casio_onchip(void *context, uint32_t level, uint32_t code) {
     machine_t *m = context;
-    if (m->chip.extra_level != level || m->chip.extra_code != code) sh7709_set_extra(&m->chip, level, code);
+    if (m->chip.extra_level != level || m->chip.extra_code != code) sh770x_set_extra(&m->chip, level, code);
 }
 
 static uint32_t read_le32(const uint8_t *p) {
@@ -216,8 +216,8 @@ static void set_serial_lines(machine_t *m) {
         casio_serial_line(&m->casio_board, &m->casio_host, m->serial_connected);
         return;
     }
-    sh7709_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, m->serial_connected ? 0 : HP320LX_SERIAL_NO_CABLE);
-    sh7709_set_irq(&m->chip, HP320LX_SERIAL_IRQ, m->serial_connected);
+    sh770x_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, m->serial_connected ? 0 : HP320LX_SERIAL_NO_CABLE);
+    sh770x_set_irq(&m->chip, HP320LX_SERIAL_IRQ, m->serial_connected);
 }
 
 static int onchip_serial_port(machine_t *m) {
@@ -228,8 +228,8 @@ static void onchip_serial_receive(machine_t *m) {
     int port = onchip_serial_port(m);
     uint32_t per_tick = machine_serial_baud(m) / SERIAL_BITS_PER_BYTE / SERIAL_TICKS_PER_SECOND;
     if (!per_tick) per_tick = 1;
-    while (per_tick-- && m->serial_rx_count && sh7709_receive_room(&m->chip, port)) {
-        sh7709_receive(&m->chip, port, m->serial_rx[m->serial_rx_head]);
+    while (per_tick-- && m->serial_rx_count && sh770x_receive_room(&m->chip, port)) {
+        sh770x_receive(&m->chip, port, m->serial_rx[m->serial_rx_head]);
         m->serial_rx_head = (m->serial_rx_head + 1) % SERIAL_FIFO;
         m->serial_rx_count--;
     }
@@ -255,7 +255,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     machine_t *m = context;
     if (m->optimisations && optimiser_polled(&m->optimiser, pa, m->cpu.cycles)) skip_ahead(m);
     if (pa >= 0xE0000000u) {
-        if (sh7709_read(&m->chip, pa, size, value)) return true;
+        if (sh770x_read(&m->chip, pa, size, value)) return true;
         if (m->casio && casio_read(&m->casio_board, &m->casio_host, pa, size, value)) return true;
         if (m->casio && pa < P4_ROUTINES_END) {
             *value = (pa & 2) ? OP_RTS : OP_NOP;
@@ -266,7 +266,7 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     pa &= AREA_MASK;
-    if (sh7709_read(&m->chip, pa, size, value)) return true;
+    if (sh770x_read(&m->chip, pa, size, value)) return true;
     if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, false, value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_read(&m->hp_board, &m->hp_host, pa, size, value);
@@ -300,16 +300,16 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
 static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     machine_t *m = context;
     if (pa >= 0xE0000000u) {
-        if (sh7709_write(&m->chip, pa, size, value)) return true;
+        if (sh770x_write(&m->chip, pa, size, value)) return true;
         if (m->casio && casio_write(&m->casio_board, &m->casio_host, pa, size, value)) {
-            sh7709_set_scif_alias(&m->chip, CASIO_SCIF_PA, casio_scif_priority(&m->casio_board));
+            sh770x_set_scif_alias(&m->chip, CASIO_SCIF_PA, casio_scif_priority(&m->casio_board));
             return true;
         }
         note_unknown(m, "write P4", pa, size, value);
         return true;
     }
     pa &= AREA_MASK;
-    if (sh7709_write(&m->chip, pa, size, value)) return true;
+    if (sh770x_write(&m->chip, pa, size, value)) return true;
     if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, true, &value)) return true;
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_write(&m->hp_board, &m->hp_host, pa, size, value);
@@ -396,7 +396,7 @@ static void nmi_taken(void *context, uint32_t code) {
     machine_t *m = context;
     if (code != NMI_CODE) return;
     m->chip.nmi = false;
-    sh7709_update_interrupts(&m->chip);
+    sh770x_update_interrupts(&m->chip);
 }
 
 static void casio_first_wake(machine_t *m) {
@@ -580,7 +580,7 @@ static void apply_host_time(machine_t *m) {
     struct tm local;
     localtime_r(&now, &local);
     int year = local.tm_year + 1900;
-    sh7709_set_time(&m->chip, (year - 1970) % 100, local.tm_mon + 1, local.tm_mday, local.tm_wday, local.tm_hour, local.tm_min, local.tm_sec);
+    sh770x_set_time(&m->chip, (year - 1970) % 100, local.tm_mon + 1, local.tm_mday, local.tm_wday, local.tm_hour, local.tm_min, local.tm_sec);
 }
 
 static void reset_machine(machine_t *m, bool keep_ram) {
@@ -608,13 +608,13 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     m->cpu.pc = m->entry;
     sync_watches(m);
     if (keep_ram) {
-        sh7709_reset(&m->chip);
+        sh770x_reset(&m->chip);
     } else {
-        sh7709_init(&m->chip, &m->cpu, m->hp ? SH7709 : SH7708, MACHINE_CLOCK_HZ, m->hp ? HP320LX_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ);
-        sh7709_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
+        sh770x_init(&m->chip, &m->cpu, m->hp ? SH7707 : SH7708, MACHINE_CLOCK_HZ, m->hp ? HP320LX_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ);
+        sh770x_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
         if (m->host_clock) apply_host_time(m);
     }
-    if (m->casio) sh7709_set_scif_alias(&m->chip, CASIO_SCIF_PA, 0);
+    if (m->casio) sh770x_set_scif_alias(&m->chip, CASIO_SCIF_PA, 0);
     casio_reset(&m->casio_board);
     memset(&m->casio_audio, 0, sizeof m->casio_audio);
     hp320lx_reset(&m->hp_board);
@@ -678,7 +678,7 @@ void machine_set_log(machine_t *m, machine_log_fn log) {
 static void pending_card_event(machine_t *m);
 
 static uint64_t next_event(machine_t *m) {
-    uint64_t next = sh7709_next_event(&m->chip);
+    uint64_t next = sh770x_next_event(&m->chip);
     if (m->casio) {
         uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
         if (board_next < next) next = board_next;
@@ -692,7 +692,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
     uint64_t target = m->cpu.cycles + cycles;
     m->run_target = target;
     while (m->cpu.cycles < target) {
-        sh7709_advance(&m->chip);
+        sh770x_advance(&m->chip);
         pending_card_event(m);
         serial_tick_event(m);
         if (m->casio) {
@@ -705,7 +705,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
         sh3_run(&m->cpu, until);
         if (m->cpu.debug && m->cpu.debug->stop) break;
     }
-    sh7709_advance(&m->chip);
+    sh770x_advance(&m->chip);
 }
 
 sh3_cpu_t *machine_cpu(machine_t *m) {
@@ -927,7 +927,7 @@ bool machine_serial_dtr(machine_t *m) {
 
 uint32_t machine_serial_baud(machine_t *m) {
     if (m->casio) return casio_serial_baud(&m->casio_board);
-    return sh7709_baud(&m->chip, HP320LX_SERIAL_SCIF);
+    return sh770x_baud(&m->chip, HP320LX_SERIAL_SCIF);
 }
 
 size_t machine_serial_space(machine_t *m) {
@@ -1053,7 +1053,7 @@ void machine_power_button(machine_t *m, bool down) {
         return;
     }
     m->chip.nmi = true;
-    sh7709_update_interrupts(&m->chip);
+    sh770x_update_interrupts(&m->chip);
 }
 
 int machine_rom_system(machine_t *m) {
@@ -1085,7 +1085,7 @@ void machine_set_host_clock(machine_t *m, bool enabled) {
 }
 
 void machine_advance_clock(machine_t *m, int64_t seconds) {
-    if (seconds > 0) sh7709_add_seconds(&m->chip, (uint32_t)(seconds > 86400 * 366 ? 86400 * 366 : seconds));
+    if (seconds > 0) sh770x_add_seconds(&m->chip, (uint32_t)(seconds > 86400 * 366 ? 86400 * 366 : seconds));
 }
 
 void machine_set_debug_output(machine_t *m, machine_debug_fn sink, void *context) {
@@ -1107,7 +1107,7 @@ void machine_dump_state(machine_t *m) {
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
         { "cpu", &m->cpu, sizeof m->cpu, NULL, 0, NULL },
-        { "chip", &m->chip, sizeof m->chip, SH7709_OLDER_STATE_SIZES, 3, sh7709_load_older_state },
+        { "chip", &m->chip, sizeof m->chip, SH770X_OLDER_STATE_SIZES, 3, sh770x_load_older_state },
         { "card", &m->card, sizeof m->card, NULL, 0, NULL },
         { "card_path", m->card_path, sizeof m->card_path, NULL, 0, NULL },
         { "casio_board", &m->casio_board, sizeof m->casio_board, NULL, 0, NULL },
