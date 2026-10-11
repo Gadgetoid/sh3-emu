@@ -8,6 +8,7 @@ dist/
 .DS_Store
 .claude/
 docs/philips/
+docs/hitachi/
 *.state
 *.state.old
 /*.img
