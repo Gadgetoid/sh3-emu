@@ -144,6 +144,8 @@ The keyboard is a 9x8 matrix. PS/2 keys map to it by position, with the Japanese
 
 `tools/ce1rom.py IMAGE FOLDER` lists a CE 1.0 ROM image's header, copy entries, modules (with their sections) and files in `FOLDER/manifest.txt`, and extracts the modules as PE files and the files, decompressed, into `FOLDER/modules` and `FOLDER/files`.
 
+`tools/ce2rom.py IMAGE FOLDER [--base ADDRESS]` does the same for a CE 2.0 ROM image, rebuilding PE headers from the ROM's module headers. `--base` gives the address of the image's first byte when the dump doesn't start at the ROM's `physfirst`, such as a full ROM with a boot loader before it.
+
 The A-51's dictionary app (`dic.exe`, G-天王星) reads its English-Japanese dictionary from a separate 8 MB ROM at physical 0x04000000. `--dictionary=IMAGE`, or Devices > Mount Dictionary in `sh3emu`, maps a dump of it there, read-only; the GUI remembers it for the Casio's machines. Without one the app finds nothing.
 
 ## HP 320LX
