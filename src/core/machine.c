@@ -410,24 +410,27 @@ static bool kernel_address(uint32_t address) {
     return segment == KSEG0_BASE || segment == KSEG1_BASE;
 }
 
-static bool rom_header_at(const uint8_t *image, size_t offset, size_t size, bool exact) {
+static bool rom_header_at(const uint8_t *image, size_t offset, size_t size, bool exact, bool from_zero) {
     const uint8_t *header = image + offset;
     uint32_t first = read_le32(header + 8), last = read_le32(header + 12);
     if (exact && last - first != size) return false;
     uint32_t dll_first = read_le32(header), dll_last = read_le32(header + 4), modules = read_le32(header + 16);
     uint32_t ram_start = read_le32(header + 20), ram_free = read_le32(header + 24), ram_end = read_le32(header + 28);
-    uint32_t span = last - first;
-    return kernel_address(first) && !(first & AREA_MASK) && span >= ROM_DUMP_MIN_SPAN && span <= size && offset + ROM_HEADER_SIZE <= span &&
+    uint32_t span = last - first, start = from_zero ? first & AREA_MASK : 0;
+    return kernel_address(first) && (from_zero || !(first & AREA_MASK)) && span >= ROM_DUMP_MIN_SPAN && start + span <= size &&
+           offset >= start && offset + ROM_HEADER_SIZE <= start + span &&
            dll_first < dll_last && modules && modules <= ROM_DUMP_MAX_MODULES &&
            kernel_address(ram_start) && ram_start <= ram_free && ram_free < ram_end;
 }
 
-static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfirst, size_t *span) {
-    for (int exact = 1; exact >= 0; exact--) {
+static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *load_pa, size_t *length) {
+    for (int pass = 0; pass < 3; pass++) {
+        bool exact = pass == 0, from_zero = pass == 2;
         for (size_t offset = 0; offset + ROM_HEADER_SIZE <= size; offset += 4) {
-            if (!rom_header_at(image, offset, size, exact)) continue;
-            *physfirst = read_le32(image + offset + 8);
-            *span = read_le32(image + offset + 12) - *physfirst;
+            if (!rom_header_at(image, offset, size, exact, from_zero)) continue;
+            uint32_t first = read_le32(image + offset + 8);
+            *load_pa = from_zero ? 0 : first & AREA_MASK;
+            *length = from_zero ? size : read_le32(image + offset + 12) - first;
             return true;
         }
     }
@@ -435,9 +438,9 @@ static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *physfir
 }
 
 static bool load_flash(machine_t *m, char *error, size_t error_size) {
-    uint32_t physfirst;
-    size_t span;
-    if (!find_rom_header(m->image, m->image_size, &physfirst, &span) || (physfirst & AREA_MASK) + span > FLASH_SIZE) {
+    uint32_t load_pa;
+    size_t length;
+    if (!find_rom_header(m->image, m->image_size, &load_pa, &length) || load_pa + length > FLASH_SIZE) {
         snprintf(error, error_size, "not a Windows CE ROM image");
         return false;
     }
@@ -447,7 +450,7 @@ static bool load_flash(machine_t *m, char *error, size_t error_size) {
         return false;
     }
     memset(m->flash, 0xFF, FLASH_SIZE);
-    memcpy(m->flash + (physfirst & AREA_MASK), m->image, span);
+    memcpy(m->flash + load_pa, m->image, length);
     m->entry = RESET_VECTOR;
     return true;
 }
