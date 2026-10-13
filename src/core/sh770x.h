@@ -8,6 +8,7 @@
 typedef enum {
     SH7708,
     SH7707,
+    SH7709,
 } sh770x_variant_t;
 
 #define SH770X_LCD_CONTROLS 14

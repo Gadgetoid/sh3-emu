@@ -1,4 +1,4 @@
-/* Emulate the SH7707 and SH7708 on-chip peripherals: their registers, interrupts, timers and clocked hardware. */
+/* Emulate the SH7707, SH7708 and SH7709 on-chip peripherals: their registers, interrupts, timers and clocked hardware. */
 #include "core/sh770x.h"
 
 #include <string.h>
@@ -66,6 +66,8 @@
 #define CCR_ADDRESS 0xFFFFFFECu
 #define AREA1_BASE  0x04000000u
 #define AREA1_SIZE  0x00000200u
+#define SCI_IRDA    0x140u
+#define SCPDR       0x136u
 
 #define TCR_UNF  0x0100u
 #define TCR_UNIE 0x0020u
@@ -119,6 +121,8 @@
 
 #define PORT_A_DATA 0x10u
 #define PORT_B_DATA 0x11u
+#define PORT_C_DATA 0x12u
+#define PORT_F_DATA 0x15u
 
 #define RTC_TICK_HZ 64u
 #define RTC_OUTPUT_HZ 16384u
@@ -327,7 +331,8 @@ static uint16_t port_value(const sh770x_t *chip, uint32_t index) {
 }
 
 static uint16_t pint_pending(const sh770x_t *chip) {
-    uint16_t pins = (uint16_t)((port_value(chip, PORT_A_DATA) & 0xFFu) | (port_value(chip, PORT_B_DATA) & 0xFFu) << 8);
+    uint32_t low = chip->variant == SH7709 ? PORT_C_DATA : PORT_A_DATA, high = chip->variant == SH7709 ? PORT_F_DATA : PORT_B_DATA;
+    uint16_t pins = (uint16_t)((port_value(chip, low) & 0xFFu) | (port_value(chip, high) & 0xFFu) << 8);
     return (uint16_t)(chip->pinter & ~(pins ^ chip->icr2));
 }
 
@@ -527,7 +532,7 @@ void sh770x_update_interrupts(sh770x_t *chip) {
     if (sci_pending(&chip->sci, &offset)) consider(&best, (iprb >> 4) & 15, 0x4E0 + offset, true);
     consider(&best, (iprb >> 12) & 15, WDT_INTERVAL_CODE, (chip->watchdog_control & WTCSR_IOVF) != 0);
     if (chip->scif_alias && scif_pending(&chip->scif[1], &offset)) consider(&best, chip->scif_alias_priority, SCIF_ALIAS_CODE + offset, true);
-    if (chip->variant == SH7707) {
+    if (chip->variant != SH7708) {
         uint16_t iprc = chip->priority[2], iprd = chip->priority[3], ipre = chip->priority[4];
         for (int line = 0; line < 6; line++) {
             uint32_t level = line < 4 ? (iprc >> (line * 4)) & 15 : (iprd >> ((line - 4) * 4)) & 15;
@@ -543,7 +548,7 @@ void sh770x_update_interrupts(sh770x_t *chip) {
             consider_leveled(&best, (ipre >> 12) & 15, DEI_CODE + (uint32_t)channel * 0x20, (control & (CHCR_TE | CHCR_IE)) == (CHCR_TE | CHCR_IE));
         }
         consider_leveled(&best, ipre & 15, 0x980, (chip->adc_control & ADCSR_ADF) && (chip->adc_control & ADCSR_ADIE));
-        for (int socket = 0; socket < SH770X_PCC_SOCKETS; socket++) {
+        for (int socket = 0; socket < SH770X_PCC_SOCKETS && chip->variant == SH7707; socket++) {
             uint32_t level = (chip->iprf >> ((SH770X_PCC_SOCKETS - 1 - socket) * 4)) & 15;
             consider_leveled(&best, level, PCC_CODE + (uint32_t)socket * 0x20, pcc_pending(chip, socket));
         }
@@ -799,7 +804,20 @@ static void rtc_write(sh770x_t *chip, uint32_t offset, uint32_t value) {
     }
 }
 
+static bool has_area1(const sh770x_t *chip) {
+    return chip->variant != SH7708;
+}
+
+static bool sh7707_only(const sh770x_t *chip, uint32_t offset) {
+    if (chip->variant == SH7707) return false;
+    return offset == IPRF || (offset >= LCD_INDEX && offset < 0x100) || (offset >= SCI_IRDA && offset < SCI_IRDA + SCIF_SIZE);
+}
+
 static bool area1_read(sh770x_t *chip, uint32_t offset, uint32_t *value) {
+    if (sh7707_only(chip, offset)) {
+        *value = offset >= SCI_IRDA ? port_value(chip, (SCPDR - 0x100) / 2) : 0;
+        return true;
+    }
     switch (offset) {
     case 0x000: *value = chip->cpu->intevt2; return true;
     case 0x004: *value = chip->irr0; return true;
@@ -881,6 +899,7 @@ static uint32_t level_sensed(const sh770x_t *chip) {
 }
 
 static bool area1_write(sh770x_t *chip, uint32_t offset, uint32_t value) {
+    if (sh7707_only(chip, offset)) return true;
     switch (offset) {
     case 0x004: chip->irr0 &= (uint8_t)(value | ((chip->irq_lines ^ chip->irq_active_high) & level_sensed(chip))); return true;
     case 0x006: chip->irr1 &= (uint8_t)value; return true;
@@ -983,7 +1002,7 @@ bool sh770x_read(sh770x_t *chip, uint32_t pa, int size, uint32_t *value) {
         return true;
     }
     (void)size;
-    if (chip->variant == SH7707 && pa - AREA1_BASE < AREA1_SIZE) return area1_read(chip, pa - AREA1_BASE, value);
+    if (has_area1(chip) && pa - AREA1_BASE < AREA1_SIZE) return area1_read(chip, pa - AREA1_BASE, value);
     if (pa < SCI_BASE) return false;
     if (pa < TMU_BASE) { *value = sci_read(&chip->sci, pa - SCI_BASE); return true; }
     if (pa < RTC_BASE) { *value = tmu_read(chip, pa - TMU_BASE); return true; }
@@ -1020,7 +1039,7 @@ bool sh770x_write(sh770x_t *chip, uint32_t pa, int size, uint32_t value) {
     }
     (void)size;
     bool handled = true;
-    if (chip->variant == SH7707 && pa - AREA1_BASE < AREA1_SIZE) handled = area1_write(chip, pa - AREA1_BASE, value);
+    if (has_area1(chip) && pa - AREA1_BASE < AREA1_SIZE) handled = area1_write(chip, pa - AREA1_BASE, value);
     else if (pa < SCI_BASE) return false;
     else if (pa < TMU_BASE) sci_write(chip, pa - SCI_BASE, value);
     else if (pa < RTC_BASE) tmu_write(chip, pa - TMU_BASE, value);
