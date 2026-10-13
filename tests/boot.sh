@@ -35,16 +35,19 @@ card_check() {
     socket=/tmp/sh3emu-card-$$.sock
     rm -rf "$socket" "$OUT/$name" "$OUT/$name.back" && mkdir -p "$OUT/$name/files"
     echo "hello from the host" > "$OUT/$name/files/HELLO.TXT"
+    echo "lower case" > "$OUT/$name/files/readme.txt"
     sh tools/mkcard.sh "$OUT/$name.img" 16 "$OUT/$name/files" > /dev/null
     ./headless "$rom" --card="$OUT/$name.img" --seconds=300 --net="$net_at" --rapi="$socket" --realtime=4 > "$OUT/$name.log" 2>&1 &
     EMULATOR=$!
     for attempt in $(seq 1 200); do grep -q "^desktop: connection" "$OUT/$name.log" && break; sleep 0.5; done
     sleep 2
     rapi_tool --socket="$socket" get "\\$folder\\FILES\\HELLO.TXT" "$OUT/$name.back" > /dev/null 2>&1 || true
+    rapi_tool --socket="$socket" ls "\\$folder\\files" > "$OUT/$name.listing" 2>&1 || true
     kill $EMULATOR 2>/dev/null || true
     wait $EMULATOR 2>/dev/null || true
     rm -f "$socket"
     if cmp -s "$OUT/$name/files/HELLO.TXT" "$OUT/$name.back"; then echo "ok   $name"; else echo "FAIL $name"; tail -5 "$OUT/$name.log"; exit 1; fi
+    if grep -q ' readme\.txt$' "$OUT/$name.listing"; then echo "ok   $name keeps lower-case names"; else echo "FAIL $name keeps lower-case names"; cat "$OUT/$name.listing"; exit 1; fi
 }
 ethernet_check() {
     name=$1; rom=$2; net_at=$3; files=$4

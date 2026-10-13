@@ -45,7 +45,7 @@ tools/mkcard.sh card.img 16 ~/some/folder
 ./headless rom/nk-a51-ce1.01.bin --card=card.img --seconds=30
 ```
 
-`mkcard.sh` uses `hdiutil` on macOS and `sfdisk`, `mkfs.fat` and `mtools` on Linux. To read the image on the host, `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` on macOS or `mcopy -i card.img@@512` on Linux.
+`mkcard.sh` needs mtools (`brew install mtools` or `apt install mtools`). It formats with `hdiutil` on macOS or `sfdisk` and `mkfs.fat` on Linux, copies with `mcopy`, then `tools/fatcase.py` gives every short lower-case name a long-name entry. mtools and macOS store those names with the NT case flags, which CE ignores, so without it CE shows them in upper case. To read the image on the host, `mcopy -i card.img@@512`, or `hdiutil attach -imagekey diskimage-class=CRawDiskImage card.img` on macOS.
 
 The card has a CompactFlash CIS, a configuration option register, and ATA IDENTIFY, READ and WRITE SECTORS (LBA and CHS) through memory, contiguous I/O or primary/secondary I/O decoding.
 

@@ -19,6 +19,7 @@ install -D -m 644 assets/icon.svg "$root/usr/share/icons/hicolor/scalable/apps/$
 for size in 16 32 64 128 256 512; do install -D -m 644 "$icons/icon-$size.png" "$root/usr/share/icons/hicolor/${size}x${size}/apps/$package.png"; done
 for licence in licences/*; do install -D -m 644 "$licence" "$root/usr/share/doc/$package/licences/$(basename "$licence")"; done
 install -D -m 755 tools/mkcard.sh "$root/usr/share/$package/mkcard.sh"
+install -D -m 755 tools/fatcase.py "$root/usr/share/$package/fatcase.py"
 
 cat > "$root/usr/share/doc/$package/copyright" <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -68,7 +69,7 @@ Architecture: $arch
 Maintainer: Phil Howard <phil@pimoroni.com>
 Installed-Size: $size
 Depends: $depends
-Recommends: mtools, dosfstools, fdisk, fonts-dejavu-core | fonts-noto-core
+Recommends: mtools, dosfstools, fdisk, python3, fonts-dejavu-core | fonts-noto-core
 Section: otherosfs
 Priority: optional
 Description: Hitachi SH-3 Windows CE emulator
