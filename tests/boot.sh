@@ -341,3 +341,36 @@ if [ -f "$HP300_ROM" ]; then
 else
     echo "skip hp300: no $HP300_ROM (HP 300LX ROM image)"
 fi
+HPW_ROM=${HPW_ROM:-rom/hitachi-hpw-200ec-rom-full-12mb.bin}
+HPW_HASH=2f1586bd489abe32c8508a46187897a1e19145fc9403502052b1991d6bdc4b27
+HPW_TOUCH_HASH=0b5c314251372301b783a241c31a58ee02243a78a6c609e776c0d0c43c707490
+if [ -f "$HPW_ROM" ]; then
+    ./headless "$HPW_ROM" --seconds=20 --pgm="$OUT/hpw.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/hpw.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$HPW_HASH" ]; then echo "ok   hpw"; else echo "FAIL hpw $actual"; exit 1; fi
+    ./headless "$HPW_ROM" --seconds=30 --key=14:5A --key=16:5A --tap=18:320:120 --tap=20:64:24 --tap=22:64:216 \
+        --tap=24:576:216 --tap=26:576:24 --pgm="$OUT/hpw_touch.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/hpw_touch.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$HPW_TOUCH_HASH" ]; then echo "ok   hpw_touch"; else echo "FAIL hpw_touch $actual"; exit 1; fi
+    ./headless "$HPW_ROM" --seconds=26 --power=15 --power=22 --trace-pc > "$OUT/hpw_power.log" 2>&1
+    if grep -q "^t=1[7-9].* lcd=0" "$OUT/hpw_power.log" && grep -q "^t=25.* lcd=1" "$OUT/hpw_power.log"; then echo "ok   hpw_power"; else echo "FAIL hpw_power"; exit 1; fi
+    ./headless "$HPW_ROM" --seconds=20 --wav="$OUT/hpw_sound.wav" > /dev/null 2>&1
+    HPW_SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 2.4 < len(a) / 22050 < 2.6 and max(map(abs, a)) > 2000 else 1)'
+    if python3 -c "$HPW_SOUND" "$OUT/hpw_sound.wav"; then echo "ok   hpw_sound"; else echo "FAIL hpw_sound"; exit 1; fi
+    cable_check hpw_cable "$HPW_ROM" 20
+    if ./headless "$HPW_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then
+        echo "skip hpw_net: headless built without libslirp"
+    else
+        ./headless "$HPW_ROM" --seconds=50 --net=20 > "$OUT/hpw_net.log" 2>&1
+        if grep -q "^ppp: IPCP up" "$OUT/hpw_net.log" && grep -q "^desktop: Handheld_PC, Windows CE 2" "$OUT/hpw_net.log"; then echo "ok   hpw_net"; else echo "FAIL hpw_net"; exit 1; fi
+        rapi_check hpw_rapi "$HPW_ROM" 20
+        card_check hpw_card "$HPW_ROM" 20 "Storage Card"
+        if [ -d "$ETHERNET_FILES" ]; then
+            ethernet_check hpw_ethernet "$HPW_ROM" 20 "$ETHERNET_FILES"
+        else
+            echo "skip hpw_ethernet: no $ETHERNET_FILES (Socket LP-E CF SH3 driver files and tcpprobe.exe)"
+        fi
+    fi
+else
+    echo "skip hpw: no $HPW_ROM (Hitachi HPW-200EC full ROM image)"
+fi

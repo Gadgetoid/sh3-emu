@@ -10,7 +10,9 @@
 
 #include "core/casio.h"
 #include "core/ce.h"
+#include "core/dac_sound.h"
 #include "core/hp320lx.h"
+#include "core/hpw200ec.h"
 #include "core/pccard.h"
 #include "core/cfcard.h"
 #include "core/mailbox.h"
@@ -48,6 +50,7 @@
 #define SERIAL_TICKS_PER_SECOND 1000u
 #define SERIAL_TICK_CYCLES (MACHINE_CLOCK_HZ / SERIAL_TICKS_PER_SECOND)
 #define SERIAL_BITS_PER_BYTE 10u
+#define COLD_BOOT_PRESS_CYCLES (MACHINE_CLOCK_HZ / 5)
 
 #define UNKNOWN_SEEN       4096
 
@@ -83,6 +86,12 @@ struct machine {
     hp320lx_host_t hp_host;
     uint8_t  *flash;
     casio_t casio_board;
+    bool hitachi;
+    hpw200ec_t hitachi_board;
+    hpw200ec_host_t hitachi_host;
+    dac_sound_t hitachi_sound;
+    uint64_t power_release_at;
+    bool power_press_pending;
     casio_host_t casio_host;
     casio_audio_t casio_audio;
     debug_line_t sci_line;
@@ -172,6 +181,25 @@ static void hp_trace(void *context, bool write, uint32_t pa, int size, uint32_t 
     note_unknown(context, write ? "write board" : "read  board", pa, size, value);
 }
 
+static void hitachi_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
+    note_unknown(context, write ? "write board" : "read  board", pa, size, value);
+}
+
+static void hitachi_interrupt(void *context, bool asserted) {
+    machine_t *m = context;
+    sh770x_set_irq(&m->chip, HPW200EC_COMPANION_IRQ, asserted);
+}
+
+static void hitachi_transmit(void *context, uint8_t byte) {
+    machine_t *m = context;
+    if (m->serial_connected && m->serial_tx_count < SERIAL_FIFO) m->serial_tx[m->serial_tx_count++] = byte;
+}
+
+static pccard_slot_t hitachi_socket(void *context, int socket) {
+    machine_t *m = context;
+    return hpw200ec_socket(&m->hitachi_host, socket);
+}
+
 static bool casio_read_memory(void *context, uint32_t pa, uint8_t *data, uint32_t length) {
     machine_t *m = context;
     if (pa - DRAM_PA >= DRAM_AREA_SIZE) return false;
@@ -216,6 +244,11 @@ static void set_serial_lines(machine_t *m) {
         casio_serial_line(&m->casio_board, &m->casio_host, m->serial_connected);
         return;
     }
+    if (m->hitachi) {
+        hd64461_uart_connect(&m->hitachi_board.companion, &m->hitachi_host.companion, m->serial_connected);
+        return;
+    }
+    if (!m->hp) return;
     sh770x_set_port_input(&m->chip, HP320LX_SERIAL_PORT, HP320LX_SERIAL_NO_CABLE, m->serial_connected ? 0 : HP320LX_SERIAL_NO_CABLE);
     sh770x_set_irq(&m->chip, HP320LX_SERIAL_IRQ, m->serial_connected);
 }
@@ -228,6 +261,16 @@ static void onchip_serial_receive(machine_t *m) {
     int port = onchip_serial_port(m);
     uint32_t per_tick = machine_serial_baud(m) / SERIAL_BITS_PER_BYTE / SERIAL_TICKS_PER_SECOND;
     if (!per_tick) per_tick = 1;
+    if (m->hitachi) {
+        hd64461_t *companion = &m->hitachi_board.companion;
+        hd64461_uart_drain(companion, &m->hitachi_host.companion, per_tick);
+        while (per_tick-- && m->serial_rx_count && hd64461_uart_room(companion)) {
+            hd64461_uart_receive(companion, &m->hitachi_host.companion, m->serial_rx[m->serial_rx_head]);
+            m->serial_rx_head = (m->serial_rx_head + 1) % SERIAL_FIFO;
+            m->serial_rx_count--;
+        }
+        return;
+    }
     while (per_tick-- && m->serial_rx_count && sh770x_receive_room(&m->chip, port)) {
         sh770x_receive(&m->chip, port, m->serial_rx[m->serial_rx_head]);
         m->serial_rx_head = (m->serial_rx_head + 1) % SERIAL_FIFO;
@@ -268,6 +311,13 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     pa &= AREA_MASK;
     if (sh770x_read(&m->chip, pa, size, value)) return true;
     if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, false, value)) return true;
+    if (m->hitachi && hpw200ec_card_access(&m->hitachi_board, &m->hitachi_host, pa, size, false, value)) return true;
+    if (m->hitachi && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (hpw200ec_read(&m->hitachi_board, &m->hitachi_host, pa, size, value)) return true;
+        note_unknown(m, "read ", pa, size, 0);
+        *value = 0;
+        return true;
+    }
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_read(&m->hp_board, &m->hp_host, pa, size, value);
     }
@@ -311,6 +361,11 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     pa &= AREA_MASK;
     if (sh770x_write(&m->chip, pa, size, value)) return true;
     if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, true, &value)) return true;
+    if (m->hitachi && hpw200ec_card_access(&m->hitachi_board, &m->hitachi_host, pa, size, true, &value)) return true;
+    if (m->hitachi && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (!hpw200ec_write(&m->hitachi_board, &m->hitachi_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
+        return true;
+    }
     if (m->hp && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         return hp320lx_write(&m->hp_board, &m->hp_host, pa, size, value);
     }
@@ -353,6 +408,11 @@ static void onchip_transmit(void *context, int port, uint8_t byte) {
     debug_character(m, &m->sci_line, byte);
 }
 
+static void hitachi_ports_written(void *context) {
+    machine_t *m = context;
+    hpw200ec_ports_written(&m->hitachi_board, &m->hitachi_host);
+}
+
 static void hp_ports_written(void *context) {
     machine_t *m = context;
     hp320lx_ports_written(&m->hp_board, &m->hp_host);
@@ -374,6 +434,11 @@ static void hp_dac_written(void *context, int channel, uint8_t value, uint64_t c
 
 static void hp_sample(void *context, int16_t sample) {
     audio_push(context, sample);
+}
+
+static void hitachi_dac_written(void *context, int channel, uint8_t value, uint64_t cycle) {
+    machine_t *m = context;
+    if (channel == HPW200EC_SOUND_DAC) dac_sound_write(&m->hitachi_sound, MACHINE_CLOCK_HZ, AUDIO_RATE, value, cycle, hp_sample, m);
 }
 
 static void casio_samples(void *context, const int16_t *samples, uint32_t count, uint32_t rate) {
@@ -613,7 +678,9 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     if (keep_ram) {
         sh770x_reset(&m->chip);
     } else {
-        sh770x_init(&m->chip, &m->cpu, m->hp ? SH7707 : SH7708, MACHINE_CLOCK_HZ, m->hp ? HP320LX_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ);
+        sh770x_variant_t variant = m->hp ? SH7707 : m->hitachi ? SH7709 : SH7708;
+        uint32_t peripheral_hz = m->hp ? HP320LX_PERIPHERAL_HZ : m->hitachi ? HPW200EC_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ;
+        sh770x_init(&m->chip, &m->cpu, variant, MACHINE_CLOCK_HZ, peripheral_hz);
         sh770x_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
         if (m->host_clock) apply_host_time(m);
     }
@@ -621,6 +688,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     casio_reset(&m->casio_board);
     memset(&m->casio_audio, 0, sizeof m->casio_audio);
     hp320lx_reset(&m->hp_board);
+    hpw200ec_reset(&m->hitachi_board);
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
     m->audio_count = 0;
@@ -632,6 +700,15 @@ static void reset_machine(machine_t *m, bool keep_ram) {
         m->chip.ports_written = hp_ports_written;
         hp320lx_power_on(&m->hp_board, &m->hp_host);
         hp320lx_cards_changed(&m->hp_host);
+    }
+    m->power_release_at = 0;
+    m->power_press_pending = false;
+    if (m->hitachi) {
+        memset(&m->hitachi_sound, 0, sizeof m->hitachi_sound);
+        m->chip.dac_written = hitachi_dac_written;
+        m->chip.ports_written = hitachi_ports_written;
+        hpw200ec_power_on(&m->hitachi_board, &m->hitachi_host);
+        m->power_press_pending = !keep_ram;
     }
     set_serial_lines(m);
     m->serial_rx_count = m->serial_tx_count = 0;
@@ -646,9 +723,12 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->rom_hash = hash_bytes(rom, rom_size);
     m->hp_model = hp320lx_detect(rom, rom_size);
     m->hp = m->hp_model != HP_MODEL_NONE;
-    m->casio = !m->hp;
+    m->hitachi = !m->hp && hpw200ec_detect(rom, rom_size);
+    m->casio = !m->hp && !m->hitachi;
     m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
                                    .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
+    m->hitachi_host = (hpw200ec_host_t){ .trace = hitachi_trace, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .context = m,
+                                         .companion = { .trace = hitachi_trace, .transmit = hitachi_transmit, .interrupt = hitachi_interrupt, .socket = hitachi_socket, .context = m } };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
     if (!load_flash(m, error, error_size)) {
@@ -680,14 +760,27 @@ void machine_set_log(machine_t *m, machine_log_fn log) {
 
 static void pending_card_event(machine_t *m);
 
+static void power_release_event(machine_t *m) {
+    if (m->power_press_pending && m->cpu.sleeping) {
+        m->power_press_pending = false;
+        hpw200ec_power_button(&m->hitachi_board, &m->hitachi_host, true);
+        m->power_release_at = m->cpu.cycles + COLD_BOOT_PRESS_CYCLES;
+    }
+    if (!m->power_release_at || m->cpu.cycles < m->power_release_at) return;
+    m->power_release_at = 0;
+    hpw200ec_power_button(&m->hitachi_board, &m->hitachi_host, false);
+}
+
 static uint64_t next_event(machine_t *m) {
     uint64_t next = sh770x_next_event(&m->chip);
     if (m->casio) {
         uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
         if (board_next < next) next = board_next;
     }
-    if (m->serial_rx_count && m->serial_tick_at < next) next = m->serial_tick_at;
+    bool serial_busy = m->serial_rx_count || (m->hitachi && hd64461_uart_sending(&m->hitachi_board.companion));
+    if (serial_busy && m->serial_tick_at < next) next = m->serial_tick_at;
     if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
+    if (m->power_release_at && m->power_release_at < next) next = m->power_release_at;
     return next;
 }
 
@@ -697,6 +790,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
     while (m->cpu.cycles < target) {
         sh770x_advance(&m->chip);
         pending_card_event(m);
+        power_release_event(m);
         serial_tick_event(m);
         if (m->casio) {
             casio_update(&m->casio_board, &m->casio_host);
@@ -749,6 +843,7 @@ bool machine_lcd_enabled(machine_t *m) {
 }
 bool machine_backlight(machine_t *m) {
     if (m->casio) return machine_lcd_enabled(m) && casio_backlight(&m->casio_board);
+    if (m->hitachi) return machine_lcd_enabled(m);
     return machine_lcd_enabled(m) && !(m->chip.ports[HP320LX_BACKLIGHT_PORT] & HP320LX_BACKLIGHT_OFF);
 }
 
@@ -762,6 +857,7 @@ void machine_backlight_button(machine_t *m, bool down) {
 
 screen_size_t machine_screen_size(machine_t *m) {
     if (m->casio) return (screen_size_t){ CASIO_SCREEN_WIDTH, CASIO_SCREEN_HEIGHT };
+    if (m->hitachi) return (screen_size_t){ HPW200EC_SCREEN_WIDTH, HPW200EC_SCREEN_HEIGHT };
     return (screen_size_t){ HP320LX_SCREEN_WIDTH, HP320LX_SCREEN_HEIGHT };
 }
 
@@ -779,7 +875,7 @@ bool machine_set_screen(machine_t *m, screen_size_t size) {
 }
 
 int machine_screen_palette(machine_t *m, uint32_t *palette) {
-    (void)m;
+    if (m->hitachi) return hpw200ec_palette(&m->hitachi_board, palette);
     (void)palette;
     return 0;
 }
@@ -787,6 +883,10 @@ int machine_screen_palette(machine_t *m, uint32_t *palette) {
 bool machine_screen(machine_t *m, uint8_t *levels) {
     if (m->casio) {
         casio_screen(&m->casio_board, levels);
+        return true;
+    }
+    if (m->hitachi) {
+        hpw200ec_screen(&m->hitachi_board, levels);
         return true;
     }
     const uint16_t *frame = m->chip.lcd_frame;
@@ -804,6 +904,7 @@ void machine_key(machine_t *m, uint8_t scancode, bool up) {
         return;
     }
     if (m->hp) hp320lx_key(&m->hp_board, &m->hp_host, scancode, up, machine_suspended(m));
+    if (m->hitachi) hpw200ec_key(&m->hitachi_board, &m->hitachi_host, scancode, up);
 }
 
 void machine_touch(machine_t *m, bool down, int x, int y) {
@@ -812,10 +913,16 @@ void machine_touch(machine_t *m, bool down, int x, int y) {
         return;
     }
     if (m->hp) hp320lx_touch(&m->hp_board, &m->hp_host, down, x, y);
+    if (m->hitachi) hpw200ec_touch(&m->hitachi_board, &m->hitachi_host, down, x, y);
 }
 bool machine_suspended(machine_t *m) {
     if (m->casio && (m->cpu.sr & SH3_SR_IMASK) != SH3_SR_IMASK) return false;
     return m->cpu.sleeping && (m->chip.stbcr & STBCR_STANDBY);
+}
+
+static void cards_changed(machine_t *m) {
+    if (m->hp) hp320lx_cards_changed(&m->hp_host);
+    if (m->hitachi) hpw200ec_cards_changed(&m->hitachi_board, &m->hitachi_host);
 }
 
 static bool insert_card_now(machine_t *m, const char *path) {
@@ -824,7 +931,7 @@ static bool insert_card_now(machine_t *m, const char *path) {
     cfcard_insert(&m->card_slot, image);
     snprintf(m->card_path, sizeof m->card_path, "%s", path);
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
-    if (m->hp) hp320lx_cards_changed(&m->hp_host);
+    cards_changed(m);
     return true;
 }
 
@@ -846,7 +953,7 @@ static void pending_card_event(machine_t *m) {
     if (m->pending_ethernet) {
         m->pending_ethernet = false;
         ne2000_insert(&m->ethernet, m->pending_ethernet_mac);
-        hp320lx_cards_changed(&m->hp_host);
+        cards_changed(m);
     }
     if (m->pending_card[0] && !insert_card_now(m, m->pending_card)) machine_logf(m, "card: cannot open %s\n", m->pending_card);
     m->pending_card[0] = 0;
@@ -860,30 +967,30 @@ static void swap_cards_later(machine_t *m) {
 }
 
 bool machine_has_ethernet_slot(machine_t *m) {
-    return m->hp;
+    return m->hp || m->hitachi;
 }
 
 bool machine_insert_ethernet(machine_t *m, const uint8_t mac[6]) {
     if (!machine_has_ethernet_slot(m)) return false;
     if (m->ethernet.inserted || m->pending_ethernet) return true;
-    if (m->card.inserted) {
+    if (m->card.inserted && m->hp) {
         swap_cards_later(m);
         m->pending_ethernet = true;
         memcpy(m->pending_ethernet_mac, mac, 6);
-        hp320lx_cards_changed(&m->hp_host);
+        cards_changed(m);
         return true;
     }
     ne2000_insert(&m->ethernet, mac);
-    hp320lx_cards_changed(&m->hp_host);
+    cards_changed(m);
     return true;
 }
 
 void machine_eject_ethernet(machine_t *m) {
     m->pending_ethernet = false;
     if (!m->ethernet.inserted) return;
-    if (m->card.inserted) swap_cards_later(m);
+    if (m->card.inserted && m->hp) swap_cards_later(m);
     ne2000_eject(&m->ethernet);
-    if (m->hp) hp320lx_cards_changed(&m->hp_host);
+    cards_changed(m);
 }
 
 bool machine_ethernet_inserted(machine_t *m) {
@@ -895,8 +1002,8 @@ size_t machine_ethernet_take(machine_t *m, uint8_t *frame, size_t max) {
 }
 
 void machine_ethernet_give(machine_t *m, const uint8_t *frame, size_t length) {
-    if (!ne2000_receive(&m->ethernet, frame, length) || !m->hp) return;
-    hp320lx_cards_changed(&m->hp_host);
+    if (!ne2000_receive(&m->ethernet, frame, length)) return;
+    cards_changed(m);
 }
 
 void machine_eject_card(machine_t *m) {
@@ -906,7 +1013,7 @@ void machine_eject_card(machine_t *m) {
     cfcard_eject(&m->card_slot);
     m->card_path[0] = 0;
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
-    if (m->hp) hp320lx_cards_changed(&m->hp_host);
+    cards_changed(m);
 }
 
 bool machine_card_inserted(machine_t *m) {
@@ -925,11 +1032,13 @@ bool machine_serial_connected(machine_t *m) {
 
 bool machine_serial_dtr(machine_t *m) {
     if (m->hp) return hp320lx_serial_dtr(&m->hp_host);
+    if (m->hitachi) return hd64461_uart_dtr(&m->hitachi_board.companion);
     return m->serial_connected;
 }
 
 uint32_t machine_serial_baud(machine_t *m) {
     if (m->casio) return casio_serial_baud(&m->casio_board);
+    if (m->hitachi) return hd64461_uart_baud(&m->hitachi_board.companion);
     return sh770x_baud(&m->chip, HP320LX_SERIAL_SCIF);
 }
 
@@ -1044,6 +1153,10 @@ uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
 }
 void machine_power_button(machine_t *m, bool down) {
+    if (m->hitachi) {
+        hpw200ec_power_button(&m->hitachi_board, &m->hitachi_host, down);
+        return;
+    }
     if (m->hp) {
         hp320lx_power_button(&m->hp_board, &m->hp_host, down, machine_suspended(m));
         return;
@@ -1061,6 +1174,7 @@ void machine_power_button(machine_t *m, bool down) {
 
 int machine_rom_system(machine_t *m) {
     if (m->casio) return MACHINE_BOARD_CASIO;
+    if (m->hitachi) return MACHINE_BOARD_HPW200EC;
     return m->hp_model == HP_MODEL_300LX ? MACHINE_BOARD_HP300LX : MACHINE_BOARD_HP;
 }
 
@@ -1069,6 +1183,7 @@ const char *machine_board_name(int board) {
     case MACHINE_BOARD_CASIO: return "Casio A-51";
     case MACHINE_BOARD_HP: return "HP 320LX";
     case MACHINE_BOARD_HP300LX: return "HP 300LX";
+    case MACHINE_BOARD_HPW200EC: return "Hitachi HPW-200EC";
     default: return "Unknown";
     }
 }
@@ -1105,7 +1220,7 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-#define STATE_FIELD_COUNT 8
+#define STATE_FIELD_COUNT 9
 
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
@@ -1117,6 +1232,7 @@ static void state_fields(machine_t *m, state_field_t *fields) {
         { "casio_audio", &m->casio_audio, sizeof m->casio_audio, NULL, 0, NULL },
         { "hp_board", &m->hp_board, sizeof m->hp_board, NULL, 0, NULL },
         { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0, NULL },
+        { "hpw200ec_board", &m->hitachi_board, sizeof m->hitachi_board, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
 }
@@ -1147,6 +1263,8 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     }
     if (host_time) *host_time = state_host_time(&file);
     m->agent_poll_at = 0;
+    m->power_release_at = 0;
+    m->power_press_pending = false;
     sh3_debug_t *debug = m->cpu.debug;
     memset(&m->ethernet, 0, sizeof m->ethernet);
     m->pending_ethernet = false;
@@ -1178,8 +1296,9 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     if (!image) m->card_path[0] = 0;
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
-    m->chip.ports_written = m->hp ? hp_ports_written : NULL;
-    m->chip.dac_written = m->hp ? hp_dac_written : NULL;
+    m->chip.ports_written = m->hp ? hp_ports_written : m->hitachi ? hitachi_ports_written : NULL;
+    m->chip.dac_written = m->hp ? hp_dac_written : m->hitachi ? hitachi_dac_written : NULL;
+    memset(&m->hitachi_sound, 0, sizeof m->hitachi_sound);
     m->audio_count = 0;
     memset(&m->hp_runtime, 0, sizeof m->hp_runtime);
     sh3_flush_translations(&m->cpu);

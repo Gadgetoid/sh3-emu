@@ -1,6 +1,6 @@
 # sh3-emu
 
-An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs of the Casio Cassiopeia A-51 (CE 1.01, Japanese), the HP 300LX (CE 1.0) and the HP 320LX (CE 2.0), with a simulated LCD, the keyboard and touch panel, PC Card images, a serial port with a PPP network, and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
+An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs of the Casio Cassiopeia A-51 (CE 1.01, Japanese), the HP 300LX (CE 1.0), the HP 320LX (CE 2.0) and the Hitachi HPW-200EC (CE 2.0), with a simulated LCD, the keyboard and touch panel, PC Card images, a serial port with a PPP network, and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
 
 ![HP 320LX World Clock, CE 2.0](docs/screenshots/hp-320lx.png)
 ![Casio Cassiopeia A-51 time zone, CE 1.01](docs/screenshots/casio-a51.png)
@@ -21,6 +21,7 @@ No ROMs are included. Put them in the `roms` folder of the data folder (see GUI)
 | Casio Cassiopeia A-51 | a raw dump of its flash | 1.01 (Japanese) | desktop, keyboard, touch, sound, backlight, suspend and resume, PC Card, serial, dictionary ROM |
 | HP 300LX | a raw dump of its flash | 1.0 | boots to the desktop |
 | HP 320LX | a raw dump of its flash | 2.0 | setup wizard, keyboard, touch, sound, backlight, suspend and resume, serial |
+| Hitachi HPW-200EC | a dump of its whole 12 MB ROM, boot loader included | 2.0 | setup wizard, keyboard, touch, colour, sound, suspend and resume, serial, CompactFlash, Ethernet |
 
 ## Running
 
@@ -178,17 +179,40 @@ A ROM image without `hplib.dll` but with `hpst.exe` runs as the HP 300LX: HP's W
 - **Port L reads 0x12** on the 300LX, as on the real one: bit 5 is clear, so there's no backlight.
 - **The framebuffer is at DRAM 0x0C004800**, just below where this kernel's RAM starts.
 - **Booting:** it goes to the desktop and runs HP's demo. `filesys.exe` reports an exception early on (a NULL read at 0x2239A) and carries on.
+## Hitachi HPW-200EC
+
+A ROM image containing `dlpncfg.cpl` runs on the Hitachi HPW-200EC, a "Wide color H/PC": Windows CE 2.00 on an SH7709 with an HD64461 companion chip and Hitachi's "DOLPHIN" gate array. The ROM needs to be the whole 12 MB from physical 0: Hitachi's boot loader and test monitor are in the first 256 KB, and the CE image starts at 0x40000. `make test` uses `rom/hitachi-hpw-200ec-rom-full-12mb.bin` (or `HPW_ROM=PATH`) if it's there.
+
+After a cold reset the boot loader sleeps until the power key is pressed; the emulator presses it for 0.2 s when the loader first sleeps, as a user turning it on would, so CE starts on its own. It boots to the H/PC Setup Wizard in colour.
+
+```
+./headless rom/hitachi-hpw-200ec-rom-full-12mb.bin --seconds=30 --key=14:5A --key=16:5A --tap=18:320:120 --tap=20:64:24 \
+    --tap=22:64:216 --tap=24:576:216 --tap=26:576:24 --png=calibrated.png
+```
+
+That presses Enter twice and taps the five calibration targets.
+
+- **Keyboard:** a 12x8 matrix on the CPU's ports. Rows are driven low on PE6, PE3, PE1, PE0, PC7-PC2 and PD1; row 11 is a key wired straight to ground. Columns are read on PC0 and PF1-PF7, which also raise PINT interrupts. Column PC0 holds the application and hotkey buttons (VK 0xC1-0xCA and 0xCF, on F1-F11) and the power key (VK_OFF, at PD1 x PC0).
+- **Touch:** sampled by the kernel. Pen down pulls PH6 low and IRQ2; X is on A/D channel B and Y on channel A, 64-960 across the screen.
+- **Serial:** COM1 is the HD64461's UART, so `--net`, `--cable`, `--pty`, `--tcp` and RAPI work as on the HPs. The desktop connection starts at 19200 baud.
+- **Cards:** `--card` goes in the CompactFlash slot (HD64461 socket 1, area 5) and mounts as `\Storage Card`; `--ethernet` uses the PC Card slot (socket 0, area 6).
+- **Sound:** wavedev.dll's DMA channel 3 copies samples to D/A channel 0 at the compare match timer's rate.
+
 ## What's emulated
 
 - CPU (`src/core/sh3.c`): the SH-3 instruction set, little-endian, with delay slots; banked registers, SR.MD/RB/BL; exceptions, TRAPA and interrupts through VBR+0x100/0x400/0x600 with EXPEVT, INTEVT, TRA, SPC and SSR; the MMU with the 128-entry 4-way UTLB, 1 KB and 4 KB pages, ASIDs, shared pages, MMUCR (AT, IX, TF, RC, SV), LDTLB, TLB miss, invalid, protection and initial page write exceptions, and the memory-mapped TLB arrays; SLEEP. No FPU or DSP.
-- On-chip peripherals (`src/core/sh770x.c`), SH7708 and SH7707: the INTC (IRL levels, IPRA to IPRF, IRQ0-5 on the SH7707, with edge or level sense per line), TMU channels 0-2 with underflow interrupts, the RTC (BCD counters, 64 Hz counter, alarm, periodic and carry interrupts), SCI, the two SH7707 SCIFs, the SH7707 DMA controller (four channels, compare match timer requests), compare match timer and D/A converter, the SH7707 A/D converter (single and multi modes, ADI), its split INTEVT/INTEVT2 codes and port input pins set by the board, and the SH7707's LCD controller (index, display, 16-entry palette and DMA registers) and PC Card controller (two sockets, with card status, change and enable registers and their interrupts at 0x9C0 and 0x9E0), and register storage for the BSC, CPG, WDT, CCR and the SH7707 ports. The cache isn't modelled.
+- On-chip peripherals (`src/core/sh770x.c`), SH7708, SH7707 and SH7709 (the SH7707 without its LCD and PC Card controllers, with PINT0-15 on ports C and F): the INTC (IRL levels, IPRA to IPRF, IRQ0-5 on the SH7707, with edge or level sense per line), TMU channels 0-2 with underflow interrupts, the RTC (BCD counters, 64 Hz counter, alarm, periodic and carry interrupts), SCI, the two SH7707 SCIFs, the SH7707 DMA controller (four channels, compare match timer requests), compare match timer and D/A converter, the SH7707 A/D converter (single and multi modes, ADI), its split INTEVT/INTEVT2 codes and port input pins set by the board, and the SH7707's LCD controller (index, display, 16-entry palette and DMA registers) and PC Card controller (two sockets, with card status, change and enable registers and their interrupts at 0x9C0 and 0x9E0), and register storage for the BSC, CPG, WDT, CCR and the SH7707 ports. The cache isn't modelled.
 - Machine (`src/core/machine.c`): 16 MB DRAM at 0x0C000000 (`--memory` gives 2 to 64 MB, down to what the real machines had: 2 MB on the HP 300LX, 4 MB on the 320LX and the Casio A-50, 8 MB on the A-51), the flash image at physical 0, the Casio dictionary ROM at 0x04000000, the serial FIFO behind COM1, the card slot, the host mailbox and saved states.
 
 - Casio Cassiopeia A-51 board (`src/core/casio.c`): flash at physical 0, the 480x240 2 bpp display in 128 KB of video RAM at 0x08000000 (256 bytes a line), the board ASIC's register file at 0x10000000 (its write unlock, the power status, the PC Card socket (status at 0x326, card detect active low; its windows at 0x18000000, 0x19000000 and 0x1A000000 for attribute, common and I/O; a status change interrupt on vector 14 and the card's interrupt on vector 3) and an empty second socket (status at 0x282, windows in area 5), the backlight (0x08 bits 6 and 7; the key is at row 1, column 7 of the matrix), the AC adapter (0x260 bit 1), COM1's DSR (0x234 bit 2) with its edge enables and flags at 0x52 (an interrupt on vector 8) and its baud rate at 0x230 and 0x232, its interrupt mask, status, write-1-to-clear register and vector on an IRL, the pin registers at 0x40-0x66 reading inactive, the key matrix: rows selected at 0xE4, active-low columns at 0xE6, an interrupt while a key is down in the selected rows, and the touch panel: an interrupt on pen down, pen up at 0x8A, X and Y conversions selected by 0x8C and read from 0x98-0x9C, 64-960 across the screen), and the CPU's extra on-chip registers: two 32-bit up-counting timers at 0xFFFFFE20 and 0xFFFFFE40 with compare interrupts (INTEVT 0x6C0 and 0x6E0, priorities in 0xFFFFFEE6; clocked at the peripheral clock / 16, a guess), an SCIF at 0xFFFFFE70 (COM1; INTEVT 0x700-0x760, priority in 0xFFFFFEE6 bits 7-4), and register storage at 0xFFFFFE00 and 0xFFFFD000. The kernel scans the keys and samples the touch panel from the 0xFFFFFE20 timer's interrupt. The kernel's debug output is on the on-chip SCI. The kernel's startup calls an on-chip routine at 0xE00001DE, which isn't in the image; it's emulated as returning straight away. Not modelled: the ON key other than at the first cold boot, suspend, the battery, audio, and the second socket.
 
 - HP 320LX board (`src/core/hp320lx.c`): flash at physical 0, the 640x240 2 bpp display at DRAM 0x0C005000 (0x0C004800 with the 300LX's CE 1.0; 160 bytes a line), the companion ASIC at 0x02000000 as register storage with its debug UART (output on `--debug-output`) and its parallel-port link reporting no host, the battery A/D channels reading a healthy level, port L reading 0x32 as on a real 320LX (0x12 on the 300LX): bit 4 is the "Luke" hardware (2 bpp display, 44 MHz clock setup) and bit 5 a backlit screen, which gives Display its Backlight tab, the key matrix: rows driven low on PB3-7, PJ4, SCPT3 and PD7, columns read on PA0-7 and PB0-2, the touch panel: pen down on IRQ3 and A/D channel A while PH7 is low, X on channel A with PK2 high and Y on channel B with PK0 high, 64-960 across the screen, the ON key on IRQ0, the AC adapter on PD4, the backlight on PC3 (low is lit; the backlight key is row 7, column 4 of the matrix, which the kernel handles itself), the compare match timer, DMA channels 0 and 2 and D/A channel 1 for sound, and COM1 on SCIF2 with the cable detect on PH2 and IRQ2 (falling edge when it goes in, rising when it comes out) and DTR on PC2.
 
-Guest time is the instruction count at 58.98 MHz. The peripheral clock is 10 MHz on the Casio A-51 and 11.0592 MHz on the HP 320LX, which give both kernels their 25 ms tick and the HP's serial driver its exact baud rates.
+- HD64461 companion chip (`src/core/hd64461.c`), at 0x10000000 with every block 0x10000 below where Linux's `hd64461.h` puts it: the LCD controller's power handshake and 256-entry palette, 512 KB of frame buffer at 0x12000000, the two PC Card sockets (status, change and enable registers; windows in areas 6 and 5), a 16550 UART at 0x10008000 with registers 2 bytes apart and a 1.8432 MHz clock, the interrupt request and mask registers (UART, both sockets) and register storage for the rest.
+
+- Hitachi HPW-200EC board (`src/core/hpw200ec.c`): the boot loader and ROM at physical 0, the HD64461 on IRQ4, the key matrix, touch panel and power key above, the card slots, and the DOLPHIN gate array at 0x0A000000 as register storage.
+
+Guest time is the instruction count at 58.98 MHz. The peripheral clock is 10 MHz on the Casio A-51, 11.0592 MHz on the HP 320LX and 24 MHz on the HPW-200EC, which give both kernels their 25 ms tick and the HP's serial driver its exact baud rates.
 
 Not yet: the IR port, an I/O card in the 320LX's CompactFlash slot (Card Services won't map windows for one there), and cards other than CompactFlash storage and the NE2000.
 
@@ -196,7 +220,7 @@ Not yet: the IR port, an I/O card in the 320LX's CompactFlash slot (Card Service
 
 `make sh3emu` builds the windowed app (`make app` wraps it as `SH3Emu.app` on macOS). It runs the machine with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus, and takes `--card`, `--net`, `--memory`, `--agent` and `--gdb` like `headless`; Devices has the card and the serial port. Machines, states, snapshots and the ROMs folder live in `$XDG_DATA_HOME/sh3-emu` (otherwise `~/Library/Application Support/sh3-emu` on macOS, `~/.local/share/sh3-emu` elsewhere), and settings in `sh3emu.ini` in `$XDG_CONFIG_HOME/sh3-emu` (otherwise that data folder on macOS, `~/.config/sh3-emu` elsewhere), so it doesn't share anything with velo-emu.
 
-Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Power Button (Cmd-Shift-P) presses the HP 320LX's ON key, which wakes it from suspend, and the Casio A-51's. Devices > Sound turns the sound off and on. Machine > Backlight (Cmd-B) presses the backlight key, and is ticked while the backlight is on; the screen is drawn unlit until it is. On the HP 320LX, F9 is the backlight key too, as it's in F9's place in the key matrix. The title bar says when the machine is suspended.
+Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Power Button (Cmd-Shift-P) presses the HP 320LX's ON key, which wakes it from suspend, the Casio A-51's, and the HPW-200EC's power key. Devices > Sound turns the sound off and on. Machine > Backlight (Cmd-B) presses the backlight key, and is ticked while the backlight is on; the screen is drawn unlit until it is. On the HP 320LX, F9 is the backlight key too, as it's in F9's place in the key matrix. The title bar says when the machine is suspended.
 
 Machine > CPU Speed > Optimisations (`--optimisations=on|off`, kept in `sh3emu.ini`; on by default on Android; `headless --optimisations`) does some of CE's work natively and skips work that only waits for time to pass:
 
