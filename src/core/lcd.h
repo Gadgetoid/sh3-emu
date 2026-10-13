@@ -9,7 +9,7 @@
 
 extern uint8_t lcd_framebuffer[SCREEN_MAX_WIDTH * SCREEN_MAX_HEIGHT];
 
-#define LCD_PALETTE_MAX 16
+#define LCD_PALETTE_MAX 256
 
 void      lcd_set_size(int width, int height);
 void      lcd_set_palette(const uint32_t *palette, int count);
