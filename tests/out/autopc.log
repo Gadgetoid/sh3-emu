@@ -1,0 +1,27 @@
+write 000000EC (4) = 00000000 at pc AC401E62
+debug: ?
+debug: Windows CE Kernel for Hitachi SH Built on Nov  3 1998 at 21:02:47
+debug: CPUType=SH3 FQCR=0
+debug: CCR=0003
+debug: TicksPerPeriod=23039 TicksTo64kMSec=71
+debug: Hooking SH-3 ISR 0-15
+debug: 
+debug:  PCI Delay start... 
+debug: 
+debug:  PCI Delay end... 
+debug: Normal System Boot
+debug: APCCRSUP: Mapping LED register for Watchdog
+write 11804000 (2) = 00002E35 at pc 01D510EC
+write 11804004 (2) = 00000005 at pc 01D510F6
+read  faceplate 0A028004 (4) = 00000000 at pc 8C404A20
+write faceplate 0A028004 (4) = 00000002 at pc 8C404A24
+write faceplate 0A028000 (4) = 00000007 at pc 01DC0DC6
+debug: FPLIO: FPL_Init
+debug: FPL_Init Succeeded
+write 11804000 (2) = 00002E35 at pc 01D50FF6
+pc=8C402280 pr=8C40E1D4 sr=50000001 spc=FFFFFD5D ssr=00000001 vbr=8C40DE40 expevt=0E0 intevt=400 tea=FFFFFD5D mmucr=00000041
+r0 =FFFFFE90 r1 =B100A000 r2 =8C0217E0 r3 =000059E7
+r4 =00000000 r5 =00000000 r6 =00000038 r7 =400000F0
+r8 =8C40226C r9 =8C021884 r10=00000232 r11=00003746
+r12=00000000 r13=00000000 r14=8C3F6404 r15=8C0217E0
+cycles=884736012 sleeping=1 irl=0

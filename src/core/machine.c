@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "core/autopc.h"
 #include "core/casio.h"
 #include "core/ce.h"
 #include "core/dac_sound.h"
@@ -28,6 +29,8 @@
 #define AREA_MASK          0x1FFFFFFFu
 #define FLASH_SIZE         (16u << 20)
 #define RESET_VECTOR       0xA0000000u
+#define AUTOPC_IRL_LEVEL   8u
+#define AUTOPC_PERIPHERAL_HZ 14745600u
 #define P4_ROUTINES_END    0xE0010000u
 #define STBCR_STANDBY      0x80u
 #define SCANCODE_BACKLIGHT 0x5E
@@ -94,6 +97,9 @@ struct machine {
     bool power_press_pending;
     casio_host_t casio_host;
     casio_audio_t casio_audio;
+    bool autopc;
+    autopc_t board;
+    autopc_host_t board_host;
     debug_line_t sci_line;
 
     cfcard_t card;
@@ -188,6 +194,16 @@ static void hitachi_trace(void *context, bool write, uint32_t pa, int size, uint
 static void hitachi_interrupt(void *context, bool asserted) {
     machine_t *m = context;
     sh770x_set_irq(&m->chip, HPW200EC_COMPANION_IRQ, asserted);
+}
+
+static void autopc_trace(void *context, bool write, uint32_t pa, int size, uint32_t value) {
+    note_unknown(context, write ? "write faceplate" : "read  faceplate", pa, size, value);
+}
+
+static void autopc_irl(void *context, bool asserted) {
+    machine_t *m = context;
+    uint32_t level = asserted ? AUTOPC_IRL_LEVEL : 0;
+    if (m->chip.irl_level != level) sh770x_set_irl(&m->chip, level);
 }
 
 static void hitachi_transmit(void *context, uint8_t byte) {
@@ -312,6 +328,12 @@ static bool bus_read(void *context, uint32_t pa, int size, uint32_t *value) {
     if (sh770x_read(&m->chip, pa, size, value)) return true;
     if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, false, value)) return true;
     if (m->hitachi && hpw200ec_card_access(&m->hitachi_board, &m->hitachi_host, pa, size, false, value)) return true;
+    if (m->autopc && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (autopc_read(&m->board, &m->board_host, pa, size, value)) return true;
+        note_unknown(m, "read ", pa, size, 0);
+        *value = 0;
+        return true;
+    }
     if (m->hitachi && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         if (hpw200ec_read(&m->hitachi_board, &m->hitachi_host, pa, size, value)) return true;
         note_unknown(m, "read ", pa, size, 0);
@@ -362,6 +384,10 @@ static bool bus_write(void *context, uint32_t pa, int size, uint32_t value) {
     if (sh770x_write(&m->chip, pa, size, value)) return true;
     if (m->hp && hp320lx_card_access(&m->hp_host, pa, size, true, &value)) return true;
     if (m->hitachi && hpw200ec_card_access(&m->hitachi_board, &m->hitachi_host, pa, size, true, &value)) return true;
+    if (m->autopc && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
+        if (!autopc_write(&m->board, &m->board_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
+        return true;
+    }
     if (m->hitachi && pa - DRAM_PA >= DRAM_AREA_SIZE && pa >= FLASH_SIZE) {
         if (!hpw200ec_write(&m->hitachi_board, &m->hitachi_host, pa, size, value)) note_unknown(m, "write", pa, size, value);
         return true;
@@ -502,6 +528,40 @@ static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *load_pa
     return false;
 }
 
+static bool load_b000ff(machine_t *m, uint8_t *dram, uint32_t dram_size, char *error, size_t error_size) {
+    const uint8_t *file = m->image;
+    size_t size = m->image_size;
+    if (size < 15 || memcmp(file, "B000FF\n", 7)) {
+        snprintf(error, error_size, "not a B000FF (nk.bin) image");
+        return false;
+    }
+    size_t p = 15;
+    while (p + 12 <= size) {
+        uint32_t address = read_le32(file + p), length = read_le32(file + p + 4), checksum = read_le32(file + p + 8);
+        if (address == 0 && checksum == 0) {
+            m->entry = length;
+            return true;
+        }
+        if (p + 12 + length > size) break;
+        const uint8_t *data = file + p + 12;
+        uint32_t sum = 0;
+        for (uint32_t i = 0; i < length; i++) sum += data[i];
+        if (sum != checksum) {
+            snprintf(error, error_size, "B000FF record at %08X has a bad checksum", address);
+            return false;
+        }
+        uint32_t pa = address & AREA_MASK;
+        if (pa < DRAM_PA || pa + length > DRAM_PA + dram_size) {
+            snprintf(error, error_size, "B000FF record at %08X is outside RAM", address);
+            return false;
+        }
+        if (dram) memcpy(dram + (pa - DRAM_PA), data, length);
+        p += 12 + length;
+    }
+    snprintf(error, error_size, "B000FF image has no entry record");
+    return false;
+}
+
 static bool load_flash(machine_t *m, char *error, size_t error_size) {
     uint32_t load_pa;
     size_t length;
@@ -593,13 +653,13 @@ static uint8_t *optimiser_map(void *context, uint32_t va, bool write) {
     uint32_t pa;
     if (!ce_translate_current(&m->optimiser_ce, va, write, &pa)) return NULL;
     if (pa - DRAM_PA < DRAM_AREA_SIZE) return m->dram + (pa - DRAM_PA) % m->dram_size;
-    if (!write && pa < FLASH_SIZE) return m->flash + pa;
+    if (!write && m->flash && pa < FLASH_SIZE) return m->flash + pa;
     return NULL;
 }
 
 static const uint8_t *optimiser_rom(void *context, uint32_t pa, uint32_t length) {
     machine_t *m = context;
-    return pa < FLASH_SIZE && length <= FLASH_SIZE - pa ? m->flash + pa : NULL;
+    return m->flash && pa < FLASH_SIZE && length <= FLASH_SIZE - pa ? m->flash + pa : NULL;
 }
 
 static void sync_watches(machine_t *m);
@@ -659,6 +719,11 @@ static void reset_machine(machine_t *m, bool keep_ram) {
         keep_ram = false;
     }
     if (!keep_ram) memset(m->dram, 0, m->dram_size);
+    if (!keep_ram && m->autopc) {
+        char load_error[128];
+        load_b000ff(m, m->dram, m->dram_size, load_error, sizeof load_error);
+        autopc_prepare_ram(m->dram, m->dram_size);
+    }
     m->cpu.bus = (sh3_bus_t){ m, bus_read, bus_write, bus_fetch_page, m->dram, DRAM_PA, m->dram_size };
     m->cpu.on_watch = on_watch;
     m->cpu.on_trapa = on_trapa;
@@ -679,7 +744,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
         sh770x_reset(&m->chip);
     } else {
         sh770x_variant_t variant = m->hp ? SH7707 : m->hitachi ? SH7709 : SH7708;
-        uint32_t peripheral_hz = m->hp ? HP320LX_PERIPHERAL_HZ : m->hitachi ? HPW200EC_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ;
+        uint32_t peripheral_hz = m->hp ? HP320LX_PERIPHERAL_HZ : m->hitachi ? HPW200EC_PERIPHERAL_HZ : m->autopc ? AUTOPC_PERIPHERAL_HZ : CASIO_PERIPHERAL_HZ;
         sh770x_init(&m->chip, &m->cpu, variant, MACHINE_CLOCK_HZ, peripheral_hz);
         sh770x_set_time(&m->chip, 2000 - 1970, 1, 1, 6, 0, 0, 0);
         if (m->host_clock) apply_host_time(m);
@@ -689,6 +754,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     memset(&m->casio_audio, 0, sizeof m->casio_audio);
     hp320lx_reset(&m->hp_board);
     hpw200ec_reset(&m->hitachi_board);
+    autopc_reset(&m->board);
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
     m->audio_count = 0;
@@ -721,17 +787,19 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     memcpy(m->image, rom, rom_size);
     m->image_size = rom_size;
     m->rom_hash = hash_bytes(rom, rom_size);
-    m->hp_model = hp320lx_detect(rom, rom_size);
+    m->autopc = autopc_detect(rom, rom_size);
+    m->hp_model = m->autopc ? HP_MODEL_NONE : hp320lx_detect(rom, rom_size);
     m->hp = m->hp_model != HP_MODEL_NONE;
-    m->hitachi = !m->hp && hpw200ec_detect(rom, rom_size);
-    m->casio = !m->hp && !m->hitachi;
+    m->hitachi = !m->autopc && !m->hp && hpw200ec_detect(rom, rom_size);
+    m->casio = !m->autopc && !m->hp && !m->hitachi;
+    m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .context = m, .card = &m->card_slot };
     m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
                                    .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
     m->hitachi_host = (hpw200ec_host_t){ .trace = hitachi_trace, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .context = m,
                                          .companion = { .trace = hitachi_trace, .transmit = hitachi_transmit, .interrupt = hitachi_interrupt, .socket = hitachi_socket, .context = m } };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
-    if (!load_flash(m, error, error_size)) {
+    if (m->autopc ? !load_b000ff(m, NULL, DRAM_DEFAULT_SIZE, error, error_size) : !load_flash(m, error, error_size)) {
         machine_destroy(m);
         return NULL;
     }
@@ -839,6 +907,7 @@ uint32_t machine_pc(machine_t *m) {
 }
 
 bool machine_lcd_enabled(machine_t *m) {
+    if (m->autopc) return true;
     return !machine_suspended(m);
 }
 bool machine_backlight(machine_t *m) {
@@ -856,6 +925,7 @@ void machine_backlight_button(machine_t *m, bool down) {
 }
 
 screen_size_t machine_screen_size(machine_t *m) {
+    if (m->autopc) return (screen_size_t){ AUTOPC_SCREEN_WIDTH, AUTOPC_SCREEN_HEIGHT };
     if (m->casio) return (screen_size_t){ CASIO_SCREEN_WIDTH, CASIO_SCREEN_HEIGHT };
     if (m->hitachi) return (screen_size_t){ HPW200EC_SCREEN_WIDTH, HPW200EC_SCREEN_HEIGHT };
     return (screen_size_t){ HP320LX_SCREEN_WIDTH, HP320LX_SCREEN_HEIGHT };
@@ -875,12 +945,17 @@ bool machine_set_screen(machine_t *m, screen_size_t size) {
 }
 
 int machine_screen_palette(machine_t *m, uint32_t *palette) {
+    if (m->autopc) return autopc_palette(palette);
     if (m->hitachi) return hpw200ec_palette(&m->hitachi_board, palette);
     (void)palette;
     return 0;
 }
 
 bool machine_screen(machine_t *m, uint8_t *levels) {
+    if (m->autopc) {
+        autopc_screen(&m->board, levels);
+        return true;
+    }
     if (m->casio) {
         casio_screen(&m->casio_board, levels);
         return true;
@@ -899,6 +974,10 @@ bool machine_screen(machine_t *m, uint8_t *levels) {
 }
 
 void machine_key(machine_t *m, uint8_t scancode, bool up) {
+    if (m->autopc) {
+        autopc_key(&m->board, &m->board_host, scancode, up);
+        return;
+    }
     if (m->casio) {
         casio_key(&m->casio_board, &m->casio_host, scancode, up);
         return;
@@ -930,6 +1009,7 @@ static bool insert_card_now(machine_t *m, const char *path) {
     if (!image) return false;
     cfcard_insert(&m->card_slot, image);
     snprintf(m->card_path, sizeof m->card_path, "%s", path);
+    if (m->autopc) autopc_card_changed(&m->board, &m->board_host);
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
     cards_changed(m);
     return true;
@@ -1012,6 +1092,7 @@ void machine_eject_card(machine_t *m) {
     if (!m->card.inserted) return;
     cfcard_eject(&m->card_slot);
     m->card_path[0] = 0;
+    if (m->autopc) autopc_card_changed(&m->board, &m->board_host);
     if (m->casio) casio_card_changed(&m->casio_board, &m->casio_host);
     cards_changed(m);
 }
@@ -1173,6 +1254,7 @@ void machine_power_button(machine_t *m, bool down) {
 }
 
 int machine_rom_system(machine_t *m) {
+    if (m->autopc) return MACHINE_BOARD_AUTOPC;
     if (m->casio) return MACHINE_BOARD_CASIO;
     if (m->hitachi) return MACHINE_BOARD_HPW200EC;
     return m->hp_model == HP_MODEL_300LX ? MACHINE_BOARD_HP300LX : MACHINE_BOARD_HP;
@@ -1184,6 +1266,7 @@ const char *machine_board_name(int board) {
     case MACHINE_BOARD_HP: return "HP 320LX";
     case MACHINE_BOARD_HP300LX: return "HP 300LX";
     case MACHINE_BOARD_HPW200EC: return "Hitachi HPW-200EC";
+    case MACHINE_BOARD_AUTOPC: return "Clarion AutoPC";
     default: return "Unknown";
     }
 }
