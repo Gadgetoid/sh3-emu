@@ -190,32 +190,32 @@ static void uart_character(autopc_uart_t *uart, const autopc_host_t *host, uint8
 static uint32_t uart_read(const autopc_uart_t *uart, uint32_t index) {
     bool divisor = (uart->lcr & LCR_DLAB) != 0;
     switch (index) {
-        case UART_DATA: return divisor ? uart->dll : 0;
-        case UART_IER: return divisor ? uart->dlm : uart->ier;
-        case UART_IIR: return IIR_NONE;
-        case UART_LCR: return uart->lcr;
-        case UART_MCR: return uart->mcr;
-        case UART_LSR: return LSR_THRE | LSR_TEMT;
-        case UART_MSR: return MSR_CTS_DSR_DCD;
-        default: return uart->scratch;
+    case UART_DATA: return divisor ? uart->dll : 0;
+    case UART_IER: return divisor ? uart->dlm : uart->ier;
+    case UART_IIR: return IIR_NONE;
+    case UART_LCR: return uart->lcr;
+    case UART_MCR: return uart->mcr;
+    case UART_LSR: return LSR_THRE | LSR_TEMT;
+    case UART_MSR: return MSR_CTS_DSR_DCD;
+    default: return uart->scratch;
     }
 }
 
 static void uart_write(autopc_uart_t *uart, const autopc_host_t *host, uint32_t index, uint8_t value) {
     bool divisor = (uart->lcr & LCR_DLAB) != 0;
     switch (index) {
-        case UART_DATA:
-            if (divisor) uart->dll = value;
-            else uart_character(uart, host, value);
-            break;
-        case UART_IER:
-            if (divisor) uart->dlm = value;
-            else uart->ier = value;
-            break;
-        case UART_LCR: uart->lcr = value; break;
-        case UART_MCR: uart->mcr = value; break;
-        case UART_SCRATCH: uart->scratch = value; break;
-        default: break;
+    case UART_DATA:
+        if (divisor) uart->dll = value;
+        else uart_character(uart, host, value);
+        break;
+    case UART_IER:
+        if (divisor) uart->dlm = value;
+        else uart->ier = value;
+        break;
+    case UART_LCR: uart->lcr = value; break;
+    case UART_MCR: uart->mcr = value; break;
+    case UART_SCRATCH: uart->scratch = value; break;
+    default: break;
     }
 }
 
@@ -261,9 +261,9 @@ static uint32_t config_read(autopc_t *board) {
     const autopc_bar_t *bar = bar_for(pci, reg);
     if (bar) return (pci->config[reg / 4] & ~(bar->size - 1)) | (bar->io ? BAR_IO : 0);
     switch (reg) {
-        case PCI_ID: return (uint32_t)pci->device << 16 | pci->vendor;
-        case PCI_CLASS: return pci->class_revision;
-        default: return pci->config[reg / 4];
+    case PCI_ID: return (uint32_t)pci->device << 16 | pci->vendor;
+    case PCI_CLASS: return pci->class_revision;
+    default: return pci->config[reg / 4];
     }
 }
 
@@ -339,12 +339,12 @@ static void link_next_reply(autopc_t *board, const autopc_host_t *host) {
 static uint8_t lcd_read(const autopc_t *board) {
     uint8_t index = board->lcd_index, value = board->lcd_registers[index];
     switch (index) {
-        case 0x03: return value | 0x0E;
-        case 0x0B: return value | 0xFC;
-        case 0x0C: return 0xFF;
-        case LCD_PALETTE_INDEX: return value | 0x20;
-        case LCD_PALETTE_DATA: return board->lcd_palette[board->lcd_registers[LCD_PALETTE_INDEX]] | 0xF0;
-        default: return value;
+    case 0x03: return value | 0x0E;
+    case 0x0B: return value | 0xFC;
+    case 0x0C: return 0xFF;
+    case LCD_PALETTE_INDEX: return value | 0x20;
+    case LCD_PALETTE_DATA: return board->lcd_palette[board->lcd_registers[LCD_PALETTE_INDEX]] | 0xF0;
+    default: return value;
     }
 }
 
@@ -366,23 +366,23 @@ static uint8_t key_columns(const autopc_t *board) {
     for (int row = 0; row < AUTOPC_KEY_ROWS; row++) {
         if (board->key_rows_selected & (1u << row)) down |= board->keys_down[row];
     }
-    return (uint8_t)~down;
+    return (uint8_t) ~down;
 }
 
 static void faceplate_word(autopc_t *board, uint32_t word) {
     uint8_t value = (uint8_t)(word >> 8);
     switch ((uint8_t)word) {
-        case WORD_CONTROL: board->faceplate_control = value; break;
-        case WORD_LCD:
-            if (word & WORD_DATA) lcd_write(board, value);
-            else board->lcd_index = value;
-            break;
-        case WORD_LCD_READ: link_reply(board, lcd_read(board)); break;
-        case WORD_KEY_ROWS: board->key_rows_selected = (uint8_t)~value; break;
-        case WORD_KEY_READ: link_reply(board, key_columns(board)); break;
-        case WORD_ADDRESS: board->lcd_address = word >> 16; break;
-        case WORD_PIXELS: lcd_pixels_write(board, word >> 8); break;
-        default: break;
+    case WORD_CONTROL: board->faceplate_control = value; break;
+    case WORD_LCD:
+        if (word & WORD_DATA) lcd_write(board, value);
+        else board->lcd_index = value;
+        break;
+    case WORD_LCD_READ: link_reply(board, lcd_read(board)); break;
+    case WORD_KEY_ROWS: board->key_rows_selected = (uint8_t) ~value; break;
+    case WORD_KEY_READ: link_reply(board, key_columns(board)); break;
+    case WORD_ADDRESS: board->lcd_address = word >> 16; break;
+    case WORD_PIXELS: lcd_pixels_write(board, word >> 8); break;
+    default: break;
     }
 }
 
@@ -398,38 +398,38 @@ static void link_transmit(autopc_t *board, const autopc_host_t *host) {
 
 static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t *value) {
     switch (offset) {
-        case FACEPLATE_ENABLE: *value = board->faceplate_enable; return true;
-        case FACEPLATE_PENDING: *value = board->faceplate_pending; return true;
-        case LINK_ADDRESS: *value = board->link_address; return true;
-        case LINK_CONTROL: *value = board->link_control; return true;
-        case LINK_RECEIVE:
-            *value = board->link_received;
-            link_next_reply(board, host);
-            return true;
-        default:
-            *value = bytes_read(board->faceplate_io, offset, size);
-            return offset == LINK_CONFIG;
+    case FACEPLATE_ENABLE: *value = board->faceplate_enable; return true;
+    case FACEPLATE_PENDING: *value = board->faceplate_pending; return true;
+    case LINK_ADDRESS: *value = board->link_address; return true;
+    case LINK_CONTROL: *value = board->link_control; return true;
+    case LINK_RECEIVE:
+        *value = board->link_received;
+        link_next_reply(board, host);
+        return true;
+    default:
+        *value = bytes_read(board->faceplate_io, offset, size);
+        return offset == LINK_CONFIG;
     }
 }
 
 static bool faceplate_io_write(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t value) {
     switch (offset) {
-        case FACEPLATE_ENABLE:
-            board->faceplate_enable = value;
-            update_irl(board, host);
-            return true;
-        case FACEPLATE_PENDING:
-            board->faceplate_pending &= ~value;
-            update_irl(board, host);
-            return true;
-        case LINK_ADDRESS: board->link_address = value; return true;
-        case LINK_CONTROL:
-            board->link_control = value;
-            if (value & LINK_TRANSMIT) link_transmit(board, host);
-            return true;
-        default:
-            bytes_write(board->faceplate_io, offset, size, value);
-            return offset == LINK_CONFIG;
+    case FACEPLATE_ENABLE:
+        board->faceplate_enable = value;
+        update_irl(board, host);
+        return true;
+    case FACEPLATE_PENDING:
+        board->faceplate_pending &= ~value;
+        update_irl(board, host);
+        return true;
+    case LINK_ADDRESS: board->link_address = value; return true;
+    case LINK_CONTROL:
+        board->link_control = value;
+        if (value & LINK_TRANSMIT) link_transmit(board, host);
+        return true;
+    default:
+        bytes_write(board->faceplate_io, offset, size, value);
+        return offset == LINK_CONFIG;
     }
 }
 
@@ -453,7 +453,7 @@ static void socket_write(autopc_t *board, const autopc_host_t *host, uint32_t pa
         return;
     }
     if (reg == SOCKET_STATUS) {
-        board->socket_events[socket] &= (uint16_t)~(value & STATUS_CHANGED);
+        board->socket_events[socket] &= (uint16_t) ~(value & STATUS_CHANGED);
     } else {
         uint16_t old = board->socket_control[socket];
         board->socket_control[socket] = (uint16_t)value;
@@ -473,24 +473,24 @@ static bool card_access(autopc_t *board, const autopc_host_t *host, uint32_t pa,
     }
     cfcard_slot_t *slot = host->card;
     switch (window) {
-        case 0x14000000u:
-        case 0x18000000u:
-            if (write) cfcard_attribute_write(slot, offset, size, *value);
-            else *value = cfcard_attribute_read(slot, offset, size);
-            break;
-        case 0x15000000u:
-        case 0x19000000u:
-            if (write) cfcard_common_write(slot, offset, size, *value);
-            else *value = cfcard_common_read(slot, offset, size);
-            break;
-        case 0x1A000000u:
-            if (write) cfcard_io_write(slot, offset, size, *value);
-            else *value = cfcard_io_read(slot, offset, size);
-            break;
-        default:
-            if (!write) *value = empty;
-            if (host->trace) host->trace(host->context, write, pa, size, *value);
-            break;
+    case 0x14000000u:
+    case 0x18000000u:
+        if (write) cfcard_attribute_write(slot, offset, size, *value);
+        else *value = cfcard_attribute_read(slot, offset, size);
+        break;
+    case 0x15000000u:
+    case 0x19000000u:
+        if (write) cfcard_common_write(slot, offset, size, *value);
+        else *value = cfcard_common_read(slot, offset, size);
+        break;
+    case 0x1A000000u:
+        if (write) cfcard_io_write(slot, offset, size, *value);
+        else *value = cfcard_io_read(slot, offset, size);
+        break;
+    default:
+        if (!write) *value = empty;
+        if (host->trace) host->trace(host->context, write, pa, size, *value);
+        break;
     }
     update_irl(board, host);
     return true;
@@ -594,7 +594,7 @@ void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bo
         const faceplate_key_t *key = &faceplate_keys[i];
         if (key->scancode != scancode) continue;
         uint8_t bit = (uint8_t)(1u << key->column);
-        if (up) board->keys_down[key->row] &= (uint8_t)~bit;
+        if (up) board->keys_down[key->row] &= (uint8_t) ~bit;
         else board->keys_down[key->row] |= bit;
         raise_faceplate(board, host, FACEPLATE_MESSAGE);
         return;

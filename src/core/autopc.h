@@ -17,22 +17,22 @@ typedef void (*autopc_trace_fn)(void *context, bool write, uint32_t pa, int size
 typedef void (*autopc_irl_fn)(void *context, bool asserted);
 
 typedef struct {
-    autopc_line_fn  debug_line;
+    autopc_line_fn debug_line;
     autopc_trace_fn trace;
-    autopc_irl_fn   irl;
+    autopc_irl_fn irl;
     void           *context;
     cfcard_slot_t  *card;
 } autopc_host_t;
 
 typedef struct {
-    uint8_t  ier, lcr, mcr, scratch, dll, dlm;
-    char     line[256];
-    int      length;
+    uint8_t ier, lcr, mcr, scratch, dll, dlm;
+    char line[256];
+    int length;
 } autopc_uart_t;
 
 typedef struct {
     uint32_t size;
-    bool     io;
+    bool io;
 } autopc_bar_t;
 
 typedef struct {
@@ -48,21 +48,21 @@ typedef struct {
     autopc_uart_t debug_uart;
 
     autopc_pci_t faceplate;
-    uint8_t  faceplate_io[0x10000];
-    uint8_t  faceplate_memory[0x10000];
+    uint8_t faceplate_io[0x10000];
+    uint8_t faceplate_memory[0x10000];
     uint32_t faceplate_enable, faceplate_pending;
     uint32_t link_address, link_control, link_received;
     uint32_t link_replies[AUTOPC_LINK_REPLIES];
     uint32_t link_reply_head, link_reply_count;
 
-    uint8_t  lcd_registers[256];
-    uint8_t  lcd_palette[256];
-    uint8_t  lcd_index;
+    uint8_t lcd_registers[256];
+    uint8_t lcd_palette[256];
+    uint8_t lcd_index;
     uint32_t lcd_address;
-    uint8_t  lcd_pixels[AUTOPC_SCREEN_WIDTH * AUTOPC_SCREEN_HEIGHT];
-    uint8_t  faceplate_control;
-    uint8_t  key_rows_selected;
-    uint8_t  keys_down[AUTOPC_KEY_ROWS];
+    uint8_t lcd_pixels[AUTOPC_SCREEN_WIDTH * AUTOPC_SCREEN_HEIGHT];
+    uint8_t faceplate_control;
+    uint8_t key_rows_selected;
+    uint8_t keys_down[AUTOPC_KEY_ROWS];
 
     uint16_t socket_control[AUTOPC_SOCKETS];
     uint16_t socket_events[AUTOPC_SOCKETS];
