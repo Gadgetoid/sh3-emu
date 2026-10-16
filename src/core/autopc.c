@@ -868,8 +868,7 @@ static uint64_t audio_half_due(const autopc_t *board, const autopc_host_t *host,
 static uint64_t ide_due(const autopc_host_t *host) {
     if (!host->ide || !host->cdrom) return UINT64_MAX;
     cmd646_host_t ide_host = { host->cdrom, NULL, NULL };
-    uint64_t due = cmd646_dma_due(host->ide, &ide_host);
-    return due ? due : UINT64_MAX;
+    return cmd646_dma_due(host->ide, &ide_host);
 }
 
 static uint64_t audio_due(const autopc_t *board, const autopc_host_t *host) {

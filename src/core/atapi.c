@@ -741,7 +741,7 @@ bool atapi_dma_ready(const atapi_slot_t *slot) {
 }
 
 uint64_t atapi_dma_due(const atapi_slot_t *slot) {
-    return dma_pending(slot->state) && slot->state->audio ? slot->ready_at : 0;
+    return dma_pending(slot->state) && slot->state->audio ? slot->ready_at : UINT64_MAX;
 }
 
 uint32_t atapi_dma_read(atapi_slot_t *slot, uint8_t *out, uint32_t length) {
