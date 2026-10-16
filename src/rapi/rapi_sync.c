@@ -111,8 +111,12 @@ static void scan_mac(sync_t *sync, entries_t *entries, const char *relative) {
         join_relative(child, sizeof child, relative, name);
         local_path(sync, child, full, sizeof full);
         struct stat info;
+#ifdef _WIN32
+        if (stat(full, &info) != 0) continue;
+#else
         if (lstat(full, &info) != 0) continue;
         if (S_ISLNK(info.st_mode) && (stat(full, &info) != 0 || !S_ISREG(info.st_mode))) continue;
+#endif
         if (S_ISDIR(info.st_mode)) {
             scan_mac(sync, entries, child);
         } else if (S_ISREG(info.st_mode)) {
