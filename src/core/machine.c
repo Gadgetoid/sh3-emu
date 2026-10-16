@@ -118,6 +118,7 @@ struct machine {
     uint64_t pending_card_at;
     char pending_disc[CARD_PATH_MAX];
     uint64_t pending_disc_at;
+    bool watchdog_reset_pending;
     bool pending_ethernet;
     uint8_t pending_ethernet_mac[6];
     bool serial_connected;
@@ -725,6 +726,10 @@ static void apply_host_time(machine_t *m) {
     sh770x_set_time(&m->chip, (year - 1970) % 100, local.tm_mon + 1, local.tm_mday, local.tm_wday, local.tm_hour, local.tm_min, local.tm_sec);
 }
 
+static void watchdog_reset(void *context) {
+    ((machine_t *)context)->watchdog_reset_pending = true;
+}
+
 static void reset_machine(machine_t *m, bool keep_ram) {
     if (m->dram_size != m->dram_size_next || !m->dram) {
         free(m->dram);
@@ -772,6 +777,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     cmd646_reset(&m->ide);
     atapi_reset(&m->disc_slot);
     m->chip.transmit = onchip_transmit;
+    m->chip.watchdog_reset = watchdog_reset;
     m->chip.transmit_context = m;
     m->audio_count = 0;
     m->audio_phase = 0;
@@ -877,11 +883,20 @@ static uint64_t next_event(machine_t *m) {
     return next;
 }
 
+static void watchdog_reset_event(machine_t *m) {
+    if (!m->watchdog_reset_pending) return;
+    m->watchdog_reset_pending = false;
+    machine_logf(m, "watchdog reset\n");
+    reset_machine(m, true);
+    if (m->autopc) autopc_watchdog_reset(&m->board);
+}
+
 void machine_run(machine_t *m, uint64_t cycles) {
     uint64_t target = m->cpu.cycles + cycles;
     m->run_target = target;
     while (m->cpu.cycles < target) {
         sh770x_advance(&m->chip);
+        watchdog_reset_event(m);
         pending_card_event(m);
         pending_disc_event(m);
         power_release_event(m);
@@ -1382,7 +1397,7 @@ void machine_dump_state(machine_t *m) {
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
         { "cpu", &m->cpu, sizeof m->cpu, NULL, 0, NULL },
-        { "chip", &m->chip, sizeof m->chip, SH770X_OLDER_STATE_SIZES, 3, sh770x_load_older_state },
+        { "chip", &m->chip, sizeof m->chip, SH770X_OLDER_STATE_SIZES, 4, sh770x_load_older_state },
         { "card", &m->card, sizeof m->card, NULL, 0, NULL },
         { "card_path", m->card_path, sizeof m->card_path, NULL, 0, NULL },
         { "casio_board", &m->casio_board, sizeof m->casio_board, NULL, 0, NULL },
@@ -1459,6 +1474,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     atapi_rebind(&m->disc_slot, disc);
     if (!disc) m->disc_path[0] = 0;
     m->chip.transmit = onchip_transmit;
+    m->chip.watchdog_reset = watchdog_reset;
     m->chip.transmit_context = m;
     m->chip.ports_written = m->hp ? hp_ports_written : m->hitachi ? hitachi_ports_written : NULL;
     m->chip.dac_written = m->hp ? hp_dac_written : m->hitachi ? hitachi_dac_written : NULL;

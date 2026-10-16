@@ -38,6 +38,7 @@ typedef struct {
 typedef void (*sh770x_transmit_fn)(void *context, int port, uint8_t byte);
 typedef void (*sh770x_ports_fn)(void *context);
 typedef void (*sh770x_dac_fn)(void *context, int channel, uint8_t value, uint64_t cycle);
+typedef void (*sh770x_reset_fn)(void *context);
 
 #define SH770X_DMA_CHANNELS 4
 
@@ -109,6 +110,9 @@ typedef struct {
     uint8_t pcc_status[SH770X_PCC_SOCKETS];
     bool pcc_card_irq[SH770X_PCC_SOCKETS];
     uint16_t iprf;
+
+    uint64_t watchdog_base;
+    sh770x_reset_fn watchdog_reset;
 } sh770x_t;
 
 void sh770x_init(sh770x_t *chip, sh3_cpu_t *cpu, sh770x_variant_t variant, uint32_t cpu_hz, uint32_t peripheral_hz);
@@ -134,5 +138,5 @@ void sh770x_set_adc(sh770x_t *chip, int channel, uint16_t value);
 void sh770x_set_pcc_status(sh770x_t *chip, int socket, uint8_t status);
 void sh770x_set_pcc_irq(sh770x_t *chip, int socket, bool asserted);
 
-extern const uint32_t SH770X_OLDER_STATE_SIZES[3];
+extern const uint32_t SH770X_OLDER_STATE_SIZES[4];
 bool sh770x_load_older_state(void *chip, const uint8_t *old, uint32_t size);

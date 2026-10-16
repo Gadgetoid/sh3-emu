@@ -13,7 +13,14 @@
 #define ICR1_RISING  1u
 #define ICR1_LEVEL   2u
 #define PCC_NO_CARD 0x0Cu
+#define WTCSR_TME   0x80u
+#define WTCSR_WT    0x40u
+#define WTCSR_WOVF  0x10u
 #define WTCSR_IOVF  0x08u
+#define WTCSR_CKS   0x07u
+#define WTCNT_KEY   0x5Au
+#define WTCSR_KEY   0xA5u
+#define WDT_OVERFLOW 0x100u
 #define WDT_INTERVAL_CODE 0x560u
 #define PCC0_STATUS 0x0E0u
 #define PCC1_STATUS 0x0F0u
@@ -153,6 +160,7 @@ void sh770x_reset(sh770x_t *chip) {
     void *transmit_context = chip->transmit_context;
     sh770x_ports_fn ports_written = chip->ports_written;
     sh770x_dac_fn dac_written = chip->dac_written;
+    sh770x_reset_fn watchdog_reset = chip->watchdog_reset;
     uint16_t adc_input[4], port_input_mask[64], port_input[64];
     uint32_t irq_active_high = chip->irq_active_high;
     memcpy(adc_input, chip->adc_input, sizeof adc_input);
@@ -171,6 +179,7 @@ void sh770x_reset(sh770x_t *chip) {
     chip->transmit_context = transmit_context;
     chip->ports_written = ports_written;
     chip->dac_written = dac_written;
+    chip->watchdog_reset = watchdog_reset;
     memcpy(chip->rtc_counter, counter, sizeof counter);
     memcpy(chip->rtc_alarm, alarm, sizeof alarm);
     chip->rtc_control2 = control2 & (RCR2_START | RCR2_PES | RCR2_RTCEN);
@@ -442,8 +451,40 @@ static uint64_t cmt_next_event(const sh770x_t *chip) {
     return chip->last_cycle + (ticks * chip->cpu_hz - chip->cmt_remainder + hz - 1) / hz;
 }
 
+static uint64_t watchdog_cycles(const sh770x_t *chip, uint32_t counts) {
+    static const uint32_t dividers[8] = { 1, 4, 16, 32, 64, 256, 1024, 4096 };
+    uint64_t peripheral_hz = chip->peripheral_hz ? chip->peripheral_hz : chip->cpu_hz;
+    return ((uint64_t)counts * dividers[chip->watchdog_control & WTCSR_CKS] * chip->cpu_hz + peripheral_hz - 1) / peripheral_hz;
+}
+
+static uint32_t watchdog_counted(const sh770x_t *chip, uint64_t now) {
+    if (!(chip->watchdog_control & WTCSR_TME) || now <= chip->watchdog_base) return chip->watchdog_count;
+    uint64_t step = watchdog_cycles(chip, 1);
+    uint64_t count = chip->watchdog_count + (step ? (now - chip->watchdog_base) / step : 0);
+    return count < WDT_OVERFLOW ? (uint32_t)count : WDT_OVERFLOW - 1;
+}
+
+static uint64_t watchdog_overflow(const sh770x_t *chip) {
+    if (!(chip->watchdog_control & WTCSR_TME)) return UINT64_MAX;
+    return chip->watchdog_base + watchdog_cycles(chip, WDT_OVERFLOW - chip->watchdog_count);
+}
+
+static void advance_watchdog(sh770x_t *chip, uint64_t now) {
+    uint64_t overflow = watchdog_overflow(chip);
+    if (now < overflow) return;
+    chip->watchdog_count = 0;
+    chip->watchdog_base = overflow;
+    if (chip->watchdog_control & WTCSR_WT) {
+        chip->watchdog_control = (uint16_t)((chip->watchdog_control & ~WTCSR_TME) | WTCSR_WOVF);
+        if (chip->watchdog_reset) chip->watchdog_reset(chip->transmit_context);
+    } else {
+        chip->watchdog_control |= WTCSR_IOVF;
+    }
+}
+
 void sh770x_advance(sh770x_t *chip) {
     uint64_t now = chip->cpu->cycles;
+    advance_watchdog(chip, now);
     if (now > chip->last_cycle) {
         uint64_t elapsed = now - chip->last_cycle;
         for (int i = 0; i < 3; i++) advance_timer(chip, i, elapsed);
@@ -474,6 +515,8 @@ uint64_t sh770x_next_event(sh770x_t *chip) {
     if ((chip->adc_control & ADCSR_ADST) && chip->adc_done < next) next = chip->adc_done;
     uint64_t cmt = cmt_next_event(chip);
     if (cmt < next) next = cmt;
+    uint64_t watchdog = watchdog_overflow(chip);
+    if (watchdog < next) next = watchdog;
     return next;
 }
 
@@ -1021,7 +1064,7 @@ bool sh770x_read(sh770x_t *chip, uint32_t pa, int size, uint32_t *value) {
     switch (pa) {
     case CPG_BASE + 0x0: *value = chip->frqcr; return true;
     case CPG_BASE + 0x2: *value = chip->stbcr; return true;
-    case CPG_BASE + 0x4: *value = chip->watchdog_count; return true;
+    case CPG_BASE + 0x4: *value = watchdog_counted(chip, chip->cpu->cycles); return true;
     case CPG_BASE + 0x6: *value = chip->watchdog_control; return true;
     case CPG_BASE + 0x8: *value = chip->stbcr2; return true;
     case CCR_ADDRESS: *value = chip->ccr; return true;
@@ -1054,9 +1097,18 @@ bool sh770x_write(sh770x_t *chip, uint32_t pa, int size, uint32_t value) {
         switch (pa) {
         case CPG_BASE + 0x0: chip->frqcr = (uint16_t)value; break;
         case CPG_BASE + 0x2: chip->stbcr = (uint8_t)value; break;
-        case CPG_BASE + 0x4: if (((value >> 8) & 0xFF) == 0x5A) chip->watchdog_count = value & 0xFF; break;
+        case CPG_BASE + 0x4:
+            if (((value >> 8) & 0xFF) == WTCNT_KEY) {
+                chip->watchdog_count = value & 0xFF;
+                chip->watchdog_base = chip->cpu->cycles;
+            }
+            break;
         case CPG_BASE + 0x6:
-            if (((value >> 8) & 0xFF) == 0xA5) chip->watchdog_control = value & 0xFF;
+            if (((value >> 8) & 0xFF) == WTCSR_KEY) {
+                chip->watchdog_count = (uint16_t)watchdog_counted(chip, chip->cpu->cycles);
+                chip->watchdog_base = chip->cpu->cycles;
+                chip->watchdog_control = value & 0xFF;
+            }
             sh770x_update_interrupts(chip);
             break;
         case CPG_BASE + 0x8: chip->stbcr2 = (uint8_t)value; break;
@@ -1075,7 +1127,7 @@ bool sh770x_write(sh770x_t *chip, uint32_t pa, int size, uint32_t value) {
 #define OLD_PCC_BYTES    (2 * SH770X_PCC_SOCKETS + 2)
 #define OLD_FULL_BYTES   ((offsetof(sh770x_t, lcd_index) + OLD_LCD_BYTES + OLD_PCC_BYTES + 7) & ~(size_t)7)
 
-const uint32_t SH770X_OLDER_STATE_SIZES[3] = { offsetof(sh770x_t, lcd_index), offsetof(sh770x_t, lcd_index) + OLD_LCD_BYTES, OLD_FULL_BYTES };
+const uint32_t SH770X_OLDER_STATE_SIZES[4] = { offsetof(sh770x_t, lcd_index), offsetof(sh770x_t, lcd_index) + OLD_LCD_BYTES, OLD_FULL_BYTES, offsetof(sh770x_t, watchdog_base) };
 
 static void copy_words(uint16_t *to, size_t to_count, const uint8_t *from, size_t from_count) {
     for (size_t i = 0; i < to_count && i < from_count; i++) memcpy(&to[i], from + i * 2, 2);
@@ -1084,8 +1136,13 @@ static void copy_words(uint16_t *to, size_t to_count, const uint8_t *from, size_
 bool sh770x_load_older_state(void *data, const uint8_t *old, uint32_t size) {
     sh770x_t *chip = data;
     size_t prefix = offsetof(sh770x_t, lcd_index);
-    if (size != SH770X_OLDER_STATE_SIZES[0] && size != SH770X_OLDER_STATE_SIZES[1] && size != SH770X_OLDER_STATE_SIZES[2]) return false;
+    if (size != SH770X_OLDER_STATE_SIZES[0] && size != SH770X_OLDER_STATE_SIZES[1] && size != SH770X_OLDER_STATE_SIZES[2] && size != SH770X_OLDER_STATE_SIZES[3]) return false;
     memset(chip, 0, sizeof *chip);
+    if (size == SH770X_OLDER_STATE_SIZES[3]) {
+        memcpy(chip, old, size);
+        chip->watchdog_control &= (uint16_t) ~WTCSR_TME;
+        return true;
+    }
     memcpy(chip, old, prefix);
     if (size == prefix) return true;
     const uint8_t *lcd = old + prefix;

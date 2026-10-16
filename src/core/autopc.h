@@ -95,6 +95,7 @@ void autopc_screen(const autopc_t *board, uint8_t *pixels);
 int  autopc_palette(uint32_t *palette);
 void autopc_card_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_disc_changed(autopc_t *board, const autopc_host_t *host);
+void autopc_watchdog_reset(autopc_t *board);
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up);
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down);
 uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host);

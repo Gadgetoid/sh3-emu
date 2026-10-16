@@ -16,6 +16,8 @@
 #define FPGA_STATUS     0x8000u
 #define STATUS_POWER_ON 0x0200u
 #define STATUS_BATTERY_OK 0x0400u
+#define STATUS_WATCHDOG_RESET 0x0010u
+#define STATUS_WARM_RESET 0x8000u
 
 #define BRIDGE_PA       0x10000000u
 #define BRIDGE_SIZE     0x00000200u
@@ -654,6 +656,10 @@ static bool card_access(autopc_t *board, const autopc_host_t *host, uint32_t pa,
     return true;
 }
 
+void autopc_watchdog_reset(autopc_t *board) {
+    board->fpga[FPGA_STATUS / 4] |= STATUS_WATCHDOG_RESET | STATUS_WARM_RESET;
+}
+
 void autopc_disc_changed(autopc_t *board, const autopc_host_t *host) {
     update_irl(board, host);
 }
@@ -730,6 +736,7 @@ bool autopc_write(autopc_t *board, const autopc_host_t *host, uint32_t pa, int s
     if (pa - FPGA_PA < FPGA_SIZE) {
         uint32_t index = (pa - FPGA_PA) / 4;
         if (index == FPGA_PENDING / 4) board->fpga[index] &= ~value;
+        else if (index == FPGA_STATUS / 4 && (value & STATUS_WATCHDOG_RESET)) board->fpga[index] &= ~STATUS_WATCHDOG_RESET;
         else if (index != FPGA_INPUTS / 4 && index != FPGA_STATUS / 4) sized_store(&board->fpga[index], pa, size, value);
         update_irl(board, host);
         return true;
