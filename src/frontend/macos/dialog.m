@@ -26,7 +26,7 @@
     bool known = index >= 0 && index < (NSInteger)self.screens.count;
     uint32_t mask = known ? self.screens[(NSUInteger)index].unsignedIntValue : 1u;
     for (NSInteger i = 0; i < self.screen.numberOfItems; i++) [self.screen itemAtIndex:i].enabled = (mask >> i) & 1u;
-    if (!self.screen.selectedItem.enabled) [self.screen selectItemAtIndex:0];
+    if (!self.screen.selectedItem.enabled) [self.screen selectItemAtIndex:dialog_screen_choice(mask)];
     dialog_rom_t limits = { .memory_min = known ? self.memoryMinimums[(NSUInteger)index].unsignedIntValue : 0,
                             .memory_max = known ? self.memoryLimits[(NSUInteger)index].unsignedIntValue : UINT32_MAX };
     for (NSInteger i = 0; i < self.memory.numberOfItems; i++) [self.memory itemAtIndex:i].enabled = dialog_rom_allows_memory(&limits, (int)i);

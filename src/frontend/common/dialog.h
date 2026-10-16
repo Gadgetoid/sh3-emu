@@ -35,6 +35,7 @@ typedef struct {
 
 const char *dialog_screen_label(int preset);
 bool        dialog_rom_allows_screen(const dialog_rom_t *rom, int preset);
+int         dialog_screen_choice(uint32_t screens);
 bool        dialog_rom_allows_memory(const dialog_rom_t *rom, int size);
 int         dialog_rom_memory_choice(const dialog_rom_t *rom, uint32_t megabytes);
 

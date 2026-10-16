@@ -25,13 +25,13 @@ const char *const DIALOG_MANAGE_MESSAGE =
 
 const char *const DIALOG_CLOCK_LABEL = "Set the clock from " CLOCK_SOURCE " at the first boot";
 
-const char *const DIALOG_ROM_PROMPT = "Choose a ROM: a Casio Cassiopeia A-51, HP 300LX, HP 320LX or Hitachi HPW-200EC ROM image.";
+const char *const DIALOG_ROM_PROMPT = "Choose a ROM: a Casio Cassiopeia A-51, HP 300LX, HP 320LX, Hitachi HPW-200EC or Clarion AutoPC ROM image.";
 
 const char *const DIALOG_NOT_A_ROM = "Not a ROM this emulator can run";
 
 const char *const DIALOG_NO_ROM_HINT = "Put a ROM in the roms folder, or choose Other ROM File" "\xe2\x80\xa6" ".";
 
-static const char *const SCREEN_LABELS[] = { "480 x 240 (original)", "640 x 240", "640 x 480", "800 x 600" };
+static const char *const SCREEN_LABELS[] = { "480 x 240 (original)", "640 x 240", "256 x 64" };
 
 const char *dialog_screen_label(int preset) {
     return preset >= 0 && preset < (int)(sizeof SCREEN_LABELS / sizeof SCREEN_LABELS[0]) ? SCREEN_LABELS[preset] : NULL;
@@ -39,6 +39,13 @@ const char *dialog_screen_label(int preset) {
 
 bool dialog_rom_allows_screen(const dialog_rom_t *rom, int preset) {
     return preset >= 0 && preset < 32 && (rom->screens & (1u << preset));
+}
+
+int dialog_screen_choice(uint32_t screens) {
+    for (int i = 0; i < 32; i++) {
+        if (screens & (1u << i)) return i;
+    }
+    return 0;
 }
 
 bool dialog_rom_allows_memory(const dialog_rom_t *rom, int size) {

@@ -383,7 +383,7 @@ static void update_choices(form_t *form, new_machine_t *state) {
     widget_t *rom = &form->widgets[state->rom], *screen = &form->widgets[state->screen], *memory = &form->widgets[state->memory];
     const dialog_rom_t *chosen = rom->selected < state->count ? &state->roms[rom->selected] : NULL;
     screen->enabled = chosen ? chosen->screens : 1u;
-    if (!option_enabled(screen, screen->selected)) screen->selected = 0;
+    if (!option_enabled(screen, screen->selected)) screen->selected = dialog_screen_choice(screen->enabled);
     memory->enabled = 0;
     for (int i = 0; i < DIALOG_MEMORY_COUNT; i++) {
         if (!chosen || dialog_rom_allows_memory(chosen, i)) memory->enabled |= 1u << i;

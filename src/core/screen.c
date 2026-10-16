@@ -8,6 +8,7 @@
 const screen_size_t SCREEN_PRESETS[] = {
     { 480, 240 },
     { 640, 240 },
+    { 256, 64 },
 };
 const int SCREEN_PRESET_COUNT = (int)(sizeof SCREEN_PRESETS / sizeof SCREEN_PRESETS[0]);
 
