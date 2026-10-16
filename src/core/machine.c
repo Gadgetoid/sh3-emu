@@ -528,6 +528,10 @@ static bool find_rom_header(const uint8_t *image, size_t size, uint32_t *load_pa
     return false;
 }
 
+static bool image_is_b000ff(const machine_t *m) {
+    return m->image_size >= 7 && !memcmp(m->image, "B000FF\n", 7);
+}
+
 static bool load_b000ff(machine_t *m, uint8_t *dram, uint32_t dram_size, char *error, size_t error_size) {
     const uint8_t *file = m->image;
     size_t size = m->image_size;
@@ -719,7 +723,7 @@ static void reset_machine(machine_t *m, bool keep_ram) {
         keep_ram = false;
     }
     if (!keep_ram) memset(m->dram, 0, m->dram_size);
-    if (!keep_ram && m->autopc) {
+    if (!keep_ram && m->autopc && image_is_b000ff(m)) {
         char load_error[128];
         load_b000ff(m, m->dram, m->dram_size, load_error, sizeof load_error);
         autopc_prepare_ram(m->dram, m->dram_size);
@@ -799,7 +803,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
                                          .companion = { .trace = hitachi_trace, .transmit = hitachi_transmit, .interrupt = hitachi_interrupt, .socket = hitachi_socket, .context = m } };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
-    if (m->autopc ? !load_b000ff(m, NULL, DRAM_DEFAULT_SIZE, error, error_size) : !load_flash(m, error, error_size)) {
+    if (m->autopc && image_is_b000ff(m) ? !load_b000ff(m, NULL, DRAM_DEFAULT_SIZE, error, error_size) : !load_flash(m, error, error_size)) {
         machine_destroy(m);
         return NULL;
     }
