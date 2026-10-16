@@ -22,6 +22,7 @@
 #define FORM_WIDGETS    8
 #define FORM_OPTIONS    40
 #define FORM_LIST_ROW   22.0f
+#define FORM_LIST_ROWS  12
 #define FORM_CANCEL     -1
 
 typedef enum { WIDGET_TEXT, WIDGET_CHOICE, WIDGET_CHECK, WIDGET_BUTTON } widget_kind_t;
@@ -50,8 +51,8 @@ struct form {
     float x, y, width, height;
     void (*changed)(form_t *form, int widget, void *context);
     void       *context;
-    SDL_Window *window;
-    canvas_t canvas;
+    SDL_Window *parent, *window;
+    canvas_t canvas, list;
 };
 
 static int add_widget(form_t *form, widget_kind_t kind, const char *label) {
@@ -85,8 +86,6 @@ static int wrap_lines(const char *text, float width, char lines[][160], int max)
 }
 
 static void layout_form(form_t *form) {
-    int window_width, window_height;
-    SDL_GetWindowSize(form->window, &window_width, &window_height);
     char lines[8][160];
     int message_lines = form->message ? wrap_lines(form->message, FORM_WIDTH - 2 * FORM_PADDING, lines, 8) : 0;
     float y = FORM_PADDING + FORM_LINE + FORM_GAP + message_lines * FORM_LINE + FORM_GAP;
@@ -115,12 +114,9 @@ static void layout_form(form_t *form) {
         right -= FORM_BUTTON + FORM_GAP;
     }
     form->width = FORM_WIDTH;
-    form->height = y + (buttons ? FORM_CONTROL + 4 : 0) + FORM_PADDING;
-    form->x = floorf(((float)window_width - form->width) / 2);
-    float bar = (float)menu_bar_height();
-    form->y = floorf(bar + ((float)window_height - bar - form->height) / 2);
-    if (form->y < bar) form->y = bar;
-    if (form->x < 0) form->x = 0;
+    form->height = ceilf(y + (buttons ? FORM_CONTROL + 4 : 0) + FORM_PADDING);
+    form->x = 0;
+    form->y = 0;
 }
 
 static bool option_enabled(const widget_t *widget, int option) {
@@ -128,13 +124,8 @@ static bool option_enabled(const widget_t *widget, int option) {
 }
 
 static int visible_options(const form_t *form) {
-    int window_width, window_height;
-    SDL_GetWindowSize(form->window, &window_width, &window_height);
     const widget_t *widget = &form->widgets[form->open];
-    float top = form->y + widget->y + widget->height;
-    int rows = (int)(((float)window_height - top - 4) / FORM_LIST_ROW);
-    if (rows < 3) rows = 3;
-    return rows < widget->count ? rows : widget->count;
+    return widget->count < FORM_LIST_ROWS ? widget->count : FORM_LIST_ROWS;
 }
 
 static void draw_form(form_t *form) {
@@ -144,10 +135,6 @@ static void draw_form(form_t *form) {
     SDL_SetRenderDrawBlendMode(canvas->renderer, SDL_BLENDMODE_BLEND);
     ui_prepare(form->window);
     layout_form(form);
-    int window_width, window_height;
-    SDL_GetWindowSize(form->window, &window_width, &window_height);
-    ui_fill(canvas, 0, 0, (float)window_width, (float)window_height, colours->bar_open);
-    menu_draw(canvas->renderer);
     float ox = form->x, oy = form->y;
     ui_fill(canvas, ox, oy, form->width, form->height, colours->menu_border);
     ui_fill(canvas, ox + 1, oy + 1, form->width - 2, form->height - 2, colours->menu);
@@ -194,22 +181,27 @@ static void draw_form(form_t *form) {
         }
         }
     }
-    if (form->open >= 0) {
-        widget_t *widget = &form->widgets[form->open];
-        int rows = visible_options(form);
-        float x = ox + widget->x, y = oy + widget->y + widget->height;
-        ui_fill(canvas, x, y, widget->width, rows * FORM_LIST_ROW + 2, colours->menu_border);
-        ui_fill(canvas, x + 1, y + 1, widget->width - 2, rows * FORM_LIST_ROW, colours->menu);
-        for (int row = 0; row < rows; row++) {
-            int option = form->scroll + row;
-            if (option >= widget->count) break;
-            bool enabled_option = option_enabled(widget, option);
-            bool highlighted = enabled_option && option == form->hover;
-            float top = y + 1 + row * FORM_LIST_ROW;
-            if (highlighted) ui_fill(canvas, x + 1, top, widget->width - 2, FORM_LIST_ROW, colours->highlight);
-            colour_t text = !enabled_option ? colours->disabled : highlighted ? colours->highlight_text : colours->text;
-            ui_text(canvas, x + 6, top, FORM_LIST_ROW, widget->options[option], text);
-        }
+    SDL_RenderPresent(canvas->renderer);
+}
+
+static void draw_list(form_t *form) {
+    if (form->open < 0 || !form->list.renderer) return;
+    const palette_t *colours = ui_palette();
+    canvas_t *canvas = &form->list;
+    ui_prepare(canvas->window);
+    widget_t *widget = &form->widgets[form->open];
+    int rows = visible_options(form);
+    ui_fill(canvas, 0, 0, widget->width, rows * FORM_LIST_ROW + 2, colours->menu_border);
+    ui_fill(canvas, 1, 1, widget->width - 2, rows * FORM_LIST_ROW, colours->menu);
+    for (int row = 0; row < rows; row++) {
+        int option = form->scroll + row;
+        if (option >= widget->count) break;
+        bool enabled_option = option_enabled(widget, option);
+        bool highlighted = enabled_option && option == form->hover;
+        float top = 1 + row * FORM_LIST_ROW;
+        if (highlighted) ui_fill(canvas, 1, top, widget->width - 2, FORM_LIST_ROW, colours->highlight);
+        colour_t text = !enabled_option ? colours->disabled : highlighted ? colours->highlight_text : colours->text;
+        ui_text(canvas, 6, top, FORM_LIST_ROW, widget->options[option], text);
     }
     SDL_RenderPresent(canvas->renderer);
 }
@@ -224,12 +216,16 @@ static int widget_at(const form_t *form, float x, float y) {
     return -1;
 }
 
-static int option_at(const form_t *form, float x, float y) {
+static bool in_list(const form_t *form, SDL_WindowID window) {
+    return form->list.window && window == SDL_GetWindowID(form->list.window);
+}
+
+static int option_at(const form_t *form, SDL_WindowID window, float x, float y) {
+    if (!in_list(form, window)) return -1;
     const widget_t *widget = &form->widgets[form->open];
-    float left = form->x + widget->x, top = form->y + widget->y + widget->height + 1;
     int rows = visible_options(form);
-    if (!ui_inside(x, y, left, top, widget->width, rows * FORM_LIST_ROW)) return -1;
-    int option = form->scroll + (int)((y - top) / FORM_LIST_ROW);
+    if (!ui_inside(x, y, 1, 1, widget->width, rows * FORM_LIST_ROW)) return -1;
+    int option = form->scroll + (int)((y - 1) / FORM_LIST_ROW);
     return option < widget->count ? option : -1;
 }
 
@@ -240,11 +236,28 @@ static void choose(form_t *form, int widget_index, int option) {
     if (form->changed) form->changed(form, widget_index, form->context);
 }
 
+static void close_choice(form_t *form) {
+    ui_destroy_canvas(&form->list);
+    form->open = -1;
+}
+
 static void open_choice(form_t *form, int widget_index) {
+    close_choice(form);
+    widget_t *widget = &form->widgets[widget_index];
     form->open = widget_index;
-    form->hover = form->widgets[widget_index].selected;
+    form->hover = widget->selected;
     int rows = visible_options(form);
     form->scroll = form->hover >= rows ? form->hover - rows + 1 : 0;
+    SDL_Window *window = SDL_CreatePopupWindow(form->window, (int)(form->x + widget->x), (int)(form->y + widget->y + widget->height), (int)widget->width,
+                                               (int)(rows * FORM_LIST_ROW + 2), SDL_WINDOW_POPUP_MENU | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, SDL_SOFTWARE_RENDERER) : NULL;
+    if (!renderer) {
+        fprintf(stderr, "dialog: %s\n", SDL_GetError());
+        if (window) SDL_DestroyWindow(window);
+        form->open = -1;
+        return;
+    }
+    form->list = (canvas_t){ window, renderer, NULL, 0 };
 }
 
 static void step_choice(form_t *form, int widget_index, int step) {
@@ -285,24 +298,58 @@ static int press(form_t *form, int widget_index) {
     return INT32_MIN;
 }
 
+static bool open_form_window(form_t *form) {
+    ui_prepare(form->parent);
+    layout_form(form);
+    SDL_Window *window = SDL_CreateWindow(form->title, (int)form->width, (int)form->height, SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Renderer *renderer = window ? SDL_CreateRenderer(window, SDL_SOFTWARE_RENDERER) : NULL;
+    if (!renderer) {
+        fprintf(stderr, "dialog: %s\n", SDL_GetError());
+        if (window) SDL_DestroyWindow(window);
+        return false;
+    }
+    if (form->parent) {
+        int parent_x, parent_y, parent_width, parent_height;
+        SDL_GetWindowPosition(form->parent, &parent_x, &parent_y);
+        SDL_GetWindowSize(form->parent, &parent_width, &parent_height);
+        SDL_SetWindowPosition(window, parent_x + (parent_width - (int)form->width) / 2, parent_y + (parent_height - (int)form->height) / 2);
+        SDL_SetWindowParent(window, form->parent);
+        SDL_SetWindowModal(window, true);
+    }
+    SDL_ShowWindow(window);
+    SDL_RaiseWindow(window);
+    form->window = window;
+    form->canvas = (canvas_t){ window, renderer, NULL, 0 };
+    return true;
+}
+
+static bool in_form(const form_t *form, SDL_WindowID window) {
+    return window == SDL_GetWindowID(form->window);
+}
+
 static int run_form(form_t *form) {
     form->open = -1;
+    if (!open_form_window(form)) return FORM_CANCEL;
     SDL_StartTextInput(form->window);
     int result = FORM_CANCEL;
     for (;;) {
         draw_form(form);
+        draw_list(form);
         SDL_Event event;
         if (!SDL_WaitEvent(&event)) break;
         int outcome = INT32_MIN;
         switch (event.type) {
         case SDL_EVENT_QUIT:
-        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             SDL_PushEvent(&event);
+            outcome = FORM_CANCEL;
+            break;
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            if (!in_form(form, event.window.windowID) && !in_list(form, event.window.windowID)) SDL_PushEvent(&event);
             outcome = FORM_CANCEL;
             break;
         case SDL_EVENT_MOUSE_MOTION:
             if (form->open >= 0) {
-                int option = option_at(form, event.motion.x, event.motion.y);
+                int option = option_at(form, event.motion.windowID, event.motion.x, event.motion.y);
                 if (option >= 0 && option_enabled(&form->widgets[form->open], option)) form->hover = option;
             }
             break;
@@ -317,13 +364,13 @@ static int run_form(form_t *form) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             if (event.button.button != SDL_BUTTON_LEFT) break;
             if (form->open >= 0) {
-                int option = option_at(form, event.button.x, event.button.y);
+                int option = option_at(form, event.button.windowID, event.button.x, event.button.y);
                 int open = form->open;
-                form->open = -1;
+                close_choice(form);
                 if (option >= 0) choose(form, open, option);
                 break;
             }
-            {
+            if (in_form(form, event.button.windowID)) {
                 int widget_index = widget_at(form, event.button.x, event.button.y);
                 if (widget_index >= 0) outcome = press(form, widget_index);
             }
@@ -339,12 +386,12 @@ static int run_form(form_t *form) {
             SDL_Keycode key = event.key.key;
             widget_t *focused = &form->widgets[form->focus];
             if (form->open >= 0) {
-                if (key == SDLK_ESCAPE) form->open = -1;
+                if (key == SDLK_ESCAPE) close_choice(form);
                 else if (key == SDLK_UP) move_hover(form, -1);
                 else if (key == SDLK_DOWN) move_hover(form, 1);
                 else if (key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE) {
                     int open = form->open;
-                    form->open = -1;
+                    close_choice(form);
                     choose(form, open, form->hover);
                 }
                 break;
@@ -364,7 +411,10 @@ static int run_form(form_t *form) {
         }
     }
     SDL_StopTextInput(form->window);
-    ui_release_glyphs(&form->canvas);
+    close_choice(form);
+    ui_destroy_canvas(&form->canvas);
+    form->window = NULL;
+    if (form->parent) SDL_RaiseWindow(form->parent);
     return result;
 }
 
@@ -449,7 +499,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
     state->count = rom_count < FORM_OPTIONS - 1 ? rom_count : FORM_OPTIONS - 1;
     memcpy(state->roms, roms, (size_t)state->count * sizeof roms[0]);
     form_t form = { .title = "New Machine", .message = DIALOG_NEW_MACHINE_MESSAGE, .open = -1, .default_result = NEW_CREATE,
-                    .changed = rom_changed, .context = state, .window = window };
+                    .changed = rom_changed, .context = state, .parent = window };
     int name = add_widget(&form, WIDGET_TEXT, "Name:");
     form.widgets[name].value = result->name;
     form.widgets[name].value_size = sizeof result->name;
@@ -497,7 +547,7 @@ bool dialog_new_machine(SDL_Window *window, const dialog_rom_t *roms, int rom_co
 
 dialog_manage_t dialog_manage_machines(SDL_Window *window, const char *const *names, int count, int current, int *chosen) {
     char titles[FORM_OPTIONS][120];
-    form_t form = { .title = "Manage Machines", .message = DIALOG_MANAGE_MESSAGE, .open = -1, .default_result = DIALOG_MANAGE_CLOSE, .window = window };
+    form_t form = { .title = "Manage Machines", .message = DIALOG_MANAGE_MESSAGE, .open = -1, .default_result = DIALOG_MANAGE_CLOSE, .parent = window };
     int list = add_widget(&form, WIDGET_CHOICE, "Machine:");
     for (int i = 0; i < count && i < FORM_OPTIONS; i++) {
         snprintf(titles[i], sizeof titles[i], "%s%s", names[i], i == current ? " (running)" : "");
