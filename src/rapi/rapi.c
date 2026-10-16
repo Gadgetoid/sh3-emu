@@ -1,16 +1,13 @@
-/* Implement RAPI transport, message encoding, and remote operation helpers. */
+/* Implement RAPI message encoding and remote operation helpers. */
 #include "rapi/rapi.h"
 #include "rapi/rapi_project.h"
+#include "rapi/rapi_socket.h"
 
-#include <netdb.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/time.h>
-#include <sys/un.h>
 #include <unistd.h>
 
 #define COMMAND_FIND_ALL_FILES     0x09
@@ -51,12 +48,6 @@
 #define HANDSHAKE_TIMEOUT 5
 #define REPLY_TIMEOUT     30
 #define FIND_ENTRY_MIN  20
-
-#ifdef MSG_NOSIGNAL
-#define SEND_FLAGS MSG_NOSIGNAL
-#else
-#define SEND_FLAGS 0
-#endif
 
 struct rapi {
     int socket;
@@ -205,28 +196,6 @@ static bool message_begin(message_t *message, uint32_t command) {
     return message_u32(message, command);
 }
 
-static bool socket_read(int socket, void *data, size_t length) {
-    uint8_t *p = data;
-    while (length) {
-        ssize_t got = recv(socket, p, length, 0);
-        if (got <= 0) return false;
-        p += got;
-        length -= (size_t)got;
-    }
-    return true;
-}
-
-static bool socket_write(int socket, const void *data, size_t length) {
-    const uint8_t *p = data;
-    while (length) {
-        ssize_t sent = send(socket, p, length, SEND_FLAGS);
-        if (sent <= 0) return false;
-        p += sent;
-        length -= (size_t)sent;
-    }
-    return true;
-}
-
 static bool reply_u32(rapi_t *rapi, uint32_t *value) {
     if (rapi->reply_offset + 4 > rapi->reply_length) {
         set_error(rapi, "short reply from the " RAPI_DEVICE);
@@ -253,7 +222,7 @@ static bool connection_broken(rapi_t *rapi, const char *format, ...) {
     va_start(args, format);
     vsnprintf(rapi->error, sizeof rapi->error, format, args);
     va_end(args);
-    close(rapi->socket);
+    rapi_socket_close(rapi->socket);
     rapi->socket = -1;
     rapi->reply_length = 0;
     rapi->reply_offset = 0;
@@ -263,13 +232,13 @@ static bool connection_broken(rapi_t *rapi, const char *format, ...) {
 static bool call(rapi_t *rapi, message_t *message) {
     uint8_t size[4] = { (uint8_t)message->length, (uint8_t)(message->length >> 8), (uint8_t)(message->length >> 16), (uint8_t)(message->length >> 24) };
     bool connected = rapi->socket >= 0;
-    bool sent = connected && socket_write(rapi->socket, size, 4) && socket_write(rapi->socket, message->data, message->length);
+    bool sent = connected && rapi_socket_write(rapi->socket, size, 4) && rapi_socket_write(rapi->socket, message->data, message->length);
     free(message->data);
     *message = (message_t){ 0 };
     if (!connected) return false;
     if (!sent) return connection_broken(rapi, "lost the connection to the " RAPI_DEVICE);
     uint8_t header[4];
-    if (!socket_read(rapi->socket, header, 4)) return connection_broken(rapi, "the " RAPI_DEVICE " closed the connection");
+    if (!rapi_socket_read(rapi->socket, header, 4)) return connection_broken(rapi, "the " RAPI_DEVICE " closed the connection");
     size_t length = (size_t)header[0] | (size_t)header[1] << 8 | (size_t)header[2] << 16 | (size_t)header[3] << 24;
     if (length > REPLY_MAX) return connection_broken(rapi, "reply too large (%zu bytes)", length);
     uint8_t *reply = realloc(rapi->reply, length ? length : 1);
@@ -277,7 +246,7 @@ static bool call(rapi_t *rapi, message_t *message) {
     rapi->reply = reply;
     rapi->reply_length = length;
     rapi->reply_offset = 0;
-    if (!socket_read(rapi->socket, rapi->reply, length)) return connection_broken(rapi, "the " RAPI_DEVICE " closed the connection");
+    if (!rapi_socket_read(rapi->socket, rapi->reply, length)) return connection_broken(rapi, "the " RAPI_DEVICE " closed the connection");
     uint32_t status;
     if (!reply_u32(rapi, &status)) return false;
     if (status == 1) {
@@ -309,11 +278,8 @@ bool rapi_data_path(const char *leaf, char *path, size_t size) {
 static rapi_t *rapi_start(int fd, char *error, size_t error_size);
 
 rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
-    struct sockaddr_un address = { .sun_family = AF_UNIX };
-    snprintf(address.sun_path, sizeof address.sun_path, "%s", socket_path);
-    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0 || connect(fd, (struct sockaddr *)&address, sizeof address) != 0) {
-        if (fd >= 0) close(fd);
+    int fd = rapi_socket_unix(socket_path);
+    if (fd < 0) {
         snprintf(error, error_size, "the emulator isn't running with Network (PPP) connected (no %s)", socket_path);
         return NULL;
     }
@@ -321,20 +287,12 @@ rapi_t *rapi_connect(const char *socket_path, char *error, size_t error_size) {
 }
 
 rapi_t *rapi_connect_tcp(const char *host, const char *port, char *error, size_t error_size) {
-    struct addrinfo hints = { .ai_family = AF_UNSPEC, .ai_socktype = SOCK_STREAM }, *found = NULL;
-    if (getaddrinfo(host, port, &hints, &found) != 0 || !found) {
+    bool found;
+    int fd = rapi_socket_tcp(host, port, &found);
+    if (!found) {
         snprintf(error, error_size, "cannot find %s", host);
         return NULL;
     }
-    int fd = -1;
-    for (struct addrinfo *at = found; at && fd < 0; at = at->ai_next) {
-        fd = socket(at->ai_family, at->ai_socktype, at->ai_protocol);
-        if (fd >= 0 && connect(fd, at->ai_addr, at->ai_addrlen) != 0) {
-            close(fd);
-            fd = -1;
-        }
-    }
-    freeaddrinfo(found);
     if (fd < 0) {
         snprintf(error, error_size, "cannot connect to %s:%s (is RAPI over the Network on, with Network (PPP) connected?)", host, port);
         return NULL;
@@ -343,12 +301,7 @@ rapi_t *rapi_connect_tcp(const char *host, const char *port, char *error, size_t
 }
 
 static rapi_t *rapi_start(int fd, char *error, size_t error_size) {
-    struct timeval timeout = { HANDSHAKE_TIMEOUT, 0 };
-    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
-#ifdef SO_NOSIGPIPE
-    int enabled = 1;
-    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof enabled);
-#endif
+    rapi_socket_timeout(fd, HANDSHAKE_TIMEOUT);
     rapi_t *rapi = calloc(1, sizeof *rapi);
     rapi->socket = fd;
     rapi_version_t version;
@@ -368,13 +321,12 @@ uint32_t rapi_os_major(const rapi_t *rapi) {
 
 void rapi_set_timeout(rapi_t *rapi, int seconds) {
     if (rapi->socket < 0 || seconds <= 0) return;
-    struct timeval timeout = { seconds, 0 };
-    setsockopt(rapi->socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+    rapi_socket_timeout(rapi->socket, seconds);
 }
 
 void rapi_disconnect(rapi_t *rapi) {
     if (!rapi) return;
-    if (rapi->socket >= 0) close(rapi->socket);
+    if (rapi->socket >= 0) rapi_socket_close(rapi->socket);
     free(rapi->reply);
     free(rapi);
 }

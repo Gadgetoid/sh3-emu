@@ -35,6 +35,8 @@ static const char *FONT_PATHS[] = {
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
     "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
 };
 
 static float density = 1.0f;
@@ -67,6 +69,9 @@ static bool load_font_file(const char *path) {
 }
 
 static bool load_matched_font(void) {
+#ifdef _WIN32
+    return false;
+#endif
     FILE *match = popen("fc-match -f '%{file}' sans-serif:style=Regular 2>/dev/null", "r");
     if (!match) return false;
     char path[1024] = "";

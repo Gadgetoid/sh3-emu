@@ -28,7 +28,10 @@ THREAD_LIBS = -lpthread
 LDFLAGS += $(shell $(SDL_PKG_CONFIG) --libs sdl3) -lm -lz $(THREAD_LIBS)
 
 UNAME := $(shell uname -s)
-ifeq ($(UNAME),Darwin)
+ifeq ($(OS),Windows_NT)
+MENU     ?= bar
+CFLAGS   += -D_POSIX_C_SOURCE=200809L
+else ifeq ($(UNAME),Darwin)
 MENU     ?= macos
 else
 MENU     ?= bar
@@ -43,7 +46,13 @@ else
 SRC_MENU  = src/frontend/linux/menu.c src/frontend/linux/dialog.c src/frontend/linux/ui.c src/frontend/common/menu_state.c src/vendor/truetype.c
 endif
 
-ifeq ($(shell $(PKG_CONFIG) --exists slirp && echo yes),yes)
+ifeq ($(OS),Windows_NT)
+HAVE_SLIRP = no
+else
+HAVE_SLIRP := $(shell $(PKG_CONFIG) --exists slirp && echo yes)
+endif
+
+ifeq ($(HAVE_SLIRP),yes)
 SRC_NET   = src/util/socket_path.c src/net/net_gateway.c src/net/ppp_gateway.c src/net/ethernet_gateway.c src/net/serial_link.c src/net/ethernet_link.c
 CFLAGS   += $(shell $(PKG_CONFIG) --cflags slirp)
 NET_LIBS  = $(shell $(PKG_CONFIG) --libs slirp)
@@ -58,9 +67,20 @@ else
 SRC_NET   = src/util/socket_path.c src/net/net_gateway_none.c src/net/ppp_gateway.c src/net/ethernet_gateway.c src/net/web_proxy_none.c src/net/radio_stream_none.c src/net/radio_stations.c src/net/radio_service.c src/net/serial_link.c src/net/ethernet_link.c
 endif
 
-SRC_MACHINE = src/core/sh3.c src/core/optimiser.c src/native/native.c src/native/lz.c src/native/lzw.c src/core/sh770x.c src/core/machine.c src/core/autopc.c src/core/state.c src/core/casio.c src/core/hp320lx.c src/core/hpw200ec.c src/core/hd64461.c src/core/dac_sound.c src/core/cfcard.c src/core/atapi.c src/core/cdimage.c src/core/cmd646.c src/core/clarion_gps.c src/core/gps_receiver.c src/core/autopc_i2c.c src/core/audio_mixer.c src/core/pccard.c src/core/ne2000.c src/core/mailbox.c src/core/agent.c src/core/ce.c src/core/gdb.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
-SRC_RAPI    = src/rapi/rapi.c src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c src/rapi/debugmgr_images.c
-SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/capture.c src/app/commands.c src/app/desktop.c src/app/ethernet_service.c src/app/host.c src/app/input.c src/app/launch.c src/app/library.c src/app/log.c src/app/machine_session.c src/app/notices.c src/app/paths.c src/app/picks.c src/app/rom_catalog.c src/app/runner.c src/app/serial_service.c src/app/settings.c src/app/snapshot_store.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c src/frontend/common/dialog.c src/frontend/common/menu_queue.c $(SRC_MENU)
+ifeq ($(OS),Windows_NT)
+SRC_NET    := $(SRC_NET:src/net/serial_link.c=src/net/serial_link_none.c)
+SRC_SOCKET  = src/core/agent_none.c src/core/gdb_none.c
+SRC_RAPI_SOCKET = src/rapi/rapi_socket_none.c
+SRC_HOST    = src/app/host_windows.c
+else
+SRC_SOCKET  = src/core/agent.c src/core/gdb.c
+SRC_RAPI_SOCKET = src/rapi/rapi_socket.c
+SRC_HOST    = src/app/host.c
+endif
+
+SRC_MACHINE = src/core/sh3.c src/core/optimiser.c src/native/native.c src/native/lz.c src/native/lzw.c src/core/sh770x.c src/core/machine.c src/core/autopc.c src/core/state.c src/core/casio.c src/core/hp320lx.c src/core/hpw200ec.c src/core/hd64461.c src/core/dac_sound.c src/core/cfcard.c src/core/atapi.c src/core/cdimage.c src/core/cmd646.c src/core/clarion_gps.c src/core/gps_receiver.c src/core/autopc_i2c.c src/core/audio_mixer.c src/core/pccard.c src/core/ne2000.c src/core/mailbox.c $(SRC_SOCKET) src/core/ce.c src/core/screen.c src/core/key_text.c src/util/options.c src/util/file.c
+SRC_RAPI    = src/rapi/rapi.c $(SRC_RAPI_SOCKET) src/rapi/rapi_load.c src/rapi/rapi_setup.c src/rapi/rapi_sync.c src/rapi/debugmgr_images.c
+SRC_APP     = $(SRC_MACHINE) $(SRC_NET) $(SRC_RAPI) src/app/capture.c src/app/commands.c src/app/desktop.c src/app/ethernet_service.c $(SRC_HOST) src/app/input.c src/app/launch.c src/app/library.c src/app/log.c src/app/machine_session.c src/app/notices.c src/app/paths.c src/app/picks.c src/app/rom_catalog.c src/app/runner.c src/app/serial_service.c src/app/settings.c src/app/snapshot_store.c src/core/lcd.c src/util/png.c src/app/typer.c src/app/view.c src/app/profiles.c src/app/main.c src/frontend/common/dialog.c src/frontend/common/menu_queue.c $(SRC_MENU)
 
 OBJ_APP      = $(patsubst %.m,$(BUILD)/%.o,$(SRC_APP:%.c=$(BUILD)/%.o))
 OBJ_HEADLESS = $(SRC_MACHINE:%.c=$(BUILD)/%.o) $(SRC_NET:%.c=$(BUILD)/%.o) $(BUILD)/src/core/lcd.o $(BUILD)/src/util/png.o $(BUILD)/tools/headless.o
@@ -79,16 +99,16 @@ $(HEADLESS): $(OBJ_HEADLESS)
 $(NATIVECHECK): $(BUILD)/src/core/sh3.o $(BUILD)/src/core/optimiser.o $(BUILD)/src/native/native.o $(BUILD)/src/native/lz.o $(BUILD)/src/native/lzw.o $(BUILD)/src/util/file.o $(BUILD)/tools/native_check.o
 	$(CC) -o $@ $^ -lz
 
-$(GATEWAYCHECK): $(filter-out %/serial_link.o %/ethernet_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
+$(GATEWAYCHECK): $(filter-out %/serial_link.o %/serial_link_none.o %/ethernet_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/gateway_check.o
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
-$(PROXYCHECK): $(filter-out %/serial_link.o %/ethernet_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/proxy_check.o
+$(PROXYCHECK): $(filter-out %/serial_link.o %/serial_link_none.o %/ethernet_link.o,$(SRC_NET:%.c=$(BUILD)/%.o)) $(BUILD)/tools/proxy_check.o
 	$(CC) -o $@ $^ -lm -lz $(NET_LIBS) $(THREAD_LIBS)
 
 $(SH3RUN): $(BUILD)/src/core/sh3.o $(BUILD)/tools/sh3_run.o
 	$(CC) -o $@ $^
 
-$(RAPI_TOOL): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/tools/sh3emu_rapi.o
+$(RAPI_TOOL): $(SRC_RAPI:%.c=$(BUILD)/%.o) $(BUILD)/src/util/options.o $(BUILD)/src/util/file.o $(BUILD)/tools/sh3emu_rapi.o
 	$(CC) -o $@ $^
 
 ICON_TOOL  = $(BUILD)/icon

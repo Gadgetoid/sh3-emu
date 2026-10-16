@@ -5,6 +5,7 @@
 #include "rapi/rapi_load.h"
 #include "rapi/rapi_setup.h"
 #include "rapi/rapi_sync.h"
+#include "util/file.h"
 
 #include <pthread.h>
 #include <stdarg.h>
@@ -105,7 +106,7 @@ static bool fetch_folder(desktop_t *desktop, rapi_t *rapi, const char *remote, c
         set_status(desktop, "%s", rapi_error(rapi));
         return false;
     }
-    mkdir(local, 0755);
+    file_make_directory(local, 0755);
     bool success = true;
     for (size_t i = 0; i < count && success; i++) {
         char child_remote[PATH_SIZE * 2], child_local[PATH_SIZE * 2];

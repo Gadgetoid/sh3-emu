@@ -14,6 +14,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "util/file.h"
+
 #define PATH_SIZE       1024
 #define FREE_MARGIN     (64 * 1024)
 #define MANIFEST_HEADER RAPI_SYNC_MANIFEST
@@ -209,7 +211,7 @@ static void make_local_directories(const char *path) {
     for (char *p = directory + 1; *p; p++) {
         if (*p != '/') continue;
         *p = 0;
-        mkdir(directory, 0755);
+        file_make_directory(directory, 0755);
         *p = '/';
     }
 }
@@ -263,7 +265,7 @@ static void percent_encode(const char *text, char *out, size_t size) {
 }
 
 static bool make_trash_folder(const char *path) {
-    return mkdir(path, 0700) == 0 || errno == EEXIST;
+    return file_make_directory(path, 0700) || errno == EEXIST;
 }
 
 static bool write_trash_info(int descriptor, const char *path) {

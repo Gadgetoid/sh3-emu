@@ -5,6 +5,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#endif
 
 uint8_t *file_read(const char *path, size_t *size) {
     FILE *file = fopen(path, "rb");
@@ -27,4 +32,13 @@ const char *file_leaf_name(const char *path) {
 bool file_has_extension(const char *path, const char *extension) {
     const char *dot = strrchr(path, '.');
     return dot && !strcasecmp(dot, extension);
+}
+
+bool file_make_directory(const char *path, int mode) {
+#ifdef _WIN32
+    (void)mode;
+    return _mkdir(path) == 0;
+#else
+    return mkdir(path, (mode_t)mode) == 0;
+#endif
 }

@@ -81,6 +81,40 @@ jobs:
           name: sh3emu-debian
           path: dist/*.deb
 
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: git make zip
+          pacboy: gcc:p pkgconf:p sdl3:p zlib:p
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else echo "VERSION=0.1+git$(date +%Y%m%d).$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"; fi
+      - name: Build
+        run: make all sh3emu
+      - name: Check
+        run: sh tests/check.sh
+      - name: Package
+        run: |
+          mkdir -p "dist/SH3Emu-${VERSION}"
+          cp sh3emu.exe headless.exe sh3-run.exe sh3emu-rapi.exe "dist/SH3Emu-${VERSION}"
+          for dll in $(ldd sh3emu.exe headless.exe | awk '$3 ~ /^\/ucrt64\// { print $3 }' | sort -u); do cp "$dll" "dist/SH3Emu-${VERSION}"; done
+          cd dist && zip -r "SH3Emu-${VERSION}-windows-x86_64.zip" "SH3Emu-${VERSION}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sh3emu-windows
+          path: dist/*.zip
+
   android:
     runs-on: ubuntu-latest
     steps:
