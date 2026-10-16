@@ -7,7 +7,7 @@
 
 typedef struct {
     settings_t   *settings;
-    const char   *rom, *card, *state_file, *machine;
+    const char   *rom, *card, *cdrom, *state_file, *machine;
     bool fresh, verbose, debug_output;
     int gdb_port;
     const char   *gdb_process;
