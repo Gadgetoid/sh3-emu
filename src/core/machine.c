@@ -1238,6 +1238,10 @@ uint64_t machine_rom_hash(machine_t *m) {
     return m->rom_hash;
 }
 void machine_power_button(machine_t *m, bool down) {
+    if (m->autopc) {
+        autopc_power_button(&m->board, &m->board_host, down);
+        return;
+    }
     if (m->hitachi) {
         hpw200ec_power_button(&m->hitachi_board, &m->hitachi_host, down);
         return;

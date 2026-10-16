@@ -56,6 +56,9 @@
 #define LINK_RX_READY   0x00000400u
 #define LINK_TX_DONE    0x00000800u
 #define FACEPLATE_MESSAGE 0x02000000u
+#define LINK_KEYS_UP    0x00400000u
+#define POWER_ROW       1u
+#define POWER_COLUMN    1u
 
 #define WORD_CONTROL    0x80u
 #define WORD_LCD_READ   0x40u
@@ -361,6 +364,13 @@ static void lcd_pixels_write(autopc_t *board, uint32_t pixels) {
     board->lcd_address += NIBBLES_PER_WORD;
 }
 
+static bool keys_up(const autopc_t *board) {
+    for (int row = 0; row < AUTOPC_KEY_ROWS; row++) {
+        if (board->keys_down[row]) return false;
+    }
+    return true;
+}
+
 static uint8_t key_columns(const autopc_t *board) {
     uint8_t down = 0;
     for (int row = 0; row < AUTOPC_KEY_ROWS; row++) {
@@ -401,7 +411,7 @@ static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32
     case FACEPLATE_ENABLE: *value = board->faceplate_enable; return true;
     case FACEPLATE_PENDING: *value = board->faceplate_pending; return true;
     case LINK_ADDRESS: *value = board->link_address; return true;
-    case LINK_CONTROL: *value = board->link_control; return true;
+    case LINK_CONTROL: *value = board->link_control | (keys_up(board) ? LINK_KEYS_UP : 0); return true;
     case LINK_RECEIVE:
         *value = board->link_received;
         link_next_reply(board, host);
@@ -589,14 +599,22 @@ int autopc_palette(uint32_t *palette) {
     return 8;
 }
 
+static void matrix_key(autopc_t *board, const autopc_host_t *host, uint8_t row, uint8_t column, bool up) {
+    uint8_t bit = (uint8_t)(1u << column);
+    if (up) board->keys_down[row] &= (uint8_t) ~bit;
+    else board->keys_down[row] |= bit;
+    raise_faceplate(board, host, FACEPLATE_MESSAGE);
+}
+
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up) {
     for (size_t i = 0; i < sizeof faceplate_keys / sizeof faceplate_keys[0]; i++) {
         const faceplate_key_t *key = &faceplate_keys[i];
         if (key->scancode != scancode) continue;
-        uint8_t bit = (uint8_t)(1u << key->column);
-        if (up) board->keys_down[key->row] &= (uint8_t) ~bit;
-        else board->keys_down[key->row] |= bit;
-        raise_faceplate(board, host, FACEPLATE_MESSAGE);
+        matrix_key(board, host, key->row, key->column, up);
         return;
     }
+}
+
+void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down) {
+    matrix_key(board, host, POWER_ROW, POWER_COLUMN, !down);
 }

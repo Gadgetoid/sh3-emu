@@ -380,7 +380,7 @@ fi
 
 AUTOPC_ROM=${AUTOPC_ROM:-rom/autopc-burnos.bin}
 AUTOPC_HASH=72eff421d8c18cfecd168e12cd29604ce533d1007d34fafaa4246f0562285d3c
-AUTOPC_ENTER_HASH=0285b06f0aa4563508d113f5e6125a16eac5e8a2a9c2df56852ddc12579818ee
+AUTOPC_ENTER_HASH=3be6f888aed3b0d12cc629525ee2c0de6929a2a6cd36163a68148d127158b64e
 if [ -f "$AUTOPC_ROM" ]; then
     ./headless "$AUTOPC_ROM" --debug-output --seconds=15 --pgm="$OUT/autopc.pgm" > "$OUT/autopc.log" 2>&1
     actual=$(shasum -a 256 "$OUT/autopc.pgm" | cut -d' ' -f1)
