@@ -85,9 +85,9 @@
 #define LCD_PALETTE_INDEX 0x0Eu
 #define LCD_PALETTE_DATA  0x0Fu
 #define PIXEL_BITS      3u
-#define PIXEL_RED       4u
+#define PIXEL_RED       1u
 #define PIXEL_GREEN     2u
-#define PIXEL_BLUE      1u
+#define PIXEL_BLUE      4u
 #define PIXELS_PER_WORD 8u
 #define NIBBLES_PER_WORD 6u
 
