@@ -107,6 +107,7 @@ int  autopc_palette(uint32_t *palette);
 void autopc_card_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_disc_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_watchdog_reset(autopc_t *board);
+void autopc_warm_reset(autopc_t *board);
 uint32_t autopc_gps_send(autopc_t *board, const autopc_host_t *host, const uint8_t *bytes, uint32_t length);
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up);
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down);

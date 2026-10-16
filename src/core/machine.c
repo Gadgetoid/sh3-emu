@@ -1318,6 +1318,7 @@ bool machine_dictionary_mounted(machine_t *m) {
 
 void machine_soft_reset(machine_t *m) {
     reset_machine(m, true);
+    if (m->autopc) autopc_warm_reset(&m->board);
 }
 
 bool machine_watch_pc(machine_t *m, uint32_t va) {

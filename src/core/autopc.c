@@ -730,6 +730,10 @@ static bool card_access(autopc_t *board, const autopc_host_t *host, uint32_t pa,
     return true;
 }
 
+void autopc_warm_reset(autopc_t *board) {
+    board->fpga[FPGA_STATUS / 4] |= STATUS_WARM_RESET;
+}
+
 void autopc_watchdog_reset(autopc_t *board) {
     board->fpga[FPGA_STATUS / 4] |= STATUS_WATCHDOG_RESET | STATUS_WARM_RESET;
 }
