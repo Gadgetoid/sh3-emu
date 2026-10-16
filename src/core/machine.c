@@ -889,7 +889,7 @@ static uint64_t next_event(machine_t *m) {
     if (serial_busy && m->serial_tick_at < next) next = m->serial_tick_at;
     if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
     if (m->pending_disc_at && m->pending_disc_at < next) next = m->pending_disc_at;
-    if (m->gps.active && m->gps_frame_at < next) next = m->gps_frame_at;
+    if (m->autopc && m->gps_frame_at < next) next = m->gps_frame_at;
     if (m->power_release_at && m->power_release_at < next) next = m->power_release_at;
     return next;
 }
@@ -1146,8 +1146,9 @@ bool machine_disc_loaded(machine_t *m) {
 }
 
 static void gps_frame_event(machine_t *m) {
-    if (!m->autopc || !m->gps.active || m->cpu.cycles < m->gps_frame_at) return;
+    if (!m->autopc || m->cpu.cycles < m->gps_frame_at) return;
     if (m->gps_frame_at) gps_receiver_advance(&m->gps, 1.0);
+    if (!m->gps_epoch) m->gps_epoch = (int64_t)time(NULL);
     m->gps_frame_at = m->cpu.cycles + MACHINE_CLOCK_HZ;
     clarion_gps_fix_t fix;
     gps_receiver_fix(&m->gps, m->gps_epoch + (int64_t)m->gps.elapsed, &fix);
