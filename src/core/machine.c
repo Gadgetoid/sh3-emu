@@ -1322,7 +1322,7 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-#define STATE_FIELD_COUNT 9
+#define STATE_FIELD_COUNT 10
 
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
@@ -1335,6 +1335,7 @@ static void state_fields(machine_t *m, state_field_t *fields) {
         { "hp_board", &m->hp_board, sizeof m->hp_board, NULL, 0, NULL },
         { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0, NULL },
         { "hpw200ec_board", &m->hitachi_board, sizeof m->hitachi_board, NULL, 0, NULL },
+        { "autopc_board", &m->board, sizeof m->board, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
 }

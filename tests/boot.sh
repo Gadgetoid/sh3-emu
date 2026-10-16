@@ -398,6 +398,10 @@ if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --debug-output --seconds=40 --power=10 --key=18:5A --key=28:F4 --pgm="$OUT/autopc_menu.pgm" > "$OUT/autopc_menu.log" 2>&1
     actual=$(shasum -a 256 "$OUT/autopc_menu.pgm" | cut -d' ' -f1)
     if grep -q "^debug: DSP Download Successful" "$OUT/autopc_menu.log" && [ "$actual" = "$AUTOPC_MENU_HASH" ]; then echo "ok   autopc_menu"; else echo "FAIL autopc_menu $actual"; exit 1; fi
+    ./headless "$AUTOPC_FLASH_ROM" --seconds=40 --power=10 --key=18:5A --save="$OUT/autopc.state" > /dev/null 2>&1
+    ./headless "$AUTOPC_FLASH_ROM" --load="$OUT/autopc.state" --seconds=8 --key=2:F4 --pgm="$OUT/autopc_resume.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc_resume.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$AUTOPC_MENU_HASH" ]; then echo "ok   autopc_resume"; else echo "FAIL autopc_resume $actual"; exit 1; fi
 else
     echo "skip autopc_menu: no $AUTOPC_FLASH_ROM (Clarion AutoPC 310C 8 MB flash dump)"
 fi
