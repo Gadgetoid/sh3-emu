@@ -394,6 +394,7 @@ fi
 
 AUTOPC_FLASH_ROM=${AUTOPC_FLASH_ROM:-rom/autopc-310c-flash-8mb.bin}
 AUTOPC_MENU_HASH=224ea48adc540bf3e9411164f2df0df9c880995252f6bd5e727f79bbb0a299e9
+AUTOPC_INSERT_HASH=d4a22dd722006af5b34ffa17729875bc9ee45aea642bd89b7c722cec88f30259
 if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --debug-output --seconds=40 --power=10 --key=18:5A --key=28:F4 --pgm="$OUT/autopc_menu.pgm" > "$OUT/autopc_menu.log" 2>&1
     actual=$(shasum -a 256 "$OUT/autopc_menu.pgm" | cut -d' ' -f1)
@@ -402,6 +403,11 @@ if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --load="$OUT/autopc.state" --seconds=8 --key=2:F4 --pgm="$OUT/autopc_resume.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/autopc_resume.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$AUTOPC_MENU_HASH" ]; then echo "ok   autopc_resume"; else echo "FAIL autopc_resume $actual"; exit 1; fi
+    printf '[AutoPC.shx]\nTitle=Hello Install\nItem1=Hello\nOpen1=hello.cei\n' > "$OUT/AUTORUN.INF"
+    sh tools/mkcard.sh "$OUT/autopc_insert.img" 16 "$OUT/AUTORUN.INF" > /dev/null
+    ./headless "$AUTOPC_FLASH_ROM" --card="$OUT/autopc_insert.img" --insert-at=30 --seconds=40 --power=10 --key=18:5A --pgm="$OUT/autopc_insert.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc_insert.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$AUTOPC_INSERT_HASH" ]; then echo "ok   autopc_insert"; else echo "FAIL autopc_insert $actual"; exit 1; fi
 else
     echo "skip autopc_menu: no $AUTOPC_FLASH_ROM (Clarion AutoPC 310C 8 MB flash dump)"
 fi

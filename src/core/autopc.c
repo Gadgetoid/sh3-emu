@@ -9,7 +9,8 @@
 #define FPGA_SIZE       0x00010000u
 #define FPGA_ENABLE     0x0008u
 #define FPGA_PENDING    0x000Cu
-#define FPGA_SOCKET_INTR 0x0400u
+#define FPGA_SOCKET_CHANGE 0x0400u
+#define FPGA_SOCKET_IREQ 0x0800u
 #define FPGA_INPUTS     0x1000u
 #define INPUT_IGNITION  0x0001u
 #define FPGA_STATUS     0x8000u
@@ -119,11 +120,11 @@
 #define SOCKET_STATUS   0x4u
 #define SOCKET_SHARED   0x2004u
 #define SOCKET_SIZE     0x2008u
-#define CONTROL_IREQ_ENABLE 0x0008u
-#define CONTROL_CHANGE_ENABLE 0x0010u
+#define CONTROL_CHANGE_ENABLE 0x0008u
+#define CONTROL_IREQ_ENABLE 0x0010u
 #define CONTROL_RESET   0x0020u
-#define STATUS_IREQ     0x0001u
-#define STATUS_CHANGED  0x0002u
+#define STATUS_CHANGED  0x0001u
+#define STATUS_IREQ     0x0002u
 #define STATUS_NO_CARD  0x000Cu
 #define SHARED_BATTERY_OK 0xCCCCu
 #define CARD_PA         0x14000000u
@@ -375,8 +376,9 @@ static uint32_t fpga_pending(const autopc_t *board, const autopc_host_t *host) {
     uint32_t pending = board->fpga[FPGA_PENDING / 4];
     if (board->dma_done) pending |= FPGA_DMA_DONE;
     for (int socket = 0; socket < AUTOPC_SOCKETS; socket++) {
-        uint16_t active = socket_status(board, host, socket) & (uint16_t)(board->socket_control[socket] >> 3) & (STATUS_IREQ | STATUS_CHANGED);
-        if (active) pending |= FPGA_SOCKET_INTR << socket;
+        uint16_t status = socket_status(board, host, socket), control = board->socket_control[socket];
+        if ((status & STATUS_IREQ) && (control & CONTROL_IREQ_ENABLE)) pending |= FPGA_SOCKET_IREQ;
+        if ((status & STATUS_CHANGED) && (control & CONTROL_CHANGE_ENABLE)) pending |= FPGA_SOCKET_CHANGE;
     }
     return pending;
 }
