@@ -60,6 +60,18 @@
 #define LINK_KEYS_UP    0x00400000u
 #define POWER_ROW       1u
 #define POWER_COLUMN    1u
+#define DSP_INTERRUPT_ENABLE 0x100Cu
+#define DSP_INTERRUPT_STATUS 0x1014u
+#define DSP_DATA_READY  0x0200u
+#define DSP_REPLY_READY 0x0100u
+#define DSP_COMMAND_MASK 0x00FF0000u
+#define DSP_VERSION_COMMAND 0x00C10000u
+#define DSP_REPLY_BIT   0x00400000u
+#define DSP_CONTROL     0x2040u
+#define DSP_DATA        0x2050u
+#define DSP_STATUS      0x2054u
+#define DSP_AWAITING    0x0800u
+#define DSP_BUSY        0x0400u
 
 #define WORD_CONTROL    0x80u
 #define WORD_LCD_READ   0x40u
@@ -315,8 +327,12 @@ static uint32_t fpga_pending(const autopc_t *board, const autopc_host_t *host) {
     return pending;
 }
 
+static uint32_t dsp_interrupts(const autopc_t *board) {
+    return board->dsp_status & bytes_read(board->faceplate_io, DSP_INTERRUPT_ENABLE, 4) & (DSP_DATA_READY | DSP_REPLY_READY);
+}
+
 static void update_irl(const autopc_t *board, const autopc_host_t *host) {
-    bool faceplate = (board->faceplate_pending & board->faceplate_enable) != 0;
+    bool faceplate = (board->faceplate_pending & board->faceplate_enable) != 0 || dsp_interrupts(board);
     bool fpga = (fpga_pending(board, host) & board->fpga[FPGA_ENABLE / 4]) != 0;
     if (host->irl) host->irl(host->context, faceplate || fpga);
 }
@@ -417,6 +433,12 @@ static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32
         *value = board->link_received;
         link_next_reply(board, host);
         return true;
+    case DSP_INTERRUPT_STATUS: *value = board->dsp_status; return true;
+    case DSP_DATA: *value = board->dsp_reply; return true;
+    case DSP_STATUS:
+        *value = bytes_read(board->faceplate_io, offset, size) & ~(DSP_BUSY | DSP_AWAITING);
+        if (!board->dsp_data_written) *value |= DSP_AWAITING;
+        return true;
     default:
         *value = bytes_read(board->faceplate_io, offset, size);
         return offset == LINK_CONFIG;
@@ -437,6 +459,25 @@ static bool faceplate_io_write(autopc_t *board, const autopc_host_t *host, uint3
     case LINK_CONTROL:
         board->link_control = value;
         if (value & LINK_TRANSMIT) link_transmit(board, host);
+        return true;
+    case DSP_CONTROL:
+    case DSP_DATA:
+        board->dsp_data_written = offset == DSP_DATA;
+        bytes_write(board->faceplate_io, offset, size, value);
+        board->dsp_status |= DSP_DATA_READY;
+        if (offset == DSP_DATA && (value & DSP_COMMAND_MASK) == DSP_VERSION_COMMAND) {
+            board->dsp_reply = value & ~DSP_REPLY_BIT;
+            board->dsp_status |= DSP_REPLY_READY;
+        }
+        update_irl(board, host);
+        return true;
+    case DSP_INTERRUPT_STATUS:
+        board->dsp_status &= ~value;
+        update_irl(board, host);
+        return true;
+    case DSP_INTERRUPT_ENABLE:
+        bytes_write(board->faceplate_io, offset, size, value);
+        update_irl(board, host);
         return true;
     default:
         bytes_write(board->faceplate_io, offset, size, value);

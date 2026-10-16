@@ -49,6 +49,9 @@ typedef struct {
 
     autopc_pci_t faceplate;
     uint8_t faceplate_io[0x10000];
+    bool dsp_data_written;
+    uint32_t dsp_status;
+    uint32_t dsp_reply;
     uint8_t faceplate_memory[0x10000];
     uint32_t faceplate_enable, faceplate_pending;
     uint32_t link_address, link_control, link_received;
