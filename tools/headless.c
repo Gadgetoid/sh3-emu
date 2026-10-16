@@ -118,7 +118,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double seconds;
-    const char *png, *pgm, *load, *save, *wav, *card, *agent_socket, *gdb_process;
+    const char *png, *pgm, *load, *save, *wav, *card, *cdrom, *agent_socket, *gdb_process;
     int png_cell, png_backlight, gdb_port;
     bool trace_pc, host_time, optimisations, verify_optimisations, trace_exceptions, debug_output, seconds_given;
     double key_times[32];
@@ -136,7 +136,7 @@ typedef struct {
     int power_count;
     double backlight_times[8];
     int backlight_count;
-    double soft_reset_at, realtime, net_at, replug_at, cable_at, eject_at, insert_at;
+    double soft_reset_at, realtime, net_at, replug_at, cable_at, eject_at, insert_at, cdrom_at;
     double send_times[8];
     const char *send_text[8];
     int send_count;
@@ -151,8 +151,8 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
-    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_EJECT, OPT_INSERT,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_CDROM, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_EJECT, OPT_INSERT, OPT_CDROM_AT,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
 };
@@ -163,6 +163,7 @@ static const option_t OPTIONS[] = {
     [OPT_LOAD] = { "load", "STATE", "start from a saved state", 0 },
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
+    [OPT_CDROM] = { "cdrom", "ISO", "load an ISO 9660 image into the AutoPC's CD drive, after --load", 0 },
     [OPT_ETHERNET] = { "ethernet", NULL, "insert an NE2000 Ethernet card in the HP's PC Card slot (moving --card to the 320LX's CompactFlash slot), on its own network with DHCP", 0 },
     [OPT_DICTIONARY] = { "dictionary", "IMAGE", "map the Casio A-51's dictionary ROM image at physical 0x04000000", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
@@ -189,6 +190,7 @@ static const option_t OPTIONS[] = {
     [OPT_SOFT_RESET] = { "soft-reset", "SECONDS", "restart CE, keeping RAM", 0 },
     [OPT_EJECT] = { "eject-at", "SECONDS", "remove the --card, so CE dismounts and flushes it", 0 },
     [OPT_INSERT] = { "insert-at", "SECONDS", "insert the --card then instead of at the start, so CE sees it arrive", 0 },
+    [OPT_CDROM_AT] = { "cdrom-at", "SECONDS", "load the --cdrom then instead of at the start", 0 },
     [OPT_HEADING_OUTPUT] = { NULL, NULL, "Output", 0 },
     [OPT_PGM] = { "pgm", "FILE", "save the raw greyscale screen at the end", 0 },
     [OPT_PNG] = { "png", "FILE", "save the screen through the simulated LCD at the end", 0 },
@@ -224,6 +226,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_LOAD: run->load = value; return true;
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
+    case OPT_CDROM: run->cdrom = value; return true;
     case OPT_ETHERNET: run->ethernet = true; return true;
     case OPT_DICTIONARY: run->dictionary = value; return true;
     case OPT_RAPI: run->rapi_socket = value; return true;
@@ -316,6 +319,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_SOFT_RESET: return option_number(value, &run->soft_reset_at) && run->soft_reset_at >= 0;
     case OPT_EJECT: return option_number(value, &run->eject_at) && run->eject_at >= 0;
     case OPT_INSERT: return option_number(value, &run->insert_at) && run->insert_at >= 0;
+    case OPT_CDROM_AT: return option_number(value, &run->cdrom_at) && run->cdrom_at >= 0;
     case OPT_PGM: run->pgm = value; return true;
     case OPT_PNG: run->png = value; return true;
     case OPT_WAV: run->wav = value; return true;
@@ -359,7 +363,7 @@ static bool due(double at, uint64_t done, uint64_t slice) {
 
 int main(int argc, char **argv) {
     static run_t run;
-    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .replug_at = -1, .cable_at = -1, .eject_at = -1, .insert_at = -1 };
+    run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .replug_at = -1, .cable_at = -1, .eject_at = -1, .insert_at = -1, .cdrom_at = -1 };
     const char *positional[1];
     int positional_count;
     options_result_t parsed = options_parse(&SPEC, argc, argv, parse_option, &run, positional, 1, &positional_count);
@@ -376,6 +380,7 @@ int main(int argc, char **argv) {
     double latest = run.soft_reset_at;
     if (run.eject_at > latest) latest = run.eject_at;
     if (run.insert_at > latest) latest = run.insert_at;
+    if (run.cdrom_at > latest) latest = run.cdrom_at;
     for (int k = 0; k < run.key_count; k++) if (run.key_times[k] > latest) latest = run.key_times[k];
     for (int t = 0; t < run.tap_count; t++) if (run.tap_times[t] > latest) latest = run.tap_times[t];
     for (int k = 0; k < run.type_count; k++) if (run.type_times[k] > latest) latest = run.type_times[k];
@@ -407,6 +412,7 @@ int main(int argc, char **argv) {
     if (run.load && !machine_load(machine, run.load, NULL)) { fprintf(stderr, "cannot load state %s\n", run.load); return 1; }
     if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && run.insert_at < 0 && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
+    if (run.cdrom && run.cdrom_at < 0 && !machine_load_disc(machine, run.cdrom)) { fprintf(stderr, "cannot load disc image %s\n", run.cdrom); return 1; }
     if (run.ethernet) {
         if (!net_gateway_available()) { fprintf(stderr, "headless: --ethernet needs a build with libslirp\n"); return 2; }
         if (!ethernet_link_insert(&ethernet, machine)) { fprintf(stderr, "headless: --ethernet needs an HP machine\n"); return 2; }
@@ -497,6 +503,7 @@ int main(int argc, char **argv) {
         }
         if (due(run.soft_reset_at, done, slice)) machine_soft_reset(machine);
         if (due(run.insert_at, done, slice) && run.card && !machine_insert_card(machine, run.card)) fprintf(stderr, "cannot open card image %s\n", run.card);
+        if (due(run.cdrom_at, done, slice) && run.cdrom && !machine_load_disc(machine, run.cdrom)) fprintf(stderr, "cannot load disc image %s\n", run.cdrom);
         if (due(run.eject_at, done, slice)) machine_eject_card(machine);
         if (due(run.cable_at, done, slice)) machine_serial_connect(machine, true);
         for (int k = 0; k < run.send_count; k++) {

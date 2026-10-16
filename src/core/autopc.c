@@ -37,6 +37,7 @@
 #define DMA_DESCRIPTOR_LIMIT 1024u
 #define DMA_CHUNK_MAX   0x1000u
 #define FPGA_DMA_DONE   0x0100u
+#define FPGA_IDE        0x0002u
 #define AREA_ADDRESS_MASK 0x1FFFFFFFu
 #define CONFIG_DATA_PA  0x0A000000u
 #define CONFIG_ENABLE   0x80000000u
@@ -55,6 +56,7 @@
 #define BAR_IO          0x00000001u
 
 #define FACEPLATE_SLOT  1u
+#define IDE_SLOT        2u
 #define CLARION_VENDOR  0x1398u
 #define FACEPLATE_DEVICE 0x0003u
 #define FACEPLATE_CLASS 0x0B400000u
@@ -305,14 +307,22 @@ static void bridge_write(autopc_t *board, const autopc_host_t *host, uint32_t of
     }
 }
 
+static uint32_t config_function(const autopc_t *board) {
+    return (board->bridge[BRIDGE_CONFIG_ADDRESS / 4] >> 8) & 0xFFu;
+}
+
 static autopc_pci_t *config_target(autopc_t *board, uint32_t *reg) {
     uint32_t address = board->bridge[BRIDGE_CONFIG_ADDRESS / 4];
     *reg = address & 0xFCu;
-    if (((address >> 8) & 0xFFu) != FACEPLATE_SLOT << 3) {
+    if (config_function(board) != FACEPLATE_SLOT << 3) {
         board->bridge[BRIDGE_STATUS / 4] |= MASTER_ABORT;
         return NULL;
     }
     return &board->faceplate;
+}
+
+static cmd646_t *ide_target(const autopc_t *board, const autopc_host_t *host) {
+    return host->ide && host->cdrom && config_function(board) == IDE_SLOT << 3 ? host->ide : NULL;
 }
 
 static const autopc_bar_t *bar_for(const autopc_pci_t *pci, uint32_t reg) {
@@ -324,7 +334,9 @@ static uint32_t bar_base(const autopc_pci_t *pci, int index) {
     return pci->config[PCI_BAR0 / 4 + index] & ~(pci->bars[index].size - 1);
 }
 
-static uint32_t config_read(autopc_t *board) {
+static uint32_t config_read(autopc_t *board, const autopc_host_t *host) {
+    cmd646_t *ide = ide_target(board, host);
+    if (ide) return cmd646_config_read(ide, board->bridge[BRIDGE_CONFIG_ADDRESS / 4] & 0xFCu);
     uint32_t reg;
     autopc_pci_t *pci = config_target(board, &reg);
     if (!pci) return NO_DEVICE;
@@ -337,7 +349,12 @@ static uint32_t config_read(autopc_t *board) {
     }
 }
 
-static void config_write(autopc_t *board, uint32_t value) {
+static void config_write(autopc_t *board, const autopc_host_t *host, uint32_t value) {
+    cmd646_t *ide = ide_target(board, host);
+    if (ide) {
+        cmd646_config_write(ide, board->bridge[BRIDGE_CONFIG_ADDRESS / 4] & 0xFCu, value);
+        return;
+    }
     uint32_t reg;
     autopc_pci_t *pci = config_target(board, &reg);
     if (pci && reg != PCI_ID && reg != PCI_CLASS) pci->config[reg / 4] = value;
@@ -360,6 +377,28 @@ static bool memory_hit(const autopc_pci_t *pci, uint32_t pa, uint32_t *offset) {
     return *offset < pci->bars[1].size;
 }
 
+typedef struct {
+    autopc_t *board;
+    const autopc_host_t *host;
+} ide_bus_t;
+
+static bool ide_memory(void *context, uint32_t bus_address, uint8_t *data, uint32_t length, bool write) {
+    ide_bus_t *bus = context;
+    uint32_t offset;
+    if (memory_hit(&bus->board->faceplate, PCI_MEMORY_PA + bus_address, &offset)) bus_address += PCI_MEMORY_PA;
+    else bus_address &= AREA_ADDRESS_MASK;
+    return board_memory(bus->board, bus->host, bus_address, data, length, write);
+}
+
+static bool ide_access(autopc_t *board, const autopc_host_t *host, uint32_t pa, int size, bool write, uint32_t *value) {
+    if (!host->ide || !host->cdrom || pa - PCI_IO_PA >= PCI_IO_WINDOWS * PCI_IO_WINDOW_SIZE) return false;
+    ide_bus_t bus = { board, host };
+    cmd646_host_t ide_host = { host->cdrom, ide_memory, &bus };
+    if (!cmd646_io(host->ide, &ide_host, (pa - PCI_IO_PA) % PCI_IO_WINDOW_SIZE, size, write, value)) return false;
+    update_irl(board, host);
+    return true;
+}
+
 static bool card_present(const autopc_host_t *host, int socket) {
     return socket == 0 && host->card && host->card->state->inserted;
 }
@@ -375,6 +414,7 @@ static uint16_t socket_status(const autopc_t *board, const autopc_host_t *host, 
 static uint32_t fpga_pending(const autopc_t *board, const autopc_host_t *host) {
     uint32_t pending = board->fpga[FPGA_PENDING / 4];
     if (board->dma_done) pending |= FPGA_DMA_DONE;
+    if (host->ide && host->cdrom && cmd646_interrupt(host->ide)) pending |= FPGA_IDE;
     for (int socket = 0; socket < AUTOPC_SOCKETS; socket++) {
         uint16_t status = socket_status(board, host, socket), control = board->socket_control[socket];
         if ((status & STATUS_IREQ) && (control & CONTROL_IREQ_ENABLE)) pending |= FPGA_SOCKET_IREQ;
@@ -614,6 +654,10 @@ static bool card_access(autopc_t *board, const autopc_host_t *host, uint32_t pa,
     return true;
 }
 
+void autopc_disc_changed(autopc_t *board, const autopc_host_t *host) {
+    update_irl(board, host);
+}
+
 void autopc_card_changed(autopc_t *board, const autopc_host_t *host) {
     board->socket_events[0] |= STATUS_CHANGED;
     update_irl(board, host);
@@ -633,9 +677,10 @@ bool autopc_read(autopc_t *board, const autopc_host_t *host, uint32_t pa, int si
         return true;
     }
     if (config_selected(board, pa)) {
-        *value = sized(config_read(board), pa, size);
+        *value = sized(config_read(board, host), pa, size);
         return true;
     }
+    if (ide_access(board, host, pa, size, false, value)) return true;
     if (io_hit(&board->faceplate, pa, &offset)) {
         if (!faceplate_io_read(board, host, offset, size, value) && host->trace) host->trace(host->context, false, pa, size, *value);
         return true;
@@ -670,9 +715,10 @@ bool autopc_write(autopc_t *board, const autopc_host_t *host, uint32_t pa, int s
         return true;
     }
     if (config_selected(board, pa)) {
-        if (size == 4) config_write(board, value);
+        if (size == 4) config_write(board, host, value);
         return true;
     }
+    if (ide_access(board, host, pa, size, true, &value)) return true;
     if (io_hit(&board->faceplate, pa, &offset)) {
         if (!faceplate_io_write(board, host, offset, size, value) && host->trace) host->trace(host->context, true, pa, size, value);
         return true;

@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "core/cfcard.h"
+#include "core/cmd646.h"
 
 #define AUTOPC_SCREEN_WIDTH  256
 #define AUTOPC_SCREEN_HEIGHT 64
@@ -29,6 +30,8 @@ typedef struct {
     uint32_t cpu_hz;
     void           *context;
     cfcard_slot_t  *card;
+    cmd646_t      *ide;
+    atapi_slot_t  *cdrom;
 } autopc_host_t;
 
 typedef struct {
@@ -91,6 +94,7 @@ bool autopc_write(autopc_t *board, const autopc_host_t *host, uint32_t pa, int s
 void autopc_screen(const autopc_t *board, uint8_t *pixels);
 int  autopc_palette(uint32_t *palette);
 void autopc_card_changed(autopc_t *board, const autopc_host_t *host);
+void autopc_disc_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up);
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down);
 uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host);

@@ -408,6 +408,10 @@ if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --card="$OUT/autopc_insert.img" --insert-at=30 --seconds=40 --power=10 --key=18:5A --pgm="$OUT/autopc_insert.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/autopc_insert.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$AUTOPC_INSERT_HASH" ]; then echo "ok   autopc_insert"; else echo "FAIL autopc_insert $actual"; exit 1; fi
+    python3 tools/mkiso.py "$OUT/autopc_cdrom.iso" HELLO "$OUT/AUTORUN.INF"
+    ./headless "$AUTOPC_FLASH_ROM" --cdrom="$OUT/autopc_cdrom.iso" --cdrom-at=30 --seconds=40 --power=10 --key=18:5A --pgm="$OUT/autopc_cdrom.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc_cdrom.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$AUTOPC_INSERT_HASH" ]; then echo "ok   autopc_cdrom"; else echo "FAIL autopc_cdrom $actual"; exit 1; fi
 else
     echo "skip autopc_menu: no $AUTOPC_FLASH_ROM (Clarion AutoPC 310C 8 MB flash dump)"
 fi

@@ -50,6 +50,10 @@ bool machine_suspended(machine_t *machine);
 
 bool machine_insert_card(machine_t *machine, const char *path);
 void machine_eject_card(machine_t *machine);
+bool machine_has_disc_drive(machine_t *machine);
+bool machine_load_disc(machine_t *machine, const char *path);
+void machine_eject_disc(machine_t *machine);
+bool machine_disc_loaded(machine_t *machine);
 bool machine_has_ethernet_slot(machine_t *machine);
 bool machine_insert_ethernet(machine_t *machine, const uint8_t mac[6]);
 void machine_eject_ethernet(machine_t *machine);

@@ -105,6 +105,9 @@ struct machine {
     cfcard_t card;
     cfcard_slot_t card_slot;
     char card_path[CARD_PATH_MAX];
+    cmd646_t ide;
+    atapi_slot_t disc_slot;
+    char disc_path[CARD_PATH_MAX];
     ne2000_t ethernet;
     uint8_t  *dictionary;
     int16_t audio[AUDIO_RING];
@@ -113,6 +116,8 @@ struct machine {
     size_t dictionary_size;
     char pending_card[CARD_PATH_MAX];
     uint64_t pending_card_at;
+    char pending_disc[CARD_PATH_MAX];
+    uint64_t pending_disc_at;
     bool pending_ethernet;
     uint8_t pending_ethernet_mac[6];
     bool serial_connected;
@@ -764,6 +769,8 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     hp320lx_reset(&m->hp_board);
     hpw200ec_reset(&m->hitachi_board);
     autopc_reset(&m->board);
+    cmd646_reset(&m->ide);
+    atapi_reset(&m->disc_slot);
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
     m->audio_count = 0;
@@ -802,13 +809,14 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->hitachi = !m->autopc && !m->hp && hpw200ec_detect(rom, rom_size);
     m->casio = !m->autopc && !m->hp && !m->hitachi;
     m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .cycles = casio_cycles, .samples = casio_samples, .memory = autopc_memory,
-                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot };
+                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot, .ide = &m->ide, .cdrom = &m->disc_slot };
     m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
                                    .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
     m->hitachi_host = (hpw200ec_host_t){ .trace = hitachi_trace, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .context = m,
                                          .companion = { .trace = hitachi_trace, .transmit = hitachi_transmit, .interrupt = hitachi_interrupt, .socket = hitachi_socket, .context = m } };
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
+    m->disc_slot.state = &m->ide.drive;
     if (m->autopc && image_is_b000ff(m) ? !load_b000ff(m, NULL, DRAM_DEFAULT_SIZE, error, error_size) : !load_flash(m, error, error_size)) {
         machine_destroy(m);
         return NULL;
@@ -824,6 +832,7 @@ void machine_destroy(machine_t *m) {
     if (!m) return;
     mailbox_clear(&m->mailbox);
     cfcard_eject(&m->card_slot);
+    atapi_unload(&m->disc_slot);
     optimiser_set_verify(&m->optimiser, false, NULL, NULL);
     free(m->dram);
     free(m->dictionary);
@@ -837,6 +846,7 @@ void machine_set_log(machine_t *m, machine_log_fn log) {
 }
 
 static void pending_card_event(machine_t *m);
+static void pending_disc_event(machine_t *m);
 
 static void power_release_event(machine_t *m) {
     if (m->power_press_pending && m->cpu.sleeping) {
@@ -862,6 +872,7 @@ static uint64_t next_event(machine_t *m) {
     bool serial_busy = m->serial_rx_count || (m->hitachi && hd64461_uart_sending(&m->hitachi_board.companion));
     if (serial_busy && m->serial_tick_at < next) next = m->serial_tick_at;
     if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
+    if (m->pending_disc_at && m->pending_disc_at < next) next = m->pending_disc_at;
     if (m->power_release_at && m->power_release_at < next) next = m->power_release_at;
     return next;
 }
@@ -872,6 +883,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
     while (m->cpu.cycles < target) {
         sh770x_advance(&m->chip);
         pending_card_event(m);
+        pending_disc_event(m);
         power_release_event(m);
         serial_tick_event(m);
         if (m->casio) {
@@ -1059,6 +1071,49 @@ static void swap_cards_later(machine_t *m) {
     cfcard_eject(&m->card_slot);
     m->card_path[0] = 0;
     m->pending_card_at = m->cpu.cycles + MACHINE_CLOCK_HZ;
+}
+
+bool machine_has_disc_drive(machine_t *m) {
+    return m->autopc;
+}
+
+static bool load_disc_now(machine_t *m, const char *path) {
+    FILE *image = fopen(path, "rb");
+    if (!image) return false;
+    atapi_load(&m->disc_slot, image);
+    snprintf(m->disc_path, sizeof m->disc_path, "%s", path);
+    autopc_disc_changed(&m->board, &m->board_host);
+    return true;
+}
+
+bool machine_load_disc(machine_t *m, const char *path) {
+    if (!m->autopc) return false;
+    if (!m->ide.drive.loaded) return load_disc_now(m, path);
+    FILE *probe = fopen(path, "rb");
+    if (!probe) return false;
+    fclose(probe);
+    machine_eject_disc(m);
+    snprintf(m->pending_disc, sizeof m->pending_disc, "%s", path);
+    m->pending_disc_at = m->cpu.cycles + 3 * MACHINE_CLOCK_HZ;
+    return true;
+}
+
+static void pending_disc_event(machine_t *m) {
+    if (!m->pending_disc_at || m->cpu.cycles < m->pending_disc_at) return;
+    m->pending_disc_at = 0;
+    if (m->pending_disc[0] && !load_disc_now(m, m->pending_disc)) machine_logf(m, "disc: cannot open %s\n", m->pending_disc);
+    m->pending_disc[0] = 0;
+}
+
+void machine_eject_disc(machine_t *m) {
+    m->pending_disc_at = 0;
+    atapi_unload(&m->disc_slot);
+    m->disc_path[0] = 0;
+    if (m->autopc) autopc_disc_changed(&m->board, &m->board_host);
+}
+
+bool machine_disc_loaded(machine_t *m) {
+    return m->ide.drive.loaded;
 }
 
 bool machine_has_ethernet_slot(machine_t *m) {
@@ -1322,7 +1377,7 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-#define STATE_FIELD_COUNT 10
+#define STATE_FIELD_COUNT 12
 
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
@@ -1336,6 +1391,8 @@ static void state_fields(machine_t *m, state_field_t *fields) {
         { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0, NULL },
         { "hpw200ec_board", &m->hitachi_board, sizeof m->hitachi_board, NULL, 0, NULL },
         { "autopc_board", &m->board, sizeof m->board, NULL, 0, NULL },
+        { "autopc_ide", &m->ide, sizeof m->ide, NULL, 0, NULL },
+        { "disc_path", m->disc_path, sizeof m->disc_path, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
 }
@@ -1397,6 +1454,10 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     FILE *image = m->card.inserted && m->card_path[0] ? fopen(m->card_path, "r+b") : NULL;
     cfcard_rebind(&m->card_slot, image);
     if (!image) m->card_path[0] = 0;
+    atapi_sanitize(&m->ide.drive);
+    FILE *disc = m->ide.drive.loaded && m->disc_path[0] ? fopen(m->disc_path, "rb") : NULL;
+    atapi_rebind(&m->disc_slot, disc);
+    if (!disc) m->disc_path[0] = 0;
     m->chip.transmit = onchip_transmit;
     m->chip.transmit_context = m;
     m->chip.ports_written = m->hp ? hp_ports_written : m->hitachi ? hitachi_ports_written : NULL;
