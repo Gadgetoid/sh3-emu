@@ -35,7 +35,7 @@ void host_reveal_file(const char *path) {
     snprintf(folder, sizeof folder, "%s", path);
     char *slash = strrchr(folder, '/');
     char *backslash = strrchr(folder, '\\');
-    if (backslash > slash) slash = backslash;
+    if (backslash && (!slash || backslash > slash)) slash = backslash;
     if (slash && slash != folder) *slash = 0;
     host_open_path(folder);
 }

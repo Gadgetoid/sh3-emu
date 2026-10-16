@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "version.h"
 
@@ -71,9 +72,15 @@ options_result_t options_parse(const option_spec_t *spec_in, int argc, char **ar
                                const char **positional, int max_positional, int *positional_count) {
     option_spec_t named = *spec_in;
     const option_spec_t *spec = &named;
+    char program[256];
     if (argc > 0 && argv[0] && argv[0][0]) {
         const char *slash = strrchr(argv[0], '/');
-        named.program = slash ? slash + 1 : argv[0];
+        const char *backslash = strrchr(argv[0], '\\');
+        if (backslash && (!slash || backslash > slash)) slash = backslash;
+        snprintf(program, sizeof program, "%s", slash ? slash + 1 : argv[0]);
+        size_t length = strlen(program);
+        if (length > 4 && !strcasecmp(program + length - 4, ".exe")) program[length - 4] = 0;
+        named.program = program;
     }
     int uses[REPEAT_MAX] = { 0 };
     *positional_count = 0;
