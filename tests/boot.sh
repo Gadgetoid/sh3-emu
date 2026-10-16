@@ -248,7 +248,7 @@ if [ -f "$CASIO_ROM" ]; then
     changes=$(grep "^t=" "$OUT/casio_wake.log" | sed 's/.* lcd=\([01]\).*/\1/' | uniq | tr -d '\n')
     if [ "$actual" = "$CASIO_WAKE_HASH" ] && [ "$changes" = 10101 ]; then echo "ok   casio_wake"; else echo "FAIL casio_wake $actual $changes"; exit 1; fi
     ./headless "$CASIO_ROM" --seconds=12 --wav="$OUT/casio_sound.wav" > /dev/null 2>&1
-    CASIO_SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 0.75 < len(a) / 22050 < 0.82 and max(map(abs, a)) > 2000 else 1)'
+    CASIO_SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 44100 and 0.75 < len(a) / 44100 < 0.82 and max(map(abs, a)) > 2000 else 1)'
     if python3 -c "$CASIO_SOUND" "$OUT/casio_sound.wav"; then echo "ok   casio_sound"; else echo "FAIL casio_sound"; exit 1; fi
     if ./headless "$CASIO_ROM" --seconds=22 --backlight=20 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   casio_backlight"; else echo "FAIL casio_backlight"; exit 1; fi
     gdb_check casio_gdb "$CASIO_ROM"
@@ -301,7 +301,7 @@ if [ -f "$HP_ROM" ]; then
     ./headless "$HP_ROM" --seconds=32 --power=22 --power=28 --trace-pc > "$OUT/hp_power.log" 2>&1
     if grep -q "^t=2[4-6].* lcd=0" "$OUT/hp_power.log" && grep -q "^t=31.* lcd=1" "$OUT/hp_power.log"; then echo "ok   hp_power"; else echo "FAIL hp_power"; exit 1; fi
     ./headless "$HP_ROM" --seconds=24 --wav="$OUT/hp_sound.wav" > /dev/null 2>&1
-    SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 2.4 < len(a) / 22050 < 2.6 and max(map(abs, a)) > 2000 else 1)'
+    SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 44100 and 2.4 < len(a) / 44100 < 2.6 and max(map(abs, a)) > 2000 else 1)'
     if python3 -c "$SOUND" "$OUT/hp_sound.wav"; then echo "ok   hp_sound"; else echo "FAIL hp_sound"; exit 1; fi
     if ./headless "$HP_ROM" --seconds=22 --backlight=20 --trace-pc 2>&1 | grep "^t=" | tail -1 | grep -q "backlight=1"; then echo "ok   hp_backlight"; else echo "FAIL hp_backlight"; exit 1; fi
     gdb_check hp_gdb "$HP_ROM"
@@ -358,7 +358,7 @@ if [ -f "$HPW_ROM" ]; then
     ./headless "$HPW_ROM" --seconds=26 --power=15 --power=22 --trace-pc > "$OUT/hpw_power.log" 2>&1
     if grep -q "^t=1[7-9].* lcd=0" "$OUT/hpw_power.log" && grep -q "^t=25.* lcd=1" "$OUT/hpw_power.log"; then echo "ok   hpw_power"; else echo "FAIL hpw_power"; exit 1; fi
     ./headless "$HPW_ROM" --seconds=20 --wav="$OUT/hpw_sound.wav" > /dev/null 2>&1
-    HPW_SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 22050 and 2.4 < len(a) / 22050 < 2.6 and max(map(abs, a)) > 2000 else 1)'
+    HPW_SOUND='import array, sys, wave; w = wave.open(sys.argv[1]); a = array.array("h", w.readframes(w.getnframes())); sys.exit(0 if w.getframerate() == 44100 and 2.4 < len(a) / 44100 < 2.6 and max(map(abs, a)) > 2000 else 1)'
     if python3 -c "$HPW_SOUND" "$OUT/hpw_sound.wav"; then echo "ok   hpw_sound"; else echo "FAIL hpw_sound"; exit 1; fi
     cable_check hpw_cable "$HPW_ROM" 20
     if ./headless "$HPW_ROM" --net --seconds=0.01 2>&1 | grep -q libslirp; then

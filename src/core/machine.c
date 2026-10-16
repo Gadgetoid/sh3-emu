@@ -46,7 +46,7 @@
 #define SERIAL_FIFO        16384
 #define CARD_PATH_MAX      1024
 #define DICTIONARY_PA      0x04000000u
-#define AUDIO_RATE         22050u
+#define AUDIO_RATE         44100u
 #define AUDIO_RING         65536u
 #define POLL_WINDOW        (MACHINE_CLOCK_HZ / 1000)
 #define DICTIONARY_MAX     (8u << 20)

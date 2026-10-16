@@ -161,7 +161,7 @@ A ROM image containing `hplib.dll` runs on the HP 320LX: the Windows CE 2.0 H/PC
 
 That presses Enter twice, taps the five calibration targets, and accepts the calibration to reach the World Clock page.
 
-The AC adapter is reported as plugged in, so CE doesn't warn that battery power may not be enough for a serial connection, and doesn't suspend on its own. Sound plays: wavedev.dll double-buffers 8-bit samples at 0x0C004000 and 0x0C004800, and DMA channels 0 and 2 copy them to the CPU's D/A converter channel 1 at the compare match timer's rate, which is the WAV file's sample rate. The emulator resamples what reaches the converter to 22050 Hz.
+The AC adapter is reported as plugged in, so CE doesn't warn that battery power may not be enough for a serial connection, and doesn't suspend on its own. Sound plays: wavedev.dll double-buffers 8-bit samples at 0x0C004000 and 0x0C004800, and DMA channels 0 and 2 copy them to the CPU's D/A converter channel 1 at the compare match timer's rate, which is the WAV file's sample rate. The emulator resamples what reaches the converter to 44100 Hz.
 
 Start > Suspend suspends it; any key then presses the ON key (IRQ0) and wakes it, and that key press goes no further.
 
