@@ -10,6 +10,8 @@
 #include "core/key_text.h"
 #include "core/lcd.h"
 #include "core/machine.h"
+#include "net/radio_service.h"
+#include "net/radio_stations.h"
 #include "net/ethernet_link.h"
 #include "net/serial_link.h"
 #include "util/file.h"
@@ -118,7 +120,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double seconds;
-    const char *png, *pgm, *load, *save, *wav, *card, *cdrom, *gps, *gps_track, *agent_socket, *gdb_process;
+    const char *png, *pgm, *load, *save, *wav, *card, *cdrom, *gps, *gps_track, *radio_stations, *agent_socket, *gdb_process;
     int png_cell, png_backlight, gdb_port;
     bool trace_pc, host_time, optimisations, verify_optimisations, trace_exceptions, debug_output, seconds_given;
     double key_times[32];
@@ -151,7 +153,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_CDROM, OPT_GPS, OPT_GPS_TRACK, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_CDROM, OPT_GPS, OPT_GPS_TRACK, OPT_RADIO_STATIONS, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_EJECT, OPT_INSERT, OPT_CDROM_AT,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -166,6 +168,7 @@ static const option_t OPTIONS[] = {
     [OPT_CDROM] = { "cdrom", "ISO", "load an ISO 9660 or BIN/CUE image into the AutoPC's CD drive, after --load", 0 },
     [OPT_GPS] = { "gps", "LAT,LON[,ALT[,KMH,HEADING]]", "feed the AutoPC's GPS receiver a position, moving at KMH on HEADING degrees", 0 },
     [OPT_GPS_TRACK] = { "gps-track", "GPX", "feed the AutoPC's GPS receiver a GPX file's waypoint, or drive its track or route", 0 },
+    [OPT_RADIO_STATIONS] = { "radio-stations", "FILE", "map AutoPC radio frequencies to stream URLs, one 'MHz-or-kHz URL [name]' per line", 0 },
     [OPT_ETHERNET] = { "ethernet", NULL, "insert an NE2000 Ethernet card in the HP's PC Card slot (moving --card to the 320LX's CompactFlash slot), on its own network with DHCP", 0 },
     [OPT_DICTIONARY] = { "dictionary", "IMAGE", "map the Casio A-51's dictionary ROM image at physical 0x04000000", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
@@ -231,6 +234,7 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_CDROM: run->cdrom = value; return true;
     case OPT_GPS: run->gps = value; return true;
     case OPT_GPS_TRACK: run->gps_track = value; return true;
+    case OPT_RADIO_STATIONS: run->radio_stations = value; return true;
     case OPT_ETHERNET: run->ethernet = true; return true;
     case OPT_DICTIONARY: run->dictionary = value; return true;
     case OPT_RAPI: run->rapi_socket = value; return true;
@@ -365,6 +369,10 @@ static bool due(double at, uint64_t done, uint64_t slice) {
     return cycle >= done && cycle < done + slice;
 }
 
+static void radio_audio(void *context, uint32_t khz, bool fm, int16_t *mono, uint32_t frames) {
+    radio_service_fill(context, khz, fm, mono, frames);
+}
+
 int main(int argc, char **argv) {
     static run_t run;
     run = (run_t){ .seconds = 5, .png_cell = 4, .png_backlight = -1, .soft_reset_at = -1, .replug_at = -1, .cable_at = -1, .eject_at = -1, .insert_at = -1, .cdrom_at = -1 };
@@ -417,6 +425,15 @@ int main(int argc, char **argv) {
     if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && run.insert_at < 0 && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     if (run.cdrom && run.cdrom_at < 0 && !machine_load_disc(machine, run.cdrom)) { fprintf(stderr, "cannot load disc image %s\n", run.cdrom); return 1; }
+    static radio_stations_t stations;
+    radio_stations_default(&stations);
+    if (run.radio_stations && !radio_stations_load(&stations, run.radio_stations)) { fprintf(stderr, "cannot read radio stations file %s\n", run.radio_stations); return 1; }
+    uint32_t station_khz[RADIO_STATIONS_MAX];
+    for (size_t i = 0; i < stations.count; i++) station_khz[i] = stations.stations[i].khz;
+    machine_set_radio_stations(machine, station_khz, stations.count);
+    static radio_service_t radio;
+    radio_service_init(&radio, &stations, run.user_agent);
+    machine_set_radio_audio(machine, radio_audio, &radio);
     if (run.gps && !machine_set_gps(machine, run.gps)) { fprintf(stderr, "headless: --gps needs LAT,LON[,ALT[,KMH,HEADING]] on an AutoPC\n"); return 1; }
     if (run.gps_track && !machine_load_gps_track(machine, run.gps_track)) { fprintf(stderr, "cannot read GPX file %s\n", run.gps_track); return 1; }
     if (run.ethernet) {

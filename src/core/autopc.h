@@ -5,6 +5,7 @@
 
 #include "core/cfcard.h"
 #include "core/cmd646.h"
+#include "core/autopc_i2c.h"
 
 #define AUTOPC_SCREEN_WIDTH  256
 #define AUTOPC_SCREEN_HEIGHT 64
@@ -43,6 +44,8 @@ typedef struct {
     cmd646_t      *ide;
     atapi_slot_t  *cdrom;
     autopc_gps_port_t *gps;
+    autopc_i2c_t *i2c;
+    autopc_i2c_station_fn radio_station;
 } autopc_host_t;
 
 typedef struct {
@@ -95,6 +98,8 @@ typedef struct {
     uint16_t socket_control[AUTOPC_SOCKETS];
     uint16_t socket_events[AUTOPC_SOCKETS];
     uint16_t socket_shared;
+
+    uint64_t dsp_source_gain;
 } autopc_t;
 
 bool autopc_detect(const uint8_t *image, size_t size);
@@ -108,6 +113,8 @@ void autopc_card_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_disc_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_watchdog_reset(autopc_t *board);
 void autopc_warm_reset(autopc_t *board);
+uint16_t autopc_radio_gain(const autopc_t *board, const autopc_host_t *host);
+void     autopc_load_older_board(autopc_t *board);
 uint32_t autopc_gps_send(autopc_t *board, const autopc_host_t *host, const uint8_t *bytes, uint32_t length);
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up);
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down);

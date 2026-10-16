@@ -6,7 +6,7 @@
 
 enum {
     LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_CDROM, LAUNCH_GPS, LAUNCH_GPS_TRACK, LAUNCH_MEMORY, LAUNCH_SPEED, LAUNCH_OPTIMISATIONS,
-    LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_TCP, LAUNCH_USER_AGENT, LAUNCH_AGENT,
+    LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_TCP, LAUNCH_USER_AGENT, LAUNCH_RADIO_STATIONS, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
 
@@ -26,6 +26,7 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_NET] = { "net", NULL, "plug COM1 into the PPP network (Devices > Serial Port), and remember that", 0 },
     [LAUNCH_TCP] = { "tcp", "[PORT]", "offer COM1 as raw bytes on a TCP port on all interfaces (9991, or PORT, kept in sh3emu.ini), with the cable connected while a client is attached, and remember that", 0 },
     [LAUNCH_USER_AGENT] = { "user-agent", "TEXT", "the web proxy's user agent, kept in sh3emu.ini; empty passes Pocket IE's own through", 0 },
+    [LAUNCH_RADIO_STATIONS] = { "radio-stations", "FILE", "map AutoPC radio frequencies to stream URLs, one 'MHz-or-kHz URL [name]' per line, kept in sh3emu.ini", 0 },
     [LAUNCH_AGENT] = { "agent", "SOCKET", "pass messages between a guest agent's trapa #0xCE mailbox and one client on this Unix socket", 0 },
     [LAUNCH_HEADING_DEBUGGING] = { NULL, NULL, "Debugging", 0 },
     [LAUNCH_VERBOSE] = { "verbose", NULL, "log unmodelled hardware accesses to stderr", 0 },
@@ -74,6 +75,7 @@ static bool launch_option(void *context, int option, const char *value, char *er
         settings->serial = SERIAL_TCP;
         return true;
     case LAUNCH_USER_AGENT: snprintf(settings->user_agent, sizeof settings->user_agent, "%s", value); return true;
+    case LAUNCH_RADIO_STATIONS: snprintf(settings->radio_stations, sizeof settings->radio_stations, "%s", value); return true;
     case LAUNCH_AGENT: launch->agent_socket = value; return true;
     }
     return false;

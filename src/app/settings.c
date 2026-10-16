@@ -62,6 +62,7 @@ settings_t settings_load(void) {
         else if (sscanf(line, "gdb_port=%u", &value) == 1 && value > 0 && value < 65536) settings.gdb_port = value;
         else if (sscanf(line, "serial_tcp_port=%u", &value) == 1 && value > 0 && value < 65536) settings.serial_tcp_port = value;
         else if (!strncmp(line, "user_agent=", 11)) copy_setting(settings.user_agent, sizeof settings.user_agent, line + 11);
+        else if (!strncmp(line, "radio_stations=", 15)) copy_setting(settings.radio_stations, sizeof settings.radio_stations, line + 15);
     }
     fclose(file);
     return settings;
@@ -72,8 +73,8 @@ void settings_save(const settings_t *settings) {
     app_settings_path(path, sizeof path);
     FILE *file = fopen(path, "w");
     if (!file) return;
-    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\noptimisations=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\nserial_tcp_port=%u\nuser_agent=%s\n", settings->memory,
+    fprintf(file, "memory=%u\nscreen=%ux%u\nspeed=%u\noptimisations=%u\nhost_time=%u\nscale=%u\ndisplay=%u\nsystem=%u\nmachine=%s\nserial=%u\nserial_device=%s\nshared_folder=%s\ndictionary=%s\nnetwork_rapi=%u\nrapi_port=%u\nfull_brightness=%u\ngdb_server=%u\ngdb_port=%u\nserial_tcp_port=%u\nuser_agent=%s\nradio_stations=%s\n", settings->memory,
             settings->screen.width, settings->screen.height, settings->speed, settings->optimisations, settings->host_time, settings->scale, settings->display, settings->system, settings->machine,
-            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness, settings->gdb_server, settings->gdb_port, settings->serial_tcp_port, settings->user_agent);
+            settings->serial, settings->serial_device, settings->shared_folder, settings->dictionary, settings->network_rapi, settings->rapi_port, settings->full_brightness, settings->gdb_server, settings->gdb_port, settings->serial_tcp_port, settings->user_agent, settings->radio_stations);
     fclose(file);
 }

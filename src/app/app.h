@@ -10,6 +10,7 @@
 #include "app/launch.h"
 #include "app/library.h"
 #include "app/machine_session.h"
+#include "net/radio_service.h"
 #include "app/notices.h"
 #include "app/picks.h"
 #include "app/profiles.h"
@@ -54,6 +55,7 @@ typedef struct {
     notice_t notice;
     serial_service_t serial;
     ethernet_service_t ethernet;
+    radio_service_t radio;
     desktop_t *desktop;
     dropped_t dropped;
     picked_t *picked;

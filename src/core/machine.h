@@ -59,6 +59,12 @@ bool machine_set_gps(machine_t *machine, const char *position);
 bool machine_load_gps_track(machine_t *machine, const char *path);
 void machine_gps_off(machine_t *machine);
 bool machine_gps_active(machine_t *machine);
+
+#define MACHINE_RADIO_STATIONS_MAX 64
+void     machine_set_radio_stations(machine_t *machine, const uint32_t *khz, size_t count);
+uint32_t machine_radio_khz(machine_t *machine);
+typedef void (*machine_radio_fn)(void *context, uint32_t khz, bool fm, int16_t *mono, uint32_t frames);
+void     machine_set_radio_audio(machine_t *machine, machine_radio_fn audio, void *context);
 bool machine_has_ethernet_slot(machine_t *machine);
 bool machine_insert_ethernet(machine_t *machine, const uint8_t mac[6]);
 void machine_eject_ethernet(machine_t *machine);

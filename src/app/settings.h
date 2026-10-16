@@ -35,6 +35,7 @@ typedef struct {
     uint32_t gdb_server, gdb_port;
     uint32_t serial_tcp_port;
     char user_agent[256];
+    char radio_stations[1024];
 } settings_t;
 
 settings_t settings_load(void);

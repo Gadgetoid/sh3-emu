@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "core/audio_mixer.h"
 #include "core/autopc.h"
 #include "core/casio.h"
 #include "core/clarion_gps.h"
@@ -50,6 +51,8 @@
 #define DICTIONARY_PA      0x04000000u
 #define AUDIO_RATE         44100u
 #define AUDIO_RING         65536u
+#define AUDIO_MIX_LATENCY  2048u
+#define AUDIO_RADIO_CHUNK  1024u
 #define POLL_WINDOW        (MACHINE_CLOCK_HZ / 1000)
 #define DICTIONARY_MAX     (8u << 20)
 #define SERIAL_TICKS_PER_SECOND 1000u
@@ -109,6 +112,11 @@ struct machine {
     char card_path[CARD_PATH_MAX];
     cmd646_t ide;
     autopc_gps_port_t gps_port;
+    autopc_i2c_t i2c;
+    uint32_t radio_khz[MACHINE_RADIO_STATIONS_MAX];
+    size_t radio_count;
+    machine_radio_fn radio_audio;
+    void *radio_context;
     gps_receiver_t gps;
     int64_t gps_epoch;
     uint64_t gps_frame_at;
@@ -117,6 +125,7 @@ struct machine {
     ne2000_t ethernet;
     uint8_t  *dictionary;
     int16_t audio[AUDIO_RING];
+    audio_mixer_t mixer;
     uint32_t audio_head, audio_count;
     uint32_t audio_phase;
     size_t dictionary_size;
@@ -491,6 +500,42 @@ static void casio_samples(void *context, const int16_t *samples, uint32_t count,
     }
 }
 
+static uint64_t audio_position(const machine_t *m) {
+    return m->cpu.cycles * AUDIO_RATE / MACHINE_CLOCK_HZ;
+}
+
+static void mixer_emit(void *context, const int16_t *samples, uint32_t count) {
+    machine_t *m = context;
+    for (uint32_t i = 0; i < count; i++) audio_push(m, samples[i]);
+}
+
+static void autopc_samples(void *context, const int16_t *samples, uint32_t count, uint32_t rate) {
+    machine_t *m = context;
+    (void)rate;
+    audio_mixer_add(&m->mixer, audio_position(m), samples, count);
+}
+
+static void mix_radio(machine_t *m, uint64_t until) {
+    int16_t radio[AUDIO_RADIO_CHUNK];
+    uint64_t from = m->mixer.committed;
+    uint16_t gain = autopc_radio_gain(&m->board, &m->board_host);
+    if (!m->radio_audio || !gain) return;
+    while (from < until) {
+        uint32_t count = until - from < AUDIO_RADIO_CHUNK ? (uint32_t)(until - from) : AUDIO_RADIO_CHUNK;
+        m->radio_audio(m->radio_context, autopc_i2c_khz(&m->i2c), autopc_i2c_fm(&m->i2c), radio, count);
+        for (uint32_t i = 0; i < count; i++) radio[i] = (int16_t)((int32_t)radio[i] * gain / 32768);
+        audio_mixer_add(&m->mixer, from, radio, count);
+        from += count;
+    }
+}
+
+static void commit_audio(machine_t *m) {
+    uint64_t now = audio_position(m);
+    if (!m->autopc || now <= AUDIO_MIX_LATENCY) return;
+    mix_radio(m, now - AUDIO_MIX_LATENCY);
+    audio_mixer_commit(&m->mixer, now - AUDIO_MIX_LATENCY, mixer_emit, m);
+}
+
 size_t machine_audio(machine_t *m, int16_t *samples, size_t max, uint32_t *rate) {
     size_t count = m->audio_count < max ? m->audio_count : max;
     for (size_t i = 0; i < count; i++) samples[i] = m->audio[(m->audio_head + i) % AUDIO_RING];
@@ -732,6 +777,14 @@ static void apply_host_time(machine_t *m) {
     sh770x_set_time(&m->chip, (year - 1970) % 100, local.tm_mon + 1, local.tm_mday, local.tm_wday, local.tm_hour, local.tm_min, local.tm_sec);
 }
 
+static bool radio_station(void *context, uint32_t khz) {
+    machine_t *m = context;
+    for (size_t i = 0; i < m->radio_count; i++) {
+        if (m->radio_khz[i] == khz) return true;
+    }
+    return false;
+}
+
 static void watchdog_reset(void *context) {
     ((machine_t *)context)->watchdog_reset_pending = true;
 }
@@ -781,11 +834,13 @@ static void reset_machine(machine_t *m, bool keep_ram) {
     hpw200ec_reset(&m->hitachi_board);
     autopc_reset(&m->board);
     cmd646_reset(&m->ide);
+    autopc_i2c_reset(&m->i2c);
     atapi_reset(&m->disc_slot);
     m->chip.transmit = onchip_transmit;
     m->chip.watchdog_reset = watchdog_reset;
     m->chip.transmit_context = m;
     m->audio_count = 0;
+    audio_mixer_reset(&m->mixer, audio_position(m) > AUDIO_MIX_LATENCY ? audio_position(m) - AUDIO_MIX_LATENCY : 0);
     m->audio_phase = 0;
     cfcard_reset(&m->card_slot);
     ne2000_power_on(&m->ethernet);
@@ -820,8 +875,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->hp = m->hp_model != HP_MODEL_NONE;
     m->hitachi = !m->autopc && !m->hp && hpw200ec_detect(rom, rom_size);
     m->casio = !m->autopc && !m->hp && !m->hitachi;
-    m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .cycles = casio_cycles, .samples = casio_samples, .memory = autopc_memory,
-                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot, .ide = &m->ide, .cdrom = &m->disc_slot, .gps = &m->gps_port };
+    m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .cycles = casio_cycles, .samples = autopc_samples, .memory = autopc_memory,
+                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot, .ide = &m->ide, .cdrom = &m->disc_slot, .gps = &m->gps_port, .i2c = &m->i2c, .radio_station = radio_station };
     m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
                                    .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
     m->hitachi_host = (hpw200ec_host_t){ .trace = hitachi_trace, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .context = m,
@@ -917,7 +972,10 @@ void machine_run(machine_t *m, uint64_t cycles) {
             casio_update(&m->casio_board, &m->casio_host);
             casio_first_wake(m);
         }
-        if (m->autopc) autopc_update(&m->board, &m->board_host);
+        if (m->autopc) {
+            autopc_update(&m->board, &m->board_host);
+            commit_audio(m);
+        }
         uint64_t next = next_event(m);
         uint64_t until = next < target ? next : target;
         if (until <= m->cpu.cycles) until = m->cpu.cycles + 1;
@@ -1186,6 +1244,20 @@ bool machine_gps_active(machine_t *m) {
     return m->gps.active;
 }
 
+void machine_set_radio_stations(machine_t *m, const uint32_t *khz, size_t count) {
+    m->radio_count = count < MACHINE_RADIO_STATIONS_MAX ? count : MACHINE_RADIO_STATIONS_MAX;
+    memcpy(m->radio_khz, khz, m->radio_count * sizeof *khz);
+}
+
+void machine_set_radio_audio(machine_t *m, machine_radio_fn audio, void *context) {
+    m->radio_audio = audio;
+    m->radio_context = context;
+}
+
+uint32_t machine_radio_khz(machine_t *m) {
+    return m->autopc ? autopc_i2c_khz(&m->i2c) : 0;
+}
+
 bool machine_has_ethernet_slot(machine_t *m) {
     return m->hp || m->hitachi;
 }
@@ -1448,7 +1520,17 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-#define STATE_FIELD_COUNT 15
+#define STATE_FIELD_COUNT 16
+
+static const uint32_t AUTOPC_OLDER_STATE_SIZES[] = { offsetof(autopc_t, dsp_source_gain) };
+
+static bool load_older_board(void *data, const uint8_t *old, uint32_t size) {
+    if (size != AUTOPC_OLDER_STATE_SIZES[0]) return false;
+    memset(data, 0, sizeof(autopc_t));
+    memcpy(data, old, size);
+    autopc_load_older_board(data);
+    return true;
+}
 
 static const uint32_t IDE_OLDER_STATE_SIZES[] = { offsetof(cmd646_t, drive) + offsetof(atapi_t, audio) };
 
@@ -1470,12 +1552,13 @@ static void state_fields(machine_t *m, state_field_t *fields) {
         { "hp_board", &m->hp_board, sizeof m->hp_board, NULL, 0, NULL },
         { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0, NULL },
         { "hpw200ec_board", &m->hitachi_board, sizeof m->hitachi_board, NULL, 0, NULL },
-        { "autopc_board", &m->board, sizeof m->board, NULL, 0, NULL },
+        { "autopc_board", &m->board, sizeof m->board, AUTOPC_OLDER_STATE_SIZES, 1, load_older_board },
         { "autopc_ide", &m->ide, sizeof m->ide, IDE_OLDER_STATE_SIZES, 1, load_older_ide },
         { "disc_path", m->disc_path, sizeof m->disc_path, NULL, 0, NULL },
         { "autopc_gps_port", &m->gps_port, sizeof m->gps_port, NULL, 0, NULL },
         { "gps_receiver", &m->gps, sizeof m->gps, NULL, 0, NULL },
         { "gps_epoch", &m->gps_epoch, sizeof m->gps_epoch, NULL, 0, NULL },
+        { "autopc_i2c", &m->i2c, sizeof m->i2c, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
 }
@@ -1549,6 +1632,7 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     m->chip.dac_written = m->hp ? hp_dac_written : m->hitachi ? hitachi_dac_written : NULL;
     memset(&m->hitachi_sound, 0, sizeof m->hitachi_sound);
     m->audio_count = 0;
+    audio_mixer_reset(&m->mixer, audio_position(m) > AUDIO_MIX_LATENCY ? audio_position(m) - AUDIO_MIX_LATENCY : 0);
     memset(&m->hp_runtime, 0, sizeof m->hp_runtime);
     sh3_flush_translations(&m->cpu);
     return true;

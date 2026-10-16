@@ -96,10 +96,29 @@ static void set_title(SDL_Window *window, const char *name, const char *notice, 
     if (strcmp(SDL_GetWindowTitle(window), title)) SDL_SetWindowTitle(window, title);
 }
 
+static void radio_audio(void *context, uint32_t khz, bool fm, int16_t *mono, uint32_t frames) {
+    radio_service_fill(context, khz, fm, mono, frames);
+}
+
+static void start_radio(app_t *app, machine_t *machine) {
+    static radio_stations_t stations;
+    uint32_t khz[RADIO_STATIONS_MAX];
+    radio_service_stop(&app->radio);
+    radio_stations_default(&stations);
+    if (app->settings.radio_stations[0] && !radio_stations_load(&stations, app->settings.radio_stations)) {
+        fprintf(stderr, "cannot read radio stations file %s\n", app->settings.radio_stations);
+    }
+    for (size_t i = 0; i < stations.count; i++) khz[i] = stations.stations[i].khz;
+    radio_service_init(&app->radio, &stations, app->settings.user_agent);
+    machine_set_radio_stations(machine, khz, stations.count);
+    machine_set_radio_audio(machine, radio_audio, &app->radio);
+}
+
 bool app_start_session(app_t *app, machine_session_t *session, const profile_t *profile, const char *state_file, bool fresh,
                        char *notice, size_t notice_size) {
     if (!machine_session_start(session, profile, app->settings.speed, state_file, fresh, &app->snapshots, &app->session_output, notice, notice_size)) return false;
     machine_set_optimisations(session->machine, app->settings.optimisations != 0);
+    start_radio(app, session->machine);
     debug_log_start(profile->rom);
     return true;
 }
@@ -491,6 +510,7 @@ static void shut_down(app_t *app) {
     SDL_DestroyRenderer(app->renderer);
     SDL_DestroyWindow(app->window);
     SDL_Quit();
+    radio_service_stop(&app->radio);
     machine_session_destroy(&app->session);
 }
 

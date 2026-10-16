@@ -102,7 +102,13 @@
 #define DSP_DATA_READY  0x0200u
 #define DSP_REPLY_READY 0x0100u
 #define DSP_COMMAND_MASK 0x00FF0000u
-#define DSP_VERSION_COMMAND 0x00C10000u
+#define DSP_GAIN_COMMAND 0x00C10000u
+#define DSP_GAIN_MASK   0x0000FFFFu
+#define DSP_UNITY_GAIN  0x7FFFu
+#define TUNER_CAPTURE   0x2014u
+#define CAPTURE_RUN     0x00100000u
+#define CODEC_INPUT_MUX 0x0Bu
+#define CODEC_TUNER     0x10u
 #define DSP_REPLY_BIT   0x00400000u
 #define DSP_CONTROL     0x2040u
 #define DSP_DATA        0x2050u
@@ -192,6 +198,7 @@ void autopc_reset(autopc_t *board) {
     board->fpga[FPGA_INPUTS / 4] = INPUT_IGNITION;
     board->fpga[FPGA_STATUS / 4] = STATUS_POWER_ON | STATUS_BATTERY_OK;
     board->socket_events[0] = board->socket_events[1] = STATUS_CHANGED;
+    board->dsp_source_gain = DSP_UNITY_GAIN;
     board->faceplate = (autopc_pci_t){
         .vendor = CLARION_VENDOR,
         .device = FACEPLATE_DEVICE,
@@ -595,6 +602,13 @@ static bool gps_io_write(const autopc_host_t *host, uint32_t offset, uint32_t va
 
 static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t *value) {
     if (gps_io_read(host, offset, value)) return true;
+    if (host->i2c && offset - AUTOPC_I2C_BASE < AUTOPC_I2C_SIZE) {
+        autopc_i2c_host_t bus = { host->radio_station, host->context };
+        uint32_t pending = 0;
+        *value = autopc_i2c_read(host->i2c, &bus, offset - AUTOPC_I2C_BASE, &pending);
+        if (pending) raise_faceplate(board, host, pending);
+        return true;
+    }
     switch (offset) {
     case FACEPLATE_ENABLE: *value = board->faceplate_enable; return true;
     case FACEPLATE_PENDING: *value = board->faceplate_pending; return true;
@@ -618,6 +632,13 @@ static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32
 
 static bool faceplate_io_write(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t value) {
     if (gps_io_write(host, offset, value)) return true;
+    if (host->i2c && offset - AUTOPC_I2C_BASE < AUTOPC_I2C_SIZE) {
+        autopc_i2c_host_t bus = { host->radio_station, host->context };
+        uint32_t pending = 0;
+        autopc_i2c_write(host->i2c, &bus, offset - AUTOPC_I2C_BASE, value, &pending);
+        if (pending) raise_faceplate(board, host, pending);
+        return true;
+    }
     switch (offset) {
     case FACEPLATE_ENABLE:
         board->faceplate_enable = value;
@@ -637,7 +658,8 @@ static bool faceplate_io_write(autopc_t *board, const autopc_host_t *host, uint3
         board->dsp_data_written = offset == DSP_DATA;
         bytes_write(board->faceplate_io, offset, size, value);
         board->interrupt_status |= DSP_DATA_READY;
-        if (offset == DSP_DATA && (value & DSP_COMMAND_MASK) == DSP_VERSION_COMMAND) {
+        if (offset == DSP_DATA && (value & DSP_COMMAND_MASK) == DSP_GAIN_COMMAND) {
+            board->dsp_source_gain = value & DSP_GAIN_MASK;
             board->dsp_reply = value & ~DSP_REPLY_BIT;
             board->interrupt_status |= DSP_REPLY_READY;
         }
@@ -728,6 +750,20 @@ static bool card_access(autopc_t *board, const autopc_host_t *host, uint32_t pa,
     }
     update_irl(board, host);
     return true;
+}
+
+void autopc_load_older_board(autopc_t *board) {
+    board->dsp_source_gain = DSP_UNITY_GAIN;
+}
+
+uint16_t autopc_radio_gain(const autopc_t *board, const autopc_host_t *host) {
+    if (!host->i2c || !(bytes_read(board->faceplate_io, TUNER_CAPTURE, 4) & CAPTURE_RUN)) return 0;
+    if (host->i2c->codec[CODEC_INPUT_MUX] != CODEC_TUNER) return 0;
+    return (uint16_t)board->dsp_source_gain;
+}
+
+static int16_t source_gain(const autopc_t *board, int16_t sample) {
+    return board->dsp_source_gain >= DSP_UNITY_GAIN ? sample : (int16_t)((int32_t)sample * board->dsp_source_gain / 32768);
 }
 
 void autopc_warm_reset(autopc_t *board) {
@@ -886,7 +922,7 @@ uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host) {
     return gps < next ? gps : next;
 }
 
-static void play_frames(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t frames) {
+static void play_frames(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t frames, bool source) {
     int16_t mono[AUDIO_HALF_MAX_FRAMES];
     if (frames > AUDIO_HALF_MAX_FRAMES) frames = AUDIO_HALF_MAX_FRAMES;
     for (uint32_t i = 0; i < frames; i++) {
@@ -898,6 +934,7 @@ static void play_frames(const autopc_t *board, const autopc_host_t *host, uint32
         int16_t left = (int16_t)bytes_read(board->faceplate_memory, at, 2);
         int16_t right = (int16_t)bytes_read(board->faceplate_memory, at + 2, 2);
         mono[i] = (int16_t)(((int32_t)left + right) / 2);
+        if (source) mono[i] = source_gain(board, mono[i]);
     }
     if (host->samples && frames) host->samples(host->context, mono, frames, AUDIO_RATE);
 }
@@ -905,14 +942,14 @@ static void play_frames(const autopc_t *board, const autopc_host_t *host, uint32
 static void audio_play_half(autopc_t *board, const autopc_host_t *host) {
     uint32_t half_bytes = audio_half_bytes(board);
     uint32_t start = bytes_read(board->faceplate_io, AUDIO_START, 4) & AUDIO_OFFSET_MASK;
-    play_frames(board, host, start + (board->audio_halves % 2) * half_bytes, half_bytes / AUDIO_FRAME_BYTES);
+    play_frames(board, host, start + (board->audio_halves % 2) * half_bytes, half_bytes / AUDIO_FRAME_BYTES, false);
 }
 
 static void cd_audio_written(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t length) {
     uint32_t start = bytes_read(board->faceplate_io, CD_AUDIO_START, 4) & AUDIO_OFFSET_MASK;
     uint32_t last = bytes_read(board->faceplate_io, CD_AUDIO_LAST, 4) & AUDIO_OFFSET_MASK;
     if (!last || offset < start || offset + length > start + last + AUDIO_FRAME_BYTES) return;
-    play_frames(board, host, offset, length / AUDIO_FRAME_BYTES);
+    play_frames(board, host, offset, length / AUDIO_FRAME_BYTES, true);
 }
 
 void autopc_update(autopc_t *board, const autopc_host_t *host) {
