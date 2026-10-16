@@ -161,7 +161,7 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [macos, debian, android]
+    needs: [macos, debian, windows, android]
     runs-on: ubuntu-latest
     permissions:
       contents: write

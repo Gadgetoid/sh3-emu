@@ -9,6 +9,7 @@ An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs
 
 - **macOS (Apple silicon):** `SH3Emu.app`, from a release or `make app`. It isn't notarised: allow it in System Settings > Privacy & Security > Open Anyway, or run `xattr -dr com.apple.quarantine SH3Emu.app`.
 - **Debian 12 or later and Ubuntu 24.04 or later:** the `.deb`, from a release or `tools/mkdeb.sh`. It installs `sh3emu`, `sh3emu-headless` and `sh3emu-rapi`, with a desktop entry, and `mkcard.sh` in `/usr/share/sh3-emu`.
+- **Windows 10 or later (x86-64):** the `.zip`, from a release. Unzip it and run `sh3emu.exe`. The Windows build has no PPP or Ethernet network, internet radio streams, GDB server, debugger agent, RAPI or host serial ports yet.
 - **Android (arm64, Android 9 or later):** the `.apk`, from a release or `make apk`. See Android.
 - **From source:** see Building.
 
@@ -283,6 +284,8 @@ Notices appear at the bottom of the screen. The unlit screen is dimmed; with the
 ## Building
 
 macOS: `brew install sdl3 libslirp`, then `make`. Debian or Ubuntu: `sudo apt install build-essential pkg-config libsdl3-dev libslirp-dev libcurl4-openssl-dev zlib1g-dev`, then `make`. Without `libsdl3-dev` (Debian 12, Ubuntu 24.04), install `cmake curl libglib2.0-dev` and the X11 and Wayland development packages listed in `.github/workflows/build.yml`, then `sh tools/sdl3-static.sh` and `PKG_CONFIG_PATH=build/sdl3/lib/pkgconfig make SDL_STATIC=1`.
+
+Windows: in an [MSYS2](https://www.msys2.org) UCRT64 shell, `pacman -S make mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-sdl3 mingw-w64-ucrt-x86_64-zlib`, then `make all sh3emu`.
 
 Android, from macOS: `brew install --cask android-ndk android-commandlinetools`, `brew install openjdk@21 meson ninja` and `sdkmanager "platforms;android-35" "build-tools;35.0.0"`, then `make apk` for `dist/sh3emu.apk`. `tools/android-deps.sh` cross-builds GLib, libslirp, mbedTLS and curl into `build/android` the first time. Without a release key (`APK_KEYSTORE`, `APK_KEYSTORE_PASSWORD`, `APK_KEY_ALIAS`), the APK is a debug build signed with `~/.android/debug.keystore`. `make apk-install` installs it over adb with the Play Store as the installer, which gets past phones that block USB installs once the app has been installed by hand. `make apk-push` replaces a debug install's native code without reinstalling.
 
