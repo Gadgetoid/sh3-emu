@@ -8,6 +8,10 @@
 #include <strings.h>
 #include <time.h>
 
+#ifdef _WIN32
+#define timegm _mkgmtime
+#endif
+
 #define EARTH_RADIUS_M     6371000.0
 #define DEFAULT_ROUTE_KMH  50.0
 #define KMH_PER_MS         3.6
