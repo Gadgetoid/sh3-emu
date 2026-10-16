@@ -225,6 +225,11 @@ static bool casio_read_memory(void *context, uint32_t pa, uint8_t *data, uint32_
 
 static void casio_samples(void *context, const int16_t *samples, uint32_t count, uint32_t rate);
 
+static bool autopc_memory(void *context, uint32_t pa, uint8_t *data, uint32_t length, bool write) {
+    machine_t *m = context;
+    return write ? machine_write_physical(m, pa, data, length) : machine_read_physical(m, pa, data, length);
+}
+
 static uint64_t casio_cycles(void *context) {
     return ((machine_t *)context)->cpu.cycles;
 }
@@ -796,7 +801,8 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->hp = m->hp_model != HP_MODEL_NONE;
     m->hitachi = !m->autopc && !m->hp && hpw200ec_detect(rom, rom_size);
     m->casio = !m->autopc && !m->hp && !m->hitachi;
-    m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .context = m, .card = &m->card_slot };
+    m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .cycles = casio_cycles, .samples = casio_samples, .memory = autopc_memory,
+                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot };
     m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
                                    .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
     m->hitachi_host = (hpw200ec_host_t){ .trace = hitachi_trace, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .context = m,
@@ -849,6 +855,10 @@ static uint64_t next_event(machine_t *m) {
         uint64_t board_next = casio_next_event(&m->casio_board, &m->casio_host);
         if (board_next < next) next = board_next;
     }
+    if (m->autopc) {
+        uint64_t board_next = autopc_next_event(&m->board, &m->board_host);
+        if (board_next < next) next = board_next;
+    }
     bool serial_busy = m->serial_rx_count || (m->hitachi && hd64461_uart_sending(&m->hitachi_board.companion));
     if (serial_busy && m->serial_tick_at < next) next = m->serial_tick_at;
     if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
@@ -868,6 +878,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
             casio_update(&m->casio_board, &m->casio_host);
             casio_first_wake(m);
         }
+        if (m->autopc) autopc_update(&m->board, &m->board_host);
         uint64_t next = next_event(m);
         uint64_t until = next < target ? next : target;
         if (until <= m->cpu.cycles) until = m->cpu.cycles + 1;

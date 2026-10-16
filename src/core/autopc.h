@@ -15,11 +15,18 @@
 typedef void (*autopc_line_fn)(void *context, const char *line);
 typedef void (*autopc_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
 typedef void (*autopc_irl_fn)(void *context, bool asserted);
+typedef uint64_t (*autopc_cycles_fn)(void *context);
+typedef void (*autopc_samples_fn)(void *context, const int16_t *samples, uint32_t count, uint32_t rate);
+typedef bool (*autopc_memory_fn)(void *context, uint32_t pa, uint8_t *data, uint32_t length, bool write);
 
 typedef struct {
     autopc_line_fn debug_line;
     autopc_trace_fn trace;
     autopc_irl_fn irl;
+    autopc_cycles_fn cycles;
+    autopc_samples_fn samples;
+    autopc_memory_fn memory;
+    uint32_t cpu_hz;
     void           *context;
     cfcard_slot_t  *card;
 } autopc_host_t;
@@ -50,8 +57,12 @@ typedef struct {
     autopc_pci_t faceplate;
     uint8_t faceplate_io[0x10000];
     bool dsp_data_written;
-    uint32_t dsp_status;
+    uint32_t interrupt_status;
+    uint32_t dma_done;
     uint32_t dsp_reply;
+    bool audio_running;
+    uint64_t audio_started;
+    uint32_t audio_halves;
     uint8_t faceplate_memory[0x10000];
     uint32_t faceplate_enable, faceplate_pending;
     uint32_t link_address, link_control, link_received;
@@ -82,3 +93,5 @@ int  autopc_palette(uint32_t *palette);
 void autopc_card_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up);
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down);
+uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host);
+void autopc_update(autopc_t *board, const autopc_host_t *host);

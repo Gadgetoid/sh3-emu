@@ -23,6 +23,20 @@
 #define BRIDGE_DMA_STATUS 0x128u
 #define MASTER_ABORT    0x20000000u
 #define DMA_IDLE        0x00001010u
+#define BRIDGE_DMA_DESCRIPTOR_0 0x110u
+#define BRIDGE_DMA_DESCRIPTOR_1 0x124u
+#define DMA_START_0     0x00000002u
+#define DMA_START_1     0x00000200u
+#define DMA_TO_DEVICE   0x00000008u
+#define DMA_LAST        0x00000002u
+#define DMA_ACK_0       0x00000008u
+#define DMA_ACK_1       0x00000800u
+#define DMA_DONE_0      1u
+#define DMA_DONE_1      2u
+#define DMA_DESCRIPTOR_LIMIT 1024u
+#define DMA_CHUNK_MAX   0x1000u
+#define FPGA_DMA_DONE   0x0100u
+#define AREA_ADDRESS_MASK 0x1FFFFFFFu
 #define CONFIG_DATA_PA  0x0A000000u
 #define CONFIG_ENABLE   0x80000000u
 #define NO_DEVICE       0xFFFFFFFFu
@@ -60,8 +74,16 @@
 #define LINK_KEYS_UP    0x00400000u
 #define POWER_ROW       1u
 #define POWER_COLUMN    1u
-#define DSP_INTERRUPT_ENABLE 0x100Cu
-#define DSP_INTERRUPT_STATUS 0x1014u
+#define INTERRUPT_ENABLE 0x100Cu
+#define INTERRUPT_STATUS 0x1014u
+#define AUDIO_START     0x2038u
+#define AUDIO_END       0x203Cu
+#define AUDIO_RUN       0x00100000u
+#define AUDIO_OFFSET_MASK 0x0000FFFFu
+#define AUDIO_HALF_DONE 0x0010u
+#define AUDIO_RATE      22050u
+#define AUDIO_FRAME_BYTES 4u
+#define AUDIO_HALF_MAX_FRAMES 4096u
 #define DSP_DATA_READY  0x0200u
 #define DSP_REPLY_READY 0x0100u
 #define DSP_COMMAND_MASK 0x00FF0000u
@@ -241,7 +263,30 @@ static uint32_t bridge_read(const autopc_t *board, uint32_t offset, int size) {
     return sized(value, offset, size);
 }
 
-static void bridge_write(autopc_t *board, uint32_t offset, int size, uint32_t value) {
+static bool board_memory(autopc_t *board, const autopc_host_t *host, uint32_t pa, uint8_t *data, uint32_t length, bool write);
+static void update_irl(const autopc_t *board, const autopc_host_t *host);
+
+static void bridge_dma(autopc_t *board, const autopc_host_t *host, uint32_t descriptor_register, uint32_t done) {
+    uint32_t descriptor = board->bridge[descriptor_register / 4] & ~0xFu & AREA_ADDRESS_MASK;
+    uint8_t chunk[DMA_CHUNK_MAX];
+    for (unsigned count = 0; count < DMA_DESCRIPTOR_LIMIT; count++) {
+        uint8_t words[16];
+        if (!host->memory || !host->memory(host->context, descriptor, words, sizeof words, false)) break;
+        uint32_t device = PCI_MEMORY_PA + bytes_read(words, 0, 4), ram = bytes_read(words, 4, 4) & AREA_ADDRESS_MASK;
+        uint32_t length = bytes_read(words, 8, 4), link = bytes_read(words, 12, 4);
+        if (length > DMA_CHUNK_MAX) length = DMA_CHUNK_MAX;
+        if (link & DMA_TO_DEVICE) {
+            if (host->memory(host->context, ram, chunk, length, false)) board_memory(board, host, device, chunk, length, true);
+        } else {
+            if (board_memory(board, host, device, chunk, length, false)) host->memory(host->context, ram, chunk, length, true);
+        }
+        if (link & DMA_LAST) break;
+        descriptor = link & ~0xFu & AREA_ADDRESS_MASK;
+    }
+    board->dma_done |= done;
+}
+
+static void bridge_write(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t value) {
     uint32_t *slot = &board->bridge[offset / 4];
     if ((offset & ~3u) == BRIDGE_STATUS) {
         uint32_t shift = size == 4 ? 0 : 8 * (offset & 3);
@@ -249,6 +294,14 @@ static void bridge_write(autopc_t *board, uint32_t offset, int size, uint32_t va
         value &= ~(MASTER_ABORT >> shift);
     }
     sized_store(slot, offset, size, value);
+    if ((offset & ~3u) == BRIDGE_DMA_STATUS) {
+        if (*slot & DMA_ACK_0) board->dma_done &= ~DMA_DONE_0;
+        if (*slot & DMA_ACK_1) board->dma_done &= ~DMA_DONE_1;
+        if (*slot & DMA_START_0) bridge_dma(board, host, BRIDGE_DMA_DESCRIPTOR_0, DMA_DONE_0);
+        if (*slot & DMA_START_1) bridge_dma(board, host, BRIDGE_DMA_DESCRIPTOR_1, DMA_DONE_1);
+        *slot &= ~(DMA_START_0 | DMA_START_1 | DMA_ACK_0 | DMA_ACK_1);
+        update_irl(board, host);
+    }
 }
 
 static autopc_pci_t *config_target(autopc_t *board, uint32_t *reg) {
@@ -320,6 +373,7 @@ static uint16_t socket_status(const autopc_t *board, const autopc_host_t *host, 
 
 static uint32_t fpga_pending(const autopc_t *board, const autopc_host_t *host) {
     uint32_t pending = board->fpga[FPGA_PENDING / 4];
+    if (board->dma_done) pending |= FPGA_DMA_DONE;
     for (int socket = 0; socket < AUTOPC_SOCKETS; socket++) {
         uint16_t active = socket_status(board, host, socket) & (uint16_t)(board->socket_control[socket] >> 3) & (STATUS_IREQ | STATUS_CHANGED);
         if (active) pending |= FPGA_SOCKET_INTR << socket;
@@ -327,12 +381,12 @@ static uint32_t fpga_pending(const autopc_t *board, const autopc_host_t *host) {
     return pending;
 }
 
-static uint32_t dsp_interrupts(const autopc_t *board) {
-    return board->dsp_status & bytes_read(board->faceplate_io, DSP_INTERRUPT_ENABLE, 4) & (DSP_DATA_READY | DSP_REPLY_READY);
+static uint32_t faceplate_interrupts(const autopc_t *board) {
+    return board->interrupt_status & bytes_read(board->faceplate_io, INTERRUPT_ENABLE, 4);
 }
 
 static void update_irl(const autopc_t *board, const autopc_host_t *host) {
-    bool faceplate = (board->faceplate_pending & board->faceplate_enable) != 0 || dsp_interrupts(board);
+    bool faceplate = (board->faceplate_pending & board->faceplate_enable) != 0 || faceplate_interrupts(board);
     bool fpga = (fpga_pending(board, host) & board->fpga[FPGA_ENABLE / 4]) != 0;
     if (host->irl) host->irl(host->context, faceplate || fpga);
 }
@@ -433,7 +487,7 @@ static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32
         *value = board->link_received;
         link_next_reply(board, host);
         return true;
-    case DSP_INTERRUPT_STATUS: *value = board->dsp_status; return true;
+    case INTERRUPT_STATUS: *value = board->interrupt_status; return true;
     case DSP_DATA: *value = board->dsp_reply; return true;
     case DSP_STATUS:
         *value = bytes_read(board->faceplate_io, offset, size) & ~(DSP_BUSY | DSP_AWAITING);
@@ -464,20 +518,30 @@ static bool faceplate_io_write(autopc_t *board, const autopc_host_t *host, uint3
     case DSP_DATA:
         board->dsp_data_written = offset == DSP_DATA;
         bytes_write(board->faceplate_io, offset, size, value);
-        board->dsp_status |= DSP_DATA_READY;
+        board->interrupt_status |= DSP_DATA_READY;
         if (offset == DSP_DATA && (value & DSP_COMMAND_MASK) == DSP_VERSION_COMMAND) {
             board->dsp_reply = value & ~DSP_REPLY_BIT;
-            board->dsp_status |= DSP_REPLY_READY;
+            board->interrupt_status |= DSP_REPLY_READY;
         }
         update_irl(board, host);
         return true;
-    case DSP_INTERRUPT_STATUS:
-        board->dsp_status &= ~value;
+    case INTERRUPT_STATUS:
+        board->interrupt_status &= ~value;
         update_irl(board, host);
         return true;
-    case DSP_INTERRUPT_ENABLE:
+    case INTERRUPT_ENABLE:
         bytes_write(board->faceplate_io, offset, size, value);
         update_irl(board, host);
+        return true;
+    case AUDIO_END:
+        bytes_write(board->faceplate_io, offset, size, value);
+        if ((value & AUDIO_RUN) && !board->audio_running) {
+            board->audio_running = true;
+            board->audio_started = host->cycles ? host->cycles(host->context) : 0;
+            board->audio_halves = 0;
+        } else if (!(value & AUDIO_RUN)) {
+            board->audio_running = false;
+        }
         return true;
     default:
         bytes_write(board->faceplate_io, offset, size, value);
@@ -600,7 +664,7 @@ bool autopc_write(autopc_t *board, const autopc_host_t *host, uint32_t pa, int s
     }
     if (card_access(board, host, pa, size, true, &value)) return true;
     if (pa - BRIDGE_PA < BRIDGE_SIZE) {
-        bridge_write(board, pa - BRIDGE_PA, size, value);
+        bridge_write(board, host, pa - BRIDGE_PA, size, value);
         return true;
     }
     if (config_selected(board, pa)) {
@@ -659,4 +723,61 @@ void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bo
 
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down) {
     matrix_key(board, host, POWER_ROW, POWER_COLUMN, !down);
+}
+
+static uint32_t audio_half_bytes(const autopc_t *board) {
+    uint32_t start = bytes_read(board->faceplate_io, AUDIO_START, 4) & AUDIO_OFFSET_MASK;
+    uint32_t end = bytes_read(board->faceplate_io, AUDIO_END, 4) & AUDIO_OFFSET_MASK;
+    return end >= start ? (end - start + AUDIO_FRAME_BYTES) / 2 : 0;
+}
+
+static uint64_t audio_half_due(const autopc_t *board, const autopc_host_t *host, uint32_t half) {
+    uint64_t bytes = (uint64_t)audio_half_bytes(board) * half;
+    return board->audio_started + bytes * host->cpu_hz / (AUDIO_RATE * AUDIO_FRAME_BYTES);
+}
+
+uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host) {
+    if (!board->audio_running || !audio_half_bytes(board) || !host->cpu_hz) return UINT64_MAX;
+    return audio_half_due(board, host, board->audio_halves + 1);
+}
+
+static void audio_play_half(autopc_t *board, const autopc_host_t *host) {
+    uint32_t half_bytes = audio_half_bytes(board);
+    uint32_t start = bytes_read(board->faceplate_io, AUDIO_START, 4) & AUDIO_OFFSET_MASK;
+    uint32_t offset = start + (board->audio_halves % 2) * half_bytes;
+    uint32_t frames = half_bytes / AUDIO_FRAME_BYTES;
+    int16_t mono[AUDIO_HALF_MAX_FRAMES];
+    if (frames > AUDIO_HALF_MAX_FRAMES) frames = AUDIO_HALF_MAX_FRAMES;
+    for (uint32_t i = 0; i < frames; i++) {
+        uint32_t at = offset + i * AUDIO_FRAME_BYTES;
+        if (at + AUDIO_FRAME_BYTES > sizeof board->faceplate_memory) {
+            frames = i;
+            break;
+        }
+        int16_t left = (int16_t)bytes_read(board->faceplate_memory, at, 2);
+        int16_t right = (int16_t)bytes_read(board->faceplate_memory, at + 2, 2);
+        mono[i] = (int16_t)(((int32_t)left + right) / 2);
+    }
+    if (host->samples && frames) host->samples(host->context, mono, frames, AUDIO_RATE);
+}
+
+void autopc_update(autopc_t *board, const autopc_host_t *host) {
+    if (!host->cycles) return;
+    uint64_t now = host->cycles(host->context);
+    while (board->audio_running && autopc_next_event(board, host) <= now) {
+        audio_play_half(board, host);
+        board->audio_halves++;
+        board->interrupt_status |= AUDIO_HALF_DONE;
+        update_irl(board, host);
+    }
+}
+
+static bool board_memory(autopc_t *board, const autopc_host_t *host, uint32_t pa, uint8_t *data, uint32_t length, bool write) {
+    uint32_t offset;
+    if (memory_hit(&board->faceplate, pa, &offset) && length <= sizeof board->faceplate_memory - offset) {
+        if (write) memcpy(board->faceplate_memory + offset, data, length);
+        else memcpy(data, board->faceplate_memory + offset, length);
+        return true;
+    }
+    return host->memory && host->memory(host->context, pa, data, length, write);
 }
