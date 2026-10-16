@@ -118,7 +118,7 @@ static void write_pgm(const char *path, const uint8_t *levels, screen_size_t siz
 typedef struct {
     const char *rom_path;
     double seconds;
-    const char *png, *pgm, *load, *save, *wav, *card, *cdrom, *agent_socket, *gdb_process;
+    const char *png, *pgm, *load, *save, *wav, *card, *cdrom, *gps, *gps_track, *agent_socket, *gdb_process;
     int png_cell, png_backlight, gdb_port;
     bool trace_pc, host_time, optimisations, verify_optimisations, trace_exceptions, debug_output, seconds_given;
     double key_times[32];
@@ -151,7 +151,7 @@ typedef struct {
 } run_t;
 
 enum {
-    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_CDROM, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
+    OPT_HEADING_RUN, OPT_SECONDS, OPT_LOAD, OPT_SAVE, OPT_CARD, OPT_CDROM, OPT_GPS, OPT_GPS_TRACK, OPT_ETHERNET, OPT_DICTIONARY, OPT_NET, OPT_PTY, OPT_TCP, OPT_REPLUG, OPT_RAPI, OPT_RAPI_PORT, OPT_USER_AGENT, OPT_CABLE, OPT_CABLE_SEND, OPT_MEMORY, OPT_SPEED, OPT_OPTIMISATIONS, OPT_VERIFY_OPTIMISATIONS, OPT_REALTIME, OPT_HOST_TIME,
     OPT_HEADING_INPUT, OPT_TAP, OPT_KEY, OPT_TYPE, OPT_POWER, OPT_BACKLIGHT, OPT_SOFT_RESET, OPT_EJECT, OPT_INSERT, OPT_CDROM_AT,
     OPT_HEADING_OUTPUT, OPT_PGM, OPT_PNG, OPT_PNG_CELL, OPT_PNG_BACKLIGHT, OPT_WAV, OPT_TRACE_PC, OPT_WATCH_PC, OPT_DEBUG_OUTPUT, OPT_TRACE_EXCEPTIONS,
     OPT_HEADING_DEBUG, OPT_AGENT, OPT_GDB, OPT_GDB_PROCESS,
@@ -164,6 +164,8 @@ static const option_t OPTIONS[] = {
     [OPT_SAVE] = { "save", "STATE", "save the machine at the end (and on SIGTERM)", 0 },
     [OPT_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image, after --load", 0 },
     [OPT_CDROM] = { "cdrom", "ISO", "load an ISO 9660 or BIN/CUE image into the AutoPC's CD drive, after --load", 0 },
+    [OPT_GPS] = { "gps", "LAT,LON[,ALT[,KMH,HEADING]]", "feed the AutoPC's GPS receiver a position, moving at KMH on HEADING degrees", 0 },
+    [OPT_GPS_TRACK] = { "gps-track", "GPX", "feed the AutoPC's GPS receiver a GPX file's waypoint, or drive its track or route", 0 },
     [OPT_ETHERNET] = { "ethernet", NULL, "insert an NE2000 Ethernet card in the HP's PC Card slot (moving --card to the 320LX's CompactFlash slot), on its own network with DHCP", 0 },
     [OPT_DICTIONARY] = { "dictionary", "IMAGE", "map the Casio A-51's dictionary ROM image at physical 0x04000000", 0 },
     [OPT_NET] = { "net", "[SECONDS]", "plug COM1 into the PPP network (default at 20 s, once CE is up, or 2 s after --load); CE connects when the cable goes in", 0 },
@@ -227,6 +229,8 @@ static bool parse_option(void *context, int option, const char *value, char *err
     case OPT_SAVE: run->save = value; return true;
     case OPT_CARD: run->card = value; return true;
     case OPT_CDROM: run->cdrom = value; return true;
+    case OPT_GPS: run->gps = value; return true;
+    case OPT_GPS_TRACK: run->gps_track = value; return true;
     case OPT_ETHERNET: run->ethernet = true; return true;
     case OPT_DICTIONARY: run->dictionary = value; return true;
     case OPT_RAPI: run->rapi_socket = value; return true;
@@ -413,6 +417,8 @@ int main(int argc, char **argv) {
     if (run.dictionary && !machine_mount_dictionary(machine, run.dictionary)) { fprintf(stderr, "cannot map dictionary %s (Casio A-51 only, up to 8 MB)\n", run.dictionary); return 1; }
     if (run.card && run.insert_at < 0 && !machine_insert_card(machine, run.card)) { fprintf(stderr, "cannot open card image %s\n", run.card); return 1; }
     if (run.cdrom && run.cdrom_at < 0 && !machine_load_disc(machine, run.cdrom)) { fprintf(stderr, "cannot load disc image %s\n", run.cdrom); return 1; }
+    if (run.gps && !machine_set_gps(machine, run.gps)) { fprintf(stderr, "headless: --gps needs LAT,LON[,ALT[,KMH,HEADING]] on an AutoPC\n"); return 1; }
+    if (run.gps_track && !machine_load_gps_track(machine, run.gps_track)) { fprintf(stderr, "cannot read GPX file %s\n", run.gps_track); return 1; }
     if (run.ethernet) {
         if (!net_gateway_available()) { fprintf(stderr, "headless: --ethernet needs a build with libslirp\n"); return 2; }
         if (!ethernet_link_insert(&ethernet, machine)) { fprintf(stderr, "headless: --ethernet needs an HP machine\n"); return 2; }

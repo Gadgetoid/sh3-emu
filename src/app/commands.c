@@ -294,6 +294,15 @@ void app_command(app_t *app, int item, int *switch_to, bool *events_seen) {
         SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_DISC, app->window, filters, 2, NULL, false);
         break;
     }
+    case MENU_LOAD_GPS: {
+        static const SDL_DialogFileFilter filters[] = { { "GPX files", "gpx" }, { "All files", "*" } };
+        SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_GPS, app->window, filters, 2, NULL, false);
+        break;
+    }
+    case MENU_GPS_OFF:
+        machine_gps_off(machine);
+        notice_show(&app->notice, "GPS has no fix", NOTICE_SHORT);
+        break;
     case MENU_EJECT_DISC:
         machine_eject_disc(machine);
         notice_show(&app->notice, "disc ejected", NOTICE_SHORT);
@@ -394,6 +403,8 @@ void app_handle_picked(app_t *app) {
     picked_t *picked = app->picked;
     if (picked->kind == PICK_CARD) {
         notice_show(&app->notice, machine_insert_card(machine, picked->paths[0]) ? "card inserted" : "could not open card image", NOTICE_SHORT);
+    } else if (picked->kind == PICK_GPS) {
+        notice_show(&app->notice, machine_load_gps_track(machine, picked->paths[0]) ? "GPS location loaded" : "could not read the GPX file", NOTICE_SHORT);
     } else if (picked->kind == PICK_DISC) {
         notice_show(&app->notice, machine_load_disc(machine, picked->paths[0]) ? "disc loaded" : "could not load disc image", NOTICE_SHORT);
     } else if (picked->kind == PICK_DICTIONARY) {
@@ -469,6 +480,8 @@ void app_update_menus(app_t *app, bool device_online) {
     menu_set_enabled(MENU_EJECT_CARD, machine_card_inserted(machine));
     menu_set_enabled(MENU_LOAD_DISC, machine_has_disc_drive(machine));
     menu_set_enabled(MENU_EJECT_DISC, machine_disc_loaded(machine));
+    menu_set_enabled(MENU_LOAD_GPS, machine_has_gps(machine));
+    menu_set_enabled(MENU_GPS_OFF, machine_gps_active(machine));
     menu_set_enabled(MENU_ETHERNET_CARD, ethernet_service_available(machine));
     menu_set_checked(MENU_ETHERNET_CARD, machine_ethernet_inserted(machine));
     menu_set_enabled(MENU_MOUNT_DICTIONARY, machine_has_dictionary_slot(machine));

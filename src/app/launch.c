@@ -5,7 +5,7 @@
 #include <string.h>
 
 enum {
-    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_CDROM, LAUNCH_MEMORY, LAUNCH_SPEED, LAUNCH_OPTIMISATIONS,
+    LAUNCH_HEADING_MACHINE, LAUNCH_MACHINE, LAUNCH_STATE, LAUNCH_FRESH, LAUNCH_CARD, LAUNCH_CDROM, LAUNCH_GPS, LAUNCH_GPS_TRACK, LAUNCH_MEMORY, LAUNCH_SPEED, LAUNCH_OPTIMISATIONS,
     LAUNCH_HEADING_CONNECTIONS, LAUNCH_NET, LAUNCH_TCP, LAUNCH_USER_AGENT, LAUNCH_AGENT,
     LAUNCH_HEADING_DEBUGGING, LAUNCH_VERBOSE, LAUNCH_DEBUG_OUTPUT, LAUNCH_GDB, LAUNCH_GDB_PROCESS,
 };
@@ -17,6 +17,8 @@ static const option_t LAUNCH_OPTIONS[] = {
     [LAUNCH_FRESH] = { "fresh", NULL, "ignore the saved state and cold boot", 0 },
     [LAUNCH_CARD] = { "card", "IMAGE", "insert a CompactFlash card backed by a raw disk image", 0 },
     [LAUNCH_CDROM] = { "cdrom", "ISO", "load an ISO 9660 or BIN/CUE image into the AutoPC's CD drive", 0 },
+    [LAUNCH_GPS] = { "gps", "LAT,LON[,ALT[,KMH,HEADING]]", "feed the AutoPC's GPS receiver a position, moving at KMH on HEADING degrees", 0 },
+    [LAUNCH_GPS_TRACK] = { "gps-track", "GPX", "feed the AutoPC's GPS receiver a GPX file's waypoint, or drive its track or route", 0 },
     [LAUNCH_MEMORY] = { "memory", "MB", "RAM for a ROM given on the command line: 16, 32 or 64", 0 },
     [LAUNCH_SPEED] = { "speed", "N", "CPU speed multiple: 1, 2, 4 or 8", 0 },
     [LAUNCH_OPTIMISATIONS] = { "optimisations", "on|off", "run CE's ROM compression natively and skip busy-waits on the clock, and remember that", 0 },
@@ -44,6 +46,8 @@ static bool launch_option(void *context, int option, const char *value, char *er
     case LAUNCH_FRESH: launch->fresh = true; return true;
     case LAUNCH_CARD: launch->card = value; return true;
     case LAUNCH_CDROM: launch->cdrom = value; return true;
+    case LAUNCH_GPS: launch->gps = value; return true;
+    case LAUNCH_GPS_TRACK: launch->gps_track = value; return true;
     case LAUNCH_MEMORY:
         if (!option_integer(value, 10, &integer) || (integer != 16 && integer != 32 && integer != 64)) return false;
         settings->memory = (uint32_t)integer;

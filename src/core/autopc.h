@@ -12,6 +12,7 @@
 #define AUTOPC_LINK_REPLIES  64
 #define AUTOPC_KEY_ROWS      5
 #define AUTOPC_SOCKETS       2
+#define AUTOPC_GPS_QUEUE     1024
 
 typedef void (*autopc_line_fn)(void *context, const char *line);
 typedef void (*autopc_trace_fn)(void *context, bool write, uint32_t pa, int size, uint32_t value);
@@ -19,6 +20,15 @@ typedef void (*autopc_irl_fn)(void *context, bool asserted);
 typedef uint64_t (*autopc_cycles_fn)(void *context);
 typedef void (*autopc_samples_fn)(void *context, const int16_t *samples, uint32_t count, uint32_t rate);
 typedef bool (*autopc_memory_fn)(void *context, uint32_t pa, uint8_t *data, uint32_t length, bool write);
+
+typedef struct {
+    uint8_t queue[AUTOPC_GPS_QUEUE];
+    uint32_t head, count;
+    uint8_t received;
+    bool full;
+    uint32_t control, enable;
+    uint64_t next_byte;
+} autopc_gps_port_t;
 
 typedef struct {
     autopc_line_fn debug_line;
@@ -32,6 +42,7 @@ typedef struct {
     cfcard_slot_t  *card;
     cmd646_t      *ide;
     atapi_slot_t  *cdrom;
+    autopc_gps_port_t *gps;
 } autopc_host_t;
 
 typedef struct {
@@ -96,6 +107,7 @@ int  autopc_palette(uint32_t *palette);
 void autopc_card_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_disc_changed(autopc_t *board, const autopc_host_t *host);
 void autopc_watchdog_reset(autopc_t *board);
+uint32_t autopc_gps_send(autopc_t *board, const autopc_host_t *host, const uint8_t *bytes, uint32_t length);
 void autopc_key(autopc_t *board, const autopc_host_t *host, uint8_t scancode, bool up);
 void autopc_power_button(autopc_t *board, const autopc_host_t *host, bool down);
 uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host);

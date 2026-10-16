@@ -41,19 +41,22 @@ static bool is_directory(const char *path) {
 }
 
 void picks_handle_drop(dropped_t *dropped, machine_t *machine, desktop_t *desktop, bool online, char *message, size_t size) {
-    int files = 0, scripts = -1, cards = -1, discs = -1;
+    int files = 0, scripts = -1, cards = -1, discs = -1, routes = -1;
     const char *list[PICK_MAX + 1];
     for (int i = 0; i < dropped->count; i++) {
         const char *path = dropped->paths[i];
         if (is_directory(path)) continue;
         if (file_has_extension(path, ".img") && cards < 0) cards = i;
         else if ((file_has_extension(path, ".iso") || file_has_extension(path, ".cue")) && discs < 0) discs = i;
+        else if (file_has_extension(path, ".gpx") && routes < 0) routes = i;
         else if (file_has_extension(path, ".load") && scripts < 0) scripts = i;
         list[files++] = path;
     }
     list[files] = NULL;
     dropped->count = 0;
-    if (discs >= 0 && files == 1) {
+    if (routes >= 0 && files == 1) {
+        snprintf(message, size, machine_load_gps_track(machine, list[0]) ? "GPS following %s" : "could not read %s", file_leaf_name(list[0]));
+    } else if (discs >= 0 && files == 1) {
         snprintf(message, size, machine_load_disc(machine, list[0]) ? "loaded %s" : "could not load %s", file_leaf_name(list[0]));
     } else if (cards >= 0 && files == 1) {
         snprintf(message, size, machine_insert_card(machine, list[0]) ? "inserted %s" : "could not open %s", file_leaf_name(list[0]));
@@ -75,6 +78,7 @@ static void localize_picked(picked_t *picked) {
     if (picked->kind == PICK_CARD) library_folder("cards", folder, sizeof folder);
     else if (picked->kind == PICK_DICTIONARY) library_folder("dictionaries", folder, sizeof folder);
     else if (picked->kind == PICK_DISC) library_folder("discs", folder, sizeof folder);
+    else if (picked->kind == PICK_GPS) library_folder("gps", folder, sizeof folder);
     else snprintf(folder, sizeof folder, "%s", getenv("TMPDIR") ? getenv("TMPDIR") : ".");
     SDL_CreateDirectory(folder);
     for (int i = 0; i < picked->count; i++) {

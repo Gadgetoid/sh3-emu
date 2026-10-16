@@ -395,6 +395,7 @@ fi
 AUTOPC_FLASH_ROM=${AUTOPC_FLASH_ROM:-rom/autopc-310c-flash-8mb.bin}
 AUTOPC_MENU_HASH=224ea48adc540bf3e9411164f2df0df9c880995252f6bd5e727f79bbb0a299e9
 AUTOPC_INSERT_HASH=d4a22dd722006af5b34ffa17729875bc9ee45aea642bd89b7c722cec88f30259
+AUTOPC_GPS_HASH=7435192cb53d50fa97ba948a7f7747ecdaff1d16c0827c092cad80f8c548f751
 if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --debug-output --seconds=40 --power=10 --key=18:5A --key=28:F4 --pgm="$OUT/autopc_menu.pgm" > "$OUT/autopc_menu.log" 2>&1
     actual=$(shasum -a 256 "$OUT/autopc_menu.pgm" | cut -d' ' -f1)
@@ -417,6 +418,10 @@ if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --cdrom="$OUT/autopc_cd_audio.cue" --seconds=32 --power=10 --key=18:5A --key=24:F4 --key=26:5A --wav="$OUT/autopc_cd_audio.wav" > /dev/null 2>&1
     heard=$(python3 tests/cd_audio.py heard "$OUT/autopc_cd_audio_tone.wav" "$OUT/autopc_cd_audio.wav")
     if [ "$heard" -ge 290 ]; then echo "ok   autopc_cd_audio"; else echo "FAIL autopc_cd_audio: heard $heard of 300 sectors"; exit 1; fi
+    ./headless "$AUTOPC_FLASH_ROM" --gps=51.5007,-0.1246,20 --seconds=56 --power=10 --key=18:5A --key=28:F4 --key=29:F4 --key=30:F4 --key=31:F4 --key=32:F4 --key=34:5A \
+        --key=37:F2 --key=38:F2 --key=39:F2 --key=40:F2 --key=41:5A --key=53:F2 --pgm="$OUT/autopc_gps.pgm" > /dev/null 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc_gps.pgm" | cut -d' ' -f1)
+    if [ "$actual" = "$AUTOPC_GPS_HASH" ]; then echo "ok   autopc_gps"; else echo "FAIL autopc_gps $actual"; exit 1; fi
 else
     echo "skip autopc_menu: no $AUTOPC_FLASH_ROM (Clarion AutoPC 310C 8 MB flash dump)"
 fi

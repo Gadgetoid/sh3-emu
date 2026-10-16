@@ -8,7 +8,7 @@
 #include "app/desktop.h"
 #include "core/machine.h"
 
-typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_SEND, PICK_FETCH, PICK_SHARED, PICK_DICTIONARY, PICK_DISC } pick_kind_t;
+typedef enum { PICK_SAVE_SNAPSHOT = 1, PICK_LOAD_SNAPSHOT, PICK_CARD, PICK_SEND, PICK_FETCH, PICK_SHARED, PICK_DICTIONARY, PICK_DISC, PICK_GPS } pick_kind_t;
 
 #define PICK_MAX 64
 

@@ -506,6 +506,8 @@ int main(int argc, char **argv) {
     machine_t *machine = app->session.machine;
     if (app->launch.card && !machine_insert_card(machine, app->launch.card)) fprintf(stderr, "cannot open card image %s\n", app->launch.card);
     if (app->launch.cdrom && !machine_load_disc(machine, app->launch.cdrom)) fprintf(stderr, "cannot load disc image %s\n", app->launch.cdrom);
+    if (app->launch.gps && !machine_set_gps(machine, app->launch.gps)) fprintf(stderr, "--gps needs LAT,LON[,ALT[,KMH,HEADING]] on an AutoPC\n");
+    if (app->launch.gps_track && !machine_load_gps_track(machine, app->launch.gps_track)) fprintf(stderr, "cannot read GPX file %s\n", app->launch.gps_track);
     menu_install(app->window);
     open_audio(app);
     app->running = true;

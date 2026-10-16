@@ -10,6 +10,8 @@
 
 #include "core/autopc.h"
 #include "core/casio.h"
+#include "core/clarion_gps.h"
+#include "core/gps_receiver.h"
 #include "core/ce.h"
 #include "core/dac_sound.h"
 #include "core/hp320lx.h"
@@ -106,6 +108,10 @@ struct machine {
     cfcard_slot_t card_slot;
     char card_path[CARD_PATH_MAX];
     cmd646_t ide;
+    autopc_gps_port_t gps_port;
+    gps_receiver_t gps;
+    int64_t gps_epoch;
+    uint64_t gps_frame_at;
     atapi_slot_t disc_slot;
     char disc_path[CARD_PATH_MAX];
     ne2000_t ethernet;
@@ -815,7 +821,7 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->hitachi = !m->autopc && !m->hp && hpw200ec_detect(rom, rom_size);
     m->casio = !m->autopc && !m->hp && !m->hitachi;
     m->board_host = (autopc_host_t){ .debug_line = board_debug_line, .trace = autopc_trace, .irl = autopc_irl, .cycles = casio_cycles, .samples = casio_samples, .memory = autopc_memory,
-                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot, .ide = &m->ide, .cdrom = &m->disc_slot };
+                                     .cpu_hz = MACHINE_CLOCK_HZ, .context = m, .card = &m->card_slot, .ide = &m->ide, .cdrom = &m->disc_slot, .gps = &m->gps_port };
     m->hp_host = (hp320lx_host_t){ .trace = hp_trace, .debug_line = board_debug_line, .sample = hp_sample, .model = m->hp_model, .cpu_hz = MACHINE_CLOCK_HZ,
                                    .sample_rate = AUDIO_RATE, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .runtime = &m->hp_runtime, .context = m };
     m->hitachi_host = (hpw200ec_host_t){ .trace = hitachi_trace, .chip = &m->chip, .card = &m->card_slot, .ethernet = &m->ethernet, .context = m,
@@ -856,6 +862,7 @@ void machine_set_log(machine_t *m, machine_log_fn log) {
 
 static void pending_card_event(machine_t *m);
 static void pending_disc_event(machine_t *m);
+static void gps_frame_event(machine_t *m);
 
 static void power_release_event(machine_t *m) {
     if (m->power_press_pending && m->cpu.sleeping) {
@@ -882,6 +889,7 @@ static uint64_t next_event(machine_t *m) {
     if (serial_busy && m->serial_tick_at < next) next = m->serial_tick_at;
     if (m->pending_card_at && m->pending_card_at < next) next = m->pending_card_at;
     if (m->pending_disc_at && m->pending_disc_at < next) next = m->pending_disc_at;
+    if (m->gps.active && m->gps_frame_at < next) next = m->gps_frame_at;
     if (m->power_release_at && m->power_release_at < next) next = m->power_release_at;
     return next;
 }
@@ -902,6 +910,7 @@ void machine_run(machine_t *m, uint64_t cycles) {
         watchdog_reset_event(m);
         pending_card_event(m);
         pending_disc_event(m);
+        gps_frame_event(m);
         power_release_event(m);
         serial_tick_event(m);
         if (m->casio) {
@@ -1134,6 +1143,46 @@ void machine_eject_disc(machine_t *m) {
 
 bool machine_disc_loaded(machine_t *m) {
     return m->ide.drive.loaded;
+}
+
+static void gps_frame_event(machine_t *m) {
+    if (!m->autopc || !m->gps.active || m->cpu.cycles < m->gps_frame_at) return;
+    if (m->gps_frame_at) gps_receiver_advance(&m->gps, 1.0);
+    m->gps_frame_at = m->cpu.cycles + MACHINE_CLOCK_HZ;
+    clarion_gps_fix_t fix;
+    gps_receiver_fix(&m->gps, m->gps_epoch + (int64_t)m->gps.elapsed, &fix);
+    uint8_t frame[CLARION_GPS_FRAME_BYTES];
+    clarion_gps_encode(&fix, frame);
+    autopc_gps_send(&m->board, &m->board_host, frame, sizeof frame);
+}
+
+static void gps_started(machine_t *m) {
+    m->gps_epoch = (int64_t)time(NULL);
+    m->gps_frame_at = m->cpu.cycles;
+}
+
+bool machine_has_gps(machine_t *m) {
+    return m->autopc;
+}
+
+bool machine_set_gps(machine_t *m, const char *position) {
+    if (!m->autopc || !gps_receiver_parse_position(&m->gps, position)) return false;
+    gps_started(m);
+    return true;
+}
+
+bool machine_load_gps_track(machine_t *m, const char *path) {
+    if (!m->autopc || !gps_receiver_load_gpx(&m->gps, path)) return false;
+    gps_started(m);
+    return true;
+}
+
+void machine_gps_off(machine_t *m) {
+    gps_receiver_clear(&m->gps);
+}
+
+bool machine_gps_active(machine_t *m) {
+    return m->gps.active;
 }
 
 bool machine_has_ethernet_slot(machine_t *m) {
@@ -1397,7 +1446,7 @@ void machine_dump_state(machine_t *m) {
     machine_logf(m, "cycles=%llu sleeping=%d irl=%u\n", (unsigned long long)cpu->cycles, cpu->sleeping, m->chip.irl_level);
 }
 
-#define STATE_FIELD_COUNT 12
+#define STATE_FIELD_COUNT 15
 
 static const uint32_t IDE_OLDER_STATE_SIZES[] = { offsetof(cmd646_t, drive) + offsetof(atapi_t, audio) };
 
@@ -1422,6 +1471,9 @@ static void state_fields(machine_t *m, state_field_t *fields) {
         { "autopc_board", &m->board, sizeof m->board, NULL, 0, NULL },
         { "autopc_ide", &m->ide, sizeof m->ide, IDE_OLDER_STATE_SIZES, 1, load_older_ide },
         { "disc_path", m->disc_path, sizeof m->disc_path, NULL, 0, NULL },
+        { "autopc_gps_port", &m->gps_port, sizeof m->gps_port, NULL, 0, NULL },
+        { "gps_receiver", &m->gps, sizeof m->gps, NULL, 0, NULL },
+        { "gps_epoch", &m->gps_epoch, sizeof m->gps_epoch, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
 }

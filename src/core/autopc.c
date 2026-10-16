@@ -76,6 +76,14 @@
 #define LINK_RX_READY   0x00000400u
 #define LINK_TX_DONE    0x00000800u
 #define FACEPLATE_MESSAGE 0x02000000u
+#define FACEPLATE_GPS_RECEIVE 0x00000008u
+#define GPS_DATA        0x3000u
+#define GPS_CONTROL     0x3004u
+#define GPS_ENABLE      0x3010u
+#define GPS_TX_READY    0x00002000u
+#define GPS_DIVISOR     0x000000FFu
+#define GPS_UART_HZ     230769u
+#define GPS_BITS_PER_BYTE 10u
 #define LINK_KEYS_UP    0x00400000u
 #define POWER_ROW       1u
 #define POWER_COLUMN    1u
@@ -525,7 +533,68 @@ static void link_transmit(autopc_t *board, const autopc_host_t *host) {
     link_next_reply(board, host);
 }
 
+static uint64_t gps_byte_cycles(const autopc_host_t *host) {
+    uint32_t divisor = (host->gps->control & GPS_DIVISOR) + 2;
+    uint32_t baud = GPS_UART_HZ / divisor;
+    return baud ? (uint64_t)host->cpu_hz * GPS_BITS_PER_BYTE / baud : 0;
+}
+
+static uint64_t gps_due(const autopc_host_t *host) {
+    if (!host->gps || !host->gps->count || host->gps->full) return UINT64_MAX;
+    return host->gps->next_byte;
+}
+
+static void gps_receive(autopc_t *board, const autopc_host_t *host, uint64_t now) {
+    autopc_gps_port_t *port = host->gps;
+    if (gps_due(host) > now) return;
+    port->received = port->queue[port->head];
+    port->head = (port->head + 1) % AUTOPC_GPS_QUEUE;
+    port->count--;
+    port->full = true;
+    port->next_byte = now + gps_byte_cycles(host);
+    raise_faceplate(board, host, FACEPLATE_GPS_RECEIVE);
+}
+
+uint32_t autopc_gps_send(autopc_t *board, const autopc_host_t *host, const uint8_t *bytes, uint32_t length) {
+    (void)board;
+    autopc_gps_port_t *port = host->gps;
+    if (!port || AUTOPC_GPS_QUEUE - port->count < length) return 0;
+    for (uint32_t i = 0; i < length; i++) port->queue[(port->head + port->count + i) % AUTOPC_GPS_QUEUE] = bytes[i];
+    if (!port->count && !port->full && host->cycles) {
+        uint64_t now = host->cycles(host->context);
+        if (port->next_byte < now) port->next_byte = now;
+    }
+    port->count += length;
+    return length;
+}
+
+static bool gps_io_read(const autopc_host_t *host, uint32_t offset, uint32_t *value) {
+    autopc_gps_port_t *port = host->gps;
+    if (!port) return false;
+    switch (offset) {
+    case GPS_DATA:
+        *value = port->received;
+        port->full = false;
+        return true;
+    case GPS_CONTROL: *value = port->control | GPS_TX_READY; return true;
+    case GPS_ENABLE: *value = port->enable; return true;
+    default: return false;
+    }
+}
+
+static bool gps_io_write(const autopc_host_t *host, uint32_t offset, uint32_t value) {
+    autopc_gps_port_t *port = host->gps;
+    if (!port) return false;
+    switch (offset) {
+    case GPS_DATA: return true;
+    case GPS_CONTROL: port->control = value & ~GPS_TX_READY; return true;
+    case GPS_ENABLE: port->enable = value; return true;
+    default: return false;
+    }
+}
+
 static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t *value) {
+    if (gps_io_read(host, offset, value)) return true;
     switch (offset) {
     case FACEPLATE_ENABLE: *value = board->faceplate_enable; return true;
     case FACEPLATE_PENDING: *value = board->faceplate_pending; return true;
@@ -548,6 +617,7 @@ static bool faceplate_io_read(autopc_t *board, const autopc_host_t *host, uint32
 }
 
 static bool faceplate_io_write(autopc_t *board, const autopc_host_t *host, uint32_t offset, int size, uint32_t value) {
+    if (gps_io_write(host, offset, value)) return true;
     switch (offset) {
     case FACEPLATE_ENABLE:
         board->faceplate_enable = value;
@@ -808,8 +878,9 @@ static uint64_t audio_due(const autopc_t *board, const autopc_host_t *host) {
 }
 
 uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host) {
-    uint64_t audio = audio_due(board, host), ide = ide_due(host);
-    return audio < ide ? audio : ide;
+    uint64_t audio = audio_due(board, host), ide = ide_due(host), gps = gps_due(host);
+    uint64_t next = audio < ide ? audio : ide;
+    return gps < next ? gps : next;
 }
 
 static void play_frames(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t frames) {
@@ -844,6 +915,7 @@ static void cd_audio_written(const autopc_t *board, const autopc_host_t *host, u
 void autopc_update(autopc_t *board, const autopc_host_t *host) {
     if (!host->cycles) return;
     uint64_t now = host->cycles(host->context);
+    gps_receive(board, host, now);
     if (ide_due(host) <= now) {
         ide_bus_t bus = { board, host };
         cmd646_host_t ide_host = { host->cdrom, ide_memory, &bus };
