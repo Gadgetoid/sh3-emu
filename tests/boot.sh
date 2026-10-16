@@ -412,6 +412,11 @@ if [ -f "$AUTOPC_FLASH_ROM" ]; then
     ./headless "$AUTOPC_FLASH_ROM" --cdrom="$OUT/autopc_cdrom.iso" --cdrom-at=30 --seconds=40 --power=10 --key=18:5A --pgm="$OUT/autopc_cdrom.pgm" > /dev/null 2>&1
     actual=$(shasum -a 256 "$OUT/autopc_cdrom.pgm" | cut -d' ' -f1)
     if [ "$actual" = "$AUTOPC_INSERT_HASH" ]; then echo "ok   autopc_cdrom"; else echo "FAIL autopc_cdrom $actual"; exit 1; fi
+    python3 tests/cd_audio.py tone "$OUT/autopc_cd_audio_tone.wav"
+    python3 tools/mkaudiocd.py "$OUT/autopc_cd_audio.cue" "$OUT/autopc_cd_audio_tone.wav"
+    ./headless "$AUTOPC_FLASH_ROM" --cdrom="$OUT/autopc_cd_audio.cue" --seconds=32 --power=10 --key=18:5A --key=24:F4 --key=26:5A --wav="$OUT/autopc_cd_audio.wav" > /dev/null 2>&1
+    heard=$(python3 tests/cd_audio.py heard "$OUT/autopc_cd_audio_tone.wav" "$OUT/autopc_cd_audio.wav")
+    if [ "$heard" -ge 290 ]; then echo "ok   autopc_cd_audio"; else echo "FAIL autopc_cd_audio: heard $heard of 300 sectors"; exit 1; fi
 else
     echo "skip autopc_menu: no $AUTOPC_FLASH_ROM (Clarion AutoPC 310C 8 MB flash dump)"
 fi

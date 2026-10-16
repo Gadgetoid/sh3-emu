@@ -81,6 +81,8 @@
 #define POWER_COLUMN    1u
 #define INTERRUPT_ENABLE 0x100Cu
 #define INTERRUPT_STATUS 0x1014u
+#define CD_AUDIO_START  0x2030u
+#define CD_AUDIO_LAST   0x2034u
 #define AUDIO_START     0x2038u
 #define AUDIO_END       0x203Cu
 #define AUDIO_RUN       0x00100000u
@@ -269,6 +271,7 @@ static uint32_t bridge_read(const autopc_t *board, uint32_t offset, int size) {
 }
 
 static bool board_memory(autopc_t *board, const autopc_host_t *host, uint32_t pa, uint8_t *data, uint32_t length, bool write);
+static void cd_audio_written(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t length);
 static void update_irl(const autopc_t *board, const autopc_host_t *host);
 
 static void bridge_dma(autopc_t *board, const autopc_host_t *host, uint32_t descriptor_register, uint32_t done) {
@@ -387,9 +390,10 @@ typedef struct {
 static bool ide_memory(void *context, uint32_t bus_address, uint8_t *data, uint32_t length, bool write) {
     ide_bus_t *bus = context;
     uint32_t offset;
-    if (memory_hit(&bus->board->faceplate, PCI_MEMORY_PA + bus_address, &offset)) bus_address += PCI_MEMORY_PA;
-    else bus_address &= AREA_ADDRESS_MASK;
-    return board_memory(bus->board, bus->host, bus_address, data, length, write);
+    if (!memory_hit(&bus->board->faceplate, PCI_MEMORY_PA + bus_address, &offset)) return board_memory(bus->board, bus->host, bus_address & AREA_ADDRESS_MASK, data, length, write);
+    if (!board_memory(bus->board, bus->host, PCI_MEMORY_PA + bus_address, data, length, write)) return false;
+    if (write) cd_audio_written(bus->board, bus->host, offset, length);
+    return true;
 }
 
 static bool ide_access(autopc_t *board, const autopc_host_t *host, uint32_t pa, int size, bool write, uint32_t *value) {
@@ -791,16 +795,24 @@ static uint64_t audio_half_due(const autopc_t *board, const autopc_host_t *host,
     return board->audio_started + bytes * host->cpu_hz / (AUDIO_RATE * AUDIO_FRAME_BYTES);
 }
 
-uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host) {
+static uint64_t ide_due(const autopc_host_t *host) {
+    if (!host->ide || !host->cdrom) return UINT64_MAX;
+    cmd646_host_t ide_host = { host->cdrom, NULL, NULL };
+    uint64_t due = cmd646_dma_due(host->ide, &ide_host);
+    return due ? due : UINT64_MAX;
+}
+
+static uint64_t audio_due(const autopc_t *board, const autopc_host_t *host) {
     if (!board->audio_running || !audio_half_bytes(board) || !host->cpu_hz) return UINT64_MAX;
     return audio_half_due(board, host, board->audio_halves + 1);
 }
 
-static void audio_play_half(autopc_t *board, const autopc_host_t *host) {
-    uint32_t half_bytes = audio_half_bytes(board);
-    uint32_t start = bytes_read(board->faceplate_io, AUDIO_START, 4) & AUDIO_OFFSET_MASK;
-    uint32_t offset = start + (board->audio_halves % 2) * half_bytes;
-    uint32_t frames = half_bytes / AUDIO_FRAME_BYTES;
+uint64_t autopc_next_event(const autopc_t *board, const autopc_host_t *host) {
+    uint64_t audio = audio_due(board, host), ide = ide_due(host);
+    return audio < ide ? audio : ide;
+}
+
+static void play_frames(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t frames) {
     int16_t mono[AUDIO_HALF_MAX_FRAMES];
     if (frames > AUDIO_HALF_MAX_FRAMES) frames = AUDIO_HALF_MAX_FRAMES;
     for (uint32_t i = 0; i < frames; i++) {
@@ -816,10 +828,29 @@ static void audio_play_half(autopc_t *board, const autopc_host_t *host) {
     if (host->samples && frames) host->samples(host->context, mono, frames, AUDIO_RATE);
 }
 
+static void audio_play_half(autopc_t *board, const autopc_host_t *host) {
+    uint32_t half_bytes = audio_half_bytes(board);
+    uint32_t start = bytes_read(board->faceplate_io, AUDIO_START, 4) & AUDIO_OFFSET_MASK;
+    play_frames(board, host, start + (board->audio_halves % 2) * half_bytes, half_bytes / AUDIO_FRAME_BYTES);
+}
+
+static void cd_audio_written(const autopc_t *board, const autopc_host_t *host, uint32_t offset, uint32_t length) {
+    uint32_t start = bytes_read(board->faceplate_io, CD_AUDIO_START, 4) & AUDIO_OFFSET_MASK;
+    uint32_t last = bytes_read(board->faceplate_io, CD_AUDIO_LAST, 4) & AUDIO_OFFSET_MASK;
+    if (!last || offset < start || offset + length > start + last + AUDIO_FRAME_BYTES) return;
+    play_frames(board, host, offset, length / AUDIO_FRAME_BYTES);
+}
+
 void autopc_update(autopc_t *board, const autopc_host_t *host) {
     if (!host->cycles) return;
     uint64_t now = host->cycles(host->context);
-    while (board->audio_running && autopc_next_event(board, host) <= now) {
+    if (ide_due(host) <= now) {
+        ide_bus_t bus = { board, host };
+        cmd646_host_t ide_host = { host->cdrom, ide_memory, &bus };
+        cmd646_service(host->ide, &ide_host);
+        update_irl(board, host);
+    }
+    while (board->audio_running && audio_due(board, host) <= now) {
         audio_play_half(board, host);
         board->audio_halves++;
         board->interrupt_status |= AUDIO_HALF_DONE;

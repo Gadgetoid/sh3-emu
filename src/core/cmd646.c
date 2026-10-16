@@ -98,9 +98,9 @@ static bool read_prd(const cmd646_host_t *host, uint32_t address, uint32_t *buff
 
 static void run_dma(cmd646_t *controller, const cmd646_host_t *host) {
     if (!(controller->bus_master_status & BM_ACTIVE) || !(controller->bus_master_command & BM_TO_MEMORY)) return;
-    if (!atapi_dma_ready(&controller->drive)) return;
+    if (!atapi_dma_ready(host->drive)) return;
     uint32_t table = controller->prd_table;
-    for (uint32_t entries = 0; entries < PRD_ENTRIES_MAX && atapi_dma_ready(&controller->drive); entries++) {
+    for (uint32_t entries = 0; entries < PRD_ENTRIES_MAX && atapi_dma_ready(host->drive); entries++) {
         uint32_t buffer, length;
         bool last;
         if (!read_prd(host, table, &buffer, &length, &last)) {
@@ -109,7 +109,7 @@ static void run_dma(cmd646_t *controller, const cmd646_host_t *host) {
         }
         table += PRD_BYTES;
         uint8_t chunk[DMA_CHUNK];
-        while (length && atapi_dma_ready(&controller->drive)) {
+        while (length && atapi_dma_ready(host->drive)) {
             uint32_t take = length < sizeof chunk ? length : (uint32_t)sizeof chunk;
             uint32_t got = atapi_dma_read(host->drive, chunk, take);
             if (!got) break;
@@ -211,6 +211,17 @@ bool cmd646_io(cmd646_t *controller, const cmd646_host_t *host, uint32_t address
     run_dma(controller, host);
     sync_interrupt(controller);
     return true;
+}
+
+void cmd646_service(cmd646_t *controller, const cmd646_host_t *host) {
+    if (!host->drive || host->drive->state != &controller->drive) return;
+    run_dma(controller, host);
+    sync_interrupt(controller);
+}
+
+uint64_t cmd646_dma_due(const cmd646_t *controller, const cmd646_host_t *host) {
+    if (!host->drive || !(controller->bus_master_status & BM_ACTIVE) || !(controller->bus_master_command & BM_TO_MEMORY)) return 0;
+    return atapi_dma_due(host->drive);
 }
 
 bool cmd646_interrupt(const cmd646_t *controller) {

@@ -823,6 +823,9 @@ machine_t *machine_create(const uint8_t *rom, size_t rom_size, char *error, size
     m->casio_host = (casio_host_t){ casio_trace, casio_cycles, casio_irl, casio_onchip, MACHINE_CLOCK_HZ, CASIO_TIMER_HZ, &m->card_slot, &m->casio_audio, casio_read_memory, casio_samples, m };
     m->card_slot.state = &m->card;
     m->disc_slot.state = &m->ide.drive;
+    m->disc_slot.clock = casio_cycles;
+    m->disc_slot.clock_context = m;
+    m->disc_slot.clock_hz = MACHINE_CLOCK_HZ;
     if (m->autopc && image_is_b000ff(m) ? !load_b000ff(m, NULL, DRAM_DEFAULT_SIZE, error, error_size) : !load_flash(m, error, error_size)) {
         machine_destroy(m);
         return NULL;
@@ -1093,9 +1096,10 @@ bool machine_has_disc_drive(machine_t *m) {
 }
 
 static bool load_disc_now(machine_t *m, const char *path) {
-    FILE *image = fopen(path, "rb");
+    cdimage_t disc;
+    FILE *image = cdimage_open(path, &disc);
     if (!image) return false;
-    atapi_load(&m->disc_slot, image);
+    atapi_load(&m->disc_slot, image, &disc);
     snprintf(m->disc_path, sizeof m->disc_path, "%s", path);
     autopc_disc_changed(&m->board, &m->board_host);
     return true;
@@ -1104,7 +1108,8 @@ static bool load_disc_now(machine_t *m, const char *path) {
 bool machine_load_disc(machine_t *m, const char *path) {
     if (!m->autopc) return false;
     if (!m->ide.drive.loaded) return load_disc_now(m, path);
-    FILE *probe = fopen(path, "rb");
+    cdimage_t probe_disc;
+    FILE *probe = cdimage_open(path, &probe_disc);
     if (!probe) return false;
     fclose(probe);
     machine_eject_disc(m);
@@ -1394,6 +1399,15 @@ void machine_dump_state(machine_t *m) {
 
 #define STATE_FIELD_COUNT 12
 
+static const uint32_t IDE_OLDER_STATE_SIZES[] = { offsetof(cmd646_t, drive) + offsetof(atapi_t, audio) };
+
+static bool load_older_ide(void *data, const uint8_t *old, uint32_t size) {
+    if (size != IDE_OLDER_STATE_SIZES[0]) return false;
+    memset(data, 0, sizeof(cmd646_t));
+    memcpy(data, old, size);
+    return true;
+}
+
 static void state_fields(machine_t *m, state_field_t *fields) {
     state_field_t list[STATE_FIELD_COUNT] = {
         { "cpu", &m->cpu, sizeof m->cpu, NULL, 0, NULL },
@@ -1406,7 +1420,7 @@ static void state_fields(machine_t *m, state_field_t *fields) {
         { "ethernet", &m->ethernet, sizeof m->ethernet, NULL, 0, NULL },
         { "hpw200ec_board", &m->hitachi_board, sizeof m->hitachi_board, NULL, 0, NULL },
         { "autopc_board", &m->board, sizeof m->board, NULL, 0, NULL },
-        { "autopc_ide", &m->ide, sizeof m->ide, NULL, 0, NULL },
+        { "autopc_ide", &m->ide, sizeof m->ide, IDE_OLDER_STATE_SIZES, 1, load_older_ide },
         { "disc_path", m->disc_path, sizeof m->disc_path, NULL, 0, NULL },
     };
     memcpy(fields, list, sizeof list);
@@ -1470,8 +1484,9 @@ bool machine_load(machine_t *m, const char *path, int64_t *host_time) {
     cfcard_rebind(&m->card_slot, image);
     if (!image) m->card_path[0] = 0;
     atapi_sanitize(&m->ide.drive);
-    FILE *disc = m->ide.drive.loaded && m->disc_path[0] ? fopen(m->disc_path, "rb") : NULL;
-    atapi_rebind(&m->disc_slot, disc);
+    cdimage_t disc_layout = { 0 };
+    FILE *disc = m->ide.drive.loaded && m->disc_path[0] ? cdimage_open(m->disc_path, &disc_layout) : NULL;
+    atapi_rebind(&m->disc_slot, disc, &disc_layout);
     if (!disc) m->disc_path[0] = 0;
     m->chip.transmit = onchip_transmit;
     m->chip.watchdog_reset = watchdog_reset;

@@ -47,7 +47,7 @@ void picks_handle_drop(dropped_t *dropped, machine_t *machine, desktop_t *deskto
         const char *path = dropped->paths[i];
         if (is_directory(path)) continue;
         if (file_has_extension(path, ".img") && cards < 0) cards = i;
-        else if (file_has_extension(path, ".iso") && discs < 0) discs = i;
+        else if ((file_has_extension(path, ".iso") || file_has_extension(path, ".cue")) && discs < 0) discs = i;
         else if (file_has_extension(path, ".load") && scripts < 0) scripts = i;
         list[files++] = path;
     }

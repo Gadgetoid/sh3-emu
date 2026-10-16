@@ -1,4 +1,4 @@
-/* Emulate an ATAPI CD-ROM drive reading 2048-byte blocks from an ISO image. */
+/* Emulate an ATAPI CD-ROM drive reading a disc image. */
 #include "core/atapi.h"
 
 #include <string.h>
@@ -70,6 +70,10 @@
 #define LEAD_IN_FRAMES    150u
 #define MAX_TRANSFER      0xFFFEu
 #define READ_CD_USER_DATA 0x10u
+#define READ_CD_TYPE_ANY  0u
+#define READ_CD_TYPE_AUDIO 1u
+#define READ_CD_TYPE_MODE1 2u
+#define TRACK_ADR         0x10u
 
 static void clear_transfer(atapi_t *drive) {
     drive->buffer_length = drive->buffer_position = drive->chunk_left = 0;
@@ -102,17 +106,13 @@ void atapi_reset(atapi_slot_t *slot) {
     power_on_state(drive);
 }
 
-static uint32_t image_blocks(FILE *image) {
-    if (!image || fseek(image, 0, SEEK_END) != 0) return 0;
-    long bytes = ftell(image);
-    return bytes > 0 ? (uint32_t)(bytes / ATAPI_BLOCK_SIZE) : 0;
-}
-
-bool atapi_load(atapi_slot_t *slot, FILE *image) {
+bool atapi_load(atapi_slot_t *slot, FILE *image, const cdimage_t *disc) {
     if (!image) return false;
     if (slot->image) fclose(slot->image);
     slot->image = image;
-    slot->state->total_blocks = image_blocks(image);
+    slot->disc = *disc;
+    slot->ready_at = 0;
+    slot->state->total_blocks = disc->total_blocks;
     slot->state->loaded = true;
     slot->state->media_changed = true;
     return true;
@@ -124,11 +124,14 @@ void atapi_unload(atapi_slot_t *slot) {
     slot->state->loaded = false;
     slot->state->media_changed = true;
     slot->state->total_blocks = 0;
+    memset(&slot->disc, 0, sizeof slot->disc);
 }
 
-void atapi_rebind(atapi_slot_t *slot, FILE *image) {
+void atapi_rebind(atapi_slot_t *slot, FILE *image, const cdimage_t *disc) {
     if (slot->image && slot->image != image) fclose(slot->image);
     slot->image = image;
+    slot->disc = *disc;
+    slot->ready_at = 0;
     if (slot->state->loaded && !image) {
         slot->state->loaded = false;
         slot->state->media_changed = true;
@@ -213,22 +216,31 @@ static void respond(atapi_t *drive, const uint8_t *data, uint32_t length, uint32
     begin_data_in(drive);
 }
 
+static uint64_t clock_now(const atapi_slot_t *slot) {
+    return slot->clock ? slot->clock(slot->clock_context) : 0;
+}
+
 static bool fill_blocks(atapi_slot_t *slot) {
     atapi_t *drive = slot->state;
-    uint32_t count = drive->blocks_left < ATAPI_BUFFER_BLOCKS ? drive->blocks_left : ATAPI_BUFFER_BLOCKS;
-    uint32_t bytes = count * ATAPI_BLOCK_SIZE;
-    if (!slot->image || fseek(slot->image, (long)drive->next_block * ATAPI_BLOCK_SIZE, SEEK_SET) != 0 ||
-        fread(drive->buffer, 1, bytes, slot->image) != bytes) {
-        return false;
+    uint32_t block_bytes = drive->audio ? CDIMAGE_RAW_BYTES : CDIMAGE_DATA_BYTES;
+    uint32_t room = (uint32_t)sizeof drive->buffer / block_bytes;
+    uint32_t count = drive->blocks_left < room ? drive->blocks_left : room;
+    for (uint32_t i = 0; i < count; i++) {
+        uint8_t *out = drive->buffer + i * block_bytes;
+        bool ok = drive->audio ? cdimage_read_audio(slot->image, &slot->disc, drive->next_block + i, out)
+                               : cdimage_read_data(slot->image, &slot->disc, drive->next_block + i, out);
+        if (!ok) return false;
     }
+    drive->current_block = drive->next_block + count - 1;
     drive->next_block += count;
     drive->blocks_left -= count;
-    drive->buffer_length = bytes;
+    drive->buffer_length = count * block_bytes;
     drive->buffer_position = 0;
+    if (drive->audio && slot->clock_hz) slot->ready_at = clock_now(slot) + (uint64_t)count * slot->clock_hz / FRAMES_PER_SECOND;
     return true;
 }
 
-static void start_read(atapi_slot_t *slot, uint32_t block, uint32_t count) {
+static void start_read(atapi_slot_t *slot, uint32_t block, uint32_t count, uint32_t type) {
     atapi_t *drive = slot->state;
     if (count == 0) {
         complete(drive);
@@ -238,9 +250,16 @@ static void start_read(atapi_slot_t *slot, uint32_t block, uint32_t count) {
         check_condition(drive, SENSE_ILLEGAL_REQUEST, ASC_OUT_OF_RANGE, 0);
         return;
     }
+    const cdimage_track_t *track = cdimage_track_at(&slot->disc, block);
+    bool audio = track && !(track->control & CDIMAGE_CONTROL_DATA);
+    if (!track || (type == READ_CD_TYPE_AUDIO && !audio) || (type == READ_CD_TYPE_MODE1 && audio)) {
+        check_condition(drive, SENSE_ILLEGAL_REQUEST, ASC_ILLEGAL_MODE, 0);
+        return;
+    }
     bool dma = drive->dma;
     clear_transfer(drive);
     drive->dma = dma;
+    drive->audio = audio;
     drive->next_block = block;
     drive->blocks_left = count;
     if (!fill_blocks(slot)) {
@@ -349,76 +368,99 @@ static void request_sense(atapi_t *drive, uint32_t allocation) {
 static void read_capacity(atapi_t *drive) {
     uint8_t data[8];
     write_be32(data, drive->total_blocks ? drive->total_blocks - 1 : 0);
-    write_be32(data + 4, ATAPI_BLOCK_SIZE);
+    write_be32(data + 4, CDIMAGE_DATA_BYTES);
     respond(drive, data, sizeof data, sizeof data);
 }
 
-static void full_toc(atapi_t *drive, uint32_t allocation) {
-    static const uint8_t points[] = { 0xA0, 0xA1, 0xA2, 0x01 };
-    uint8_t data[4 + 11 * sizeof points] = { 0 };
-    for (size_t i = 0; i < sizeof points; i++) {
-        uint8_t *entry = data + 4 + 11 * i;
-        entry[0] = 1;
-        entry[1] = TRACK_DATA;
-        entry[3] = points[i];
-        if (points[i] == 0xA0 || points[i] == 0xA1) entry[8] = 1;
-        else write_address(entry + 7, points[i] == 0xA2 ? drive->total_blocks : 0, true);
-    }
-    write_be16(data, sizeof data - 2);
-    data[2] = data[3] = 1;
-    respond(drive, data, sizeof data, allocation);
+static uint8_t track_adr_control(const cdimage_track_t *track) {
+    return (uint8_t)(TRACK_ADR | track->control);
 }
 
-static void read_toc(atapi_t *drive, const uint8_t *packet) {
+static void full_toc(atapi_slot_t *slot, uint32_t allocation) {
+    const cdimage_t *disc = &slot->disc;
+    uint8_t data[4 + 11 * (3 + CDIMAGE_TRACKS_MAX)] = { 0 };
+    const cdimage_track_t *first = &disc->tracks[0], *last = &disc->tracks[disc->track_count - 1];
+    uint8_t *entry = data + 4;
+    for (int point = 0; point < 3; point++, entry += 11) {
+        entry[0] = 1;
+        entry[1] = track_adr_control(point == 0 ? first : last);
+        entry[3] = (uint8_t)(0xA0 + point);
+        if (point < 2) entry[8] = point == 0 ? first->number : last->number;
+        else write_address(entry + 7, disc->total_blocks, true);
+    }
+    for (uint32_t i = 0; i < disc->track_count; i++, entry += 11) {
+        entry[0] = 1;
+        entry[1] = track_adr_control(&disc->tracks[i]);
+        entry[3] = disc->tracks[i].number;
+        write_address(entry + 7, disc->tracks[i].start, true);
+    }
+    uint32_t length = (uint32_t)(entry - data);
+    write_be16(data, length - 2);
+    data[2] = data[3] = 1;
+    respond(slot->state, data, length, allocation);
+}
+
+static void read_toc(atapi_slot_t *slot, const uint8_t *packet) {
+    atapi_t *drive = slot->state;
+    const cdimage_t *disc = &slot->disc;
     bool msf = (packet[1] & 0x02) != 0;
     uint32_t format = packet[2] & 0x0F;
     if (format == 0 && (packet[9] >> 6)) format = packet[9] >> 6;
     uint32_t allocation = read_be16(packet + 7);
-    uint8_t data[20] = { 0 };
-    uint32_t length;
+    uint8_t data[4 + 8 * (1 + CDIMAGE_TRACKS_MAX)] = { 0 };
+    uint8_t *entry = data + 4;
     if (format == 0) {
-        uint8_t *entry = data + 4;
-        if (packet[6] <= 1) {
-            entry[1] = TRACK_DATA;
-            entry[2] = 1;
-            write_address(entry + 4, 0, msf);
-            entry += 8;
-        } else if (packet[6] != TRACK_LEAD_OUT) {
+        uint32_t start = packet[6];
+        if (start > disc->tracks[disc->track_count - 1].number && start != TRACK_LEAD_OUT) {
             check_condition(drive, SENSE_ILLEGAL_REQUEST, ASC_INVALID_FIELD, 0);
             return;
         }
-        entry[1] = TRACK_DATA;
+        for (uint32_t i = 0; i < disc->track_count; i++) {
+            if (disc->tracks[i].number < start) continue;
+            entry[1] = track_adr_control(&disc->tracks[i]);
+            entry[2] = disc->tracks[i].number;
+            write_address(entry + 4, disc->tracks[i].start, msf);
+            entry += 8;
+        }
+        entry[1] = track_adr_control(&disc->tracks[disc->track_count - 1]);
         entry[2] = TRACK_LEAD_OUT;
-        write_address(entry + 4, drive->total_blocks, msf);
-        length = (uint32_t)(entry + 8 - data);
+        write_address(entry + 4, disc->total_blocks, msf);
+        entry += 8;
+        data[2] = disc->tracks[0].number;
+        data[3] = disc->tracks[disc->track_count - 1].number;
     } else if (format == 1) {
-        data[4 + 1] = TRACK_DATA;
-        data[4 + 2] = 1;
-        write_address(data + 8, 0, msf);
-        length = 12;
+        entry[1] = track_adr_control(&disc->tracks[0]);
+        entry[2] = disc->tracks[0].number;
+        write_address(entry + 4, disc->tracks[0].start, msf);
+        entry += 8;
+        data[2] = data[3] = 1;
     } else if (format == 2) {
-        full_toc(drive, allocation);
+        full_toc(slot, allocation);
         return;
     } else {
         check_condition(drive, SENSE_ILLEGAL_REQUEST, ASC_INVALID_FIELD, 0);
         return;
     }
+    uint32_t length = (uint32_t)(entry - data);
     write_be16(data, length - 2);
-    data[2] = data[3] = 1;
     respond(drive, data, length, allocation);
 }
 
-static void read_subchannel(atapi_t *drive, const uint8_t *packet) {
+static void read_subchannel(atapi_slot_t *slot, const uint8_t *packet) {
+    atapi_t *drive = slot->state;
     uint8_t data[16] = { 0, 0x15 };
     uint32_t length = 4;
     if (packet[2] & 0x40) {
+        bool msf = (packet[1] & 0x02) != 0;
+        uint32_t block = drive->current_block;
+        const cdimage_track_t *track = cdimage_track_at(&slot->disc, block);
         data[3] = 12;
-        data[4] = 1;
-        data[5] = TRACK_DATA;
-        data[6] = 1;
+        data[4] = packet[3] ? packet[3] : 1;
+        data[5] = track ? track_adr_control(track) : TRACK_DATA;
+        data[6] = track ? track->number : 1;
         data[7] = 1;
-        write_address(data + 8, 0, packet[1] & 0x02);
-        write_address(data + 12, 0, packet[1] & 0x02);
+        write_address(data + 8, block, msf);
+        write_address(data + 12, track ? block - track->start : 0, msf);
         length = 16;
     }
     respond(drive, data, length, read_be16(packet + 7));
@@ -523,20 +565,20 @@ static void execute_packet(atapi_slot_t *slot) {
         read_capacity(drive);
         break;
     case SCSI_READ_10:
-        start_read(slot, read_be32(packet + 2), read_be16(packet + 7));
+        start_read(slot, read_be32(packet + 2), read_be16(packet + 7), READ_CD_TYPE_MODE1);
         break;
     case SCSI_READ_12:
-        start_read(slot, read_be32(packet + 2), read_be32(packet + 6));
+        start_read(slot, read_be32(packet + 2), read_be32(packet + 6), READ_CD_TYPE_MODE1);
         break;
     case SCSI_READ_CD:
         if ((packet[9] & 0xF8) != READ_CD_USER_DATA) check_condition(drive, SENSE_ILLEGAL_REQUEST, ASC_INVALID_FIELD, 0);
-        else start_read(slot, read_be32(packet + 2), read_be24(packet + 6));
+        else start_read(slot, read_be32(packet + 2), read_be24(packet + 6), (packet[1] >> 2) & 7u);
         break;
     case SCSI_READ_TOC:
-        read_toc(drive, packet);
+        read_toc(slot, packet);
         break;
     case SCSI_READ_SUBCHANNEL:
-        read_subchannel(drive, packet);
+        read_subchannel(slot, packet);
         break;
     case SCSI_MODE_SENSE_6:
         mode_sense(drive, packet, false);
@@ -643,10 +685,12 @@ void atapi_write(atapi_slot_t *slot, int reg, uint8_t value) {
 
 uint16_t atapi_read_data(atapi_slot_t *slot) {
     atapi_t *drive = slot->state;
-    if (device_1(drive) || drive->dma || drive->writing_packet || drive->sector_count != REASON_IN || drive->chunk_left < 2) return 0;
-    uint16_t value = (uint16_t)(drive->buffer[drive->buffer_position] | drive->buffer[drive->buffer_position + 1] << 8);
-    drive->buffer_position += 2;
-    drive->chunk_left -= 2;
+    if (device_1(drive) || drive->dma || drive->writing_packet || drive->sector_count != REASON_IN || drive->chunk_left == 0) return 0;
+    uint32_t bytes = drive->chunk_left < 2 ? drive->chunk_left : 2;
+    uint16_t value = drive->buffer[drive->buffer_position];
+    if (bytes == 2) value |= (uint16_t)(drive->buffer[drive->buffer_position + 1] << 8);
+    drive->buffer_position += bytes;
+    drive->chunk_left -= bytes;
     if (drive->chunk_left == 0) buffer_drained(slot);
     return value;
 }
@@ -688,14 +732,22 @@ bool atapi_interrupt(const atapi_t *drive) {
     return drive->irq && !(drive->device_control & CONTROL_NIEN);
 }
 
-bool atapi_dma_ready(const atapi_t *drive) {
+static bool dma_pending(const atapi_t *drive) {
     return drive->dma && (drive->status & STATUS_DRQ) && drive->buffer_position < drive->buffer_length;
+}
+
+bool atapi_dma_ready(const atapi_slot_t *slot) {
+    return dma_pending(slot->state) && (!slot->state->audio || clock_now(slot) >= slot->ready_at);
+}
+
+uint64_t atapi_dma_due(const atapi_slot_t *slot) {
+    return dma_pending(slot->state) && slot->state->audio ? slot->ready_at : 0;
 }
 
 uint32_t atapi_dma_read(atapi_slot_t *slot, uint8_t *out, uint32_t length) {
     atapi_t *drive = slot->state;
     uint32_t copied = 0;
-    while (copied < length && atapi_dma_ready(drive)) {
+    while (copied < length && atapi_dma_ready(slot)) {
         uint32_t available = drive->buffer_length - drive->buffer_position;
         uint32_t take = length - copied < available ? length - copied : available;
         memcpy(out + copied, drive->buffer + drive->buffer_position, take);

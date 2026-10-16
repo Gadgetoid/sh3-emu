@@ -3,7 +3,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define ATAPI_BLOCK_SIZE    2048u
+#include "core/cdimage.h"
+
 #define ATAPI_BUFFER_BLOCKS 16u
 
 typedef struct {
@@ -13,14 +14,23 @@ typedef struct {
     uint8_t sense_key, sense_code, sense_qualifier;
     uint8_t packet[12];
     uint32_t packet_position;
-    uint8_t buffer[ATAPI_BUFFER_BLOCKS * ATAPI_BLOCK_SIZE];
+    uint8_t buffer[ATAPI_BUFFER_BLOCKS * CDIMAGE_DATA_BYTES];
     uint32_t buffer_length, buffer_position, chunk_left;
     uint32_t next_block, blocks_left, total_blocks;
+    bool audio;
+    uint32_t current_block;
 } atapi_t;
+
+typedef uint64_t (*atapi_clock_fn)(void *context);
 
 typedef struct {
     atapi_t *state;
     FILE    *image;
+    cdimage_t disc;
+    uint64_t ready_at;
+    atapi_clock_fn clock;
+    void    *clock_context;
+    uint64_t clock_hz;
 } atapi_slot_t;
 
 enum {
@@ -34,9 +44,9 @@ enum {
     ATAPI_COMMAND = 7,
 };
 
-bool     atapi_load(atapi_slot_t *slot, FILE *image);
+bool     atapi_load(atapi_slot_t *slot, FILE *image, const cdimage_t *disc);
 void     atapi_unload(atapi_slot_t *slot);
-void     atapi_rebind(atapi_slot_t *slot, FILE *image);
+void     atapi_rebind(atapi_slot_t *slot, FILE *image, const cdimage_t *disc);
 void     atapi_reset(atapi_slot_t *slot);
 void     atapi_sanitize(atapi_t *drive);
 uint8_t  atapi_read(atapi_slot_t *slot, int reg);
@@ -46,5 +56,6 @@ void     atapi_write_data(atapi_slot_t *slot, uint16_t value);
 uint8_t  atapi_alternate_status(const atapi_t *drive);
 void     atapi_write_control(atapi_slot_t *slot, uint8_t value);
 bool     atapi_interrupt(const atapi_t *drive);
-bool     atapi_dma_ready(const atapi_t *drive);
+bool     atapi_dma_ready(const atapi_slot_t *slot);
+uint64_t atapi_dma_due(const atapi_slot_t *slot);
 uint32_t atapi_dma_read(atapi_slot_t *slot, uint8_t *out, uint32_t length);

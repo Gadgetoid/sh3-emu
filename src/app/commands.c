@@ -290,7 +290,7 @@ void app_command(app_t *app, int item, int *switch_to, bool *events_seen) {
         break;
     }
     case MENU_LOAD_DISC: {
-        static const SDL_DialogFileFilter filters[] = { { "Disc images", "iso" }, { "All files", "*" } };
+        static const SDL_DialogFileFilter filters[] = { { "Disc images", "iso;cue" }, { "All files", "*" } };
         SDL_ShowOpenFileDialog(picks_done, (void *)(intptr_t)PICK_DISC, app->window, filters, 2, NULL, false);
         break;
     }
