@@ -391,3 +391,13 @@ if [ -f "$AUTOPC_ROM" ]; then
 else
     echo "skip autopc: no $AUTOPC_ROM (Clarion AutoPC BurnOS.bin)"
 fi
+
+AUTOPC_FLASH_ROM=${AUTOPC_FLASH_ROM:-rom/autopc-310c-flash-8mb.bin}
+AUTOPC_MENU_HASH=224ea48adc540bf3e9411164f2df0df9c880995252f6bd5e727f79bbb0a299e9
+if [ -f "$AUTOPC_FLASH_ROM" ]; then
+    ./headless "$AUTOPC_FLASH_ROM" --debug-output --seconds=40 --power=10 --key=18:5A --key=28:F4 --pgm="$OUT/autopc_menu.pgm" > "$OUT/autopc_menu.log" 2>&1
+    actual=$(shasum -a 256 "$OUT/autopc_menu.pgm" | cut -d' ' -f1)
+    if grep -q "^debug: DSP Download Successful" "$OUT/autopc_menu.log" && [ "$actual" = "$AUTOPC_MENU_HASH" ]; then echo "ok   autopc_menu"; else echo "FAIL autopc_menu $actual"; exit 1; fi
+else
+    echo "skip autopc_menu: no $AUTOPC_FLASH_ROM (Clarion AutoPC 310C 8 MB flash dump)"
+fi

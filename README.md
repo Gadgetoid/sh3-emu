@@ -1,6 +1,6 @@
 # sh3-emu
 
-An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs of the Casio Cassiopeia A-51 (CE 1.01, Japanese), the HP 300LX (CE 1.0), the HP 320LX (CE 2.0) and the Hitachi HPW-200EC (CE 2.0), with a simulated LCD, the keyboard and touch panel, PC Card images, a serial port with a PPP network, and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
+An emulator for Windows CE handhelds built on the Hitachi SH-3. It runs the ROMs of the Casio Cassiopeia A-51 (CE 1.01, Japanese), the HP 300LX (CE 1.0), the HP 320LX (CE 2.0), the Hitachi HPW-200EC (CE 2.0) and the Clarion AutoPC 310C car stereo (Auto PC 1.0, CE 2.x), with a simulated LCD, the keyboard and touch panel, PC Card images, a serial port with a PPP network, and a GDB stub. It's a hard fork of [velo-emu](https://github.com/Gadgetoid/velo-emu), the Philips Velo 1 emulator, with an SH-3 core in place of the MIPS one.
 
 ![HP 320LX World Clock, CE 2.0](docs/screenshots/hp-320lx.png)
 ![Casio Cassiopeia A-51 time zone, CE 1.01](docs/screenshots/casio-a51.png)
@@ -22,6 +22,7 @@ No ROMs are included. Put them in the `roms` folder of the data folder (see GUI)
 | HP 300LX | a raw dump of its flash | 1.0 | boots to the desktop |
 | HP 320LX | a raw dump of its flash | 2.0 | setup wizard, keyboard, touch, sound, backlight, suspend and resume, serial |
 | Hitachi HPW-200EC | a dump of its whole 12 MB ROM, boot loader included | 2.0 | setup wizard, keyboard, touch, colour, sound, suspend and resume, serial, CompactFlash, Ethernet |
+| Clarion AutoPC 310C | a dump of its 8 MB flash, or the BurnOS.bin update image | 2.x | shell and app menu, faceplate keys, power key, tuner DSP download |
 
 ## Running
 
@@ -198,7 +199,23 @@ That presses Enter twice and taps the five calibration targets.
 - **Cards:** `--card` goes in the CompactFlash slot (HD64461 socket 1, area 5) and mounts as `\Storage Card`; `--ethernet` uses the PC Card slot (socket 0, area 6).
 - **Sound:** wavedev.dll's DMA channel 3 copies samples to D/A channel 0 at the compare match timer's rate.
 
-## What's emulated
+## Clarion AutoPC 310C
+
+A ROM image containing `apcdll.dll` runs on the Clarion AutoPC 310C, a 1998 car stereo running Microsoft's Auto PC 1.0 (CE 2.x on an SH3). Its display is the 256x64 faceplate. Two kinds of image work:
+
+- **The 8 MB flash**, from physical 0, as dumped from a unit with `VirtualCopy`: Clarion's boot loader (version 8307) runs from the reset vector and jumps to the CE image at 0x20000. The one tested has sha256 `de2ff15eca7a351cc8c13c8f51849163b64bea86abb6d65ba57d06115cdca46a`; `make test` uses it from `rom/autopc-310c-flash-8mb.bin` (or `AUTOPC_FLASH_ROM=PATH`) if it's there.
+- **BurnOS.bin**, the B000FF firmware update image, which is loaded into RAM and runs the flash updater. `make test` uses it from `rom/autopc-burnos.bin` (or `AUTOPC_ROM=PATH`).
+
+The flash image boots in about 8 s to the clock screen, which is the unit switched off. The power key turns it on: the Usage Warning (Enter dismisses it), then the app menu, which the arrow keys move through.
+
+```
+./headless rom/autopc-310c-flash-8mb.bin --seconds=40 --power=10 --key=18:5A --key=28:F4 --png=menu.png
+```
+
+- **Faceplate keys:** a 5x6 matrix read over the faceplate link: the arrows, Enter, Esc, 1-0, F1, F2, F5, F6 and F7, Alt and VK 0x5B are keys; the power key is row 1, column 1 (VK_OFF), on Machine > Power Button and `--power`. fplio's key thread sees a release through bit 22 of the link control register.
+- **Power:** ignition is on (FPGA input bit 0), the faceplate attached (bit 3 clear), external power on (FPGA status bit 9) and the battery good (bit 10).
+- **Tuner DSP:** dspdev.dll resets it through 0x2040 and 0x2054 and downloads `\Windows\audio.b` a word at a time over the SPI link at 0x2050, one data-ready interrupt (0x1014 bit 9, enabled in 0x100C) per word; the DSP echoes the 0xC1 version command as 0x81, which dspdev checks before reporting the download successful.
+
 
 - CPU (`src/core/sh3.c`): the SH-3 instruction set, little-endian, with delay slots; banked registers, SR.MD/RB/BL; exceptions, TRAPA and interrupts through VBR+0x100/0x400/0x600 with EXPEVT, INTEVT, TRA, SPC and SSR; the MMU with the 128-entry 4-way UTLB, 1 KB and 4 KB pages, ASIDs, shared pages, MMUCR (AT, IX, TF, RC, SV), LDTLB, TLB miss, invalid, protection and initial page write exceptions, and the memory-mapped TLB arrays; SLEEP. No FPU or DSP.
 - On-chip peripherals (`src/core/sh770x.c`), SH7708, SH7707 and SH7709 (the SH7707 without its LCD and PC Card controllers, with PINT0-15 on ports C and F): the INTC (IRL levels, IPRA to IPRF, IRQ0-5 on the SH7707, with edge or level sense per line), TMU channels 0-2 with underflow interrupts, the RTC (BCD counters, 64 Hz counter, alarm, periodic and carry interrupts), SCI, the two SH7707 SCIFs, the SH7707 DMA controller (four channels, compare match timer requests), compare match timer and D/A converter, the SH7707 A/D converter (single and multi modes, ADI), its split INTEVT/INTEVT2 codes and port input pins set by the board, and the SH7707's LCD controller (index, display, 16-entry palette and DMA registers) and PC Card controller (two sockets, with card status, change and enable registers and their interrupts at 0x9C0 and 0x9E0), and register storage for the BSC, CPG, WDT, CCR and the SH7707 ports. The cache isn't modelled.
@@ -210,6 +227,8 @@ That presses Enter twice and taps the five calibration targets.
 
 - HD64461 companion chip (`src/core/hd64461.c`), at 0x10000000 with every block 0x10000 below where Linux's `hd64461.h` puts it: the LCD controller's power handshake and 256-entry palette, 512 KB of frame buffer at 0x12000000, the two PC Card sockets (status, change and enable registers; windows in areas 6 and 5), a 16550 UART at 0x10008000 with registers 2 bytes apart and a 1.8432 MHz clock, the interrupt request and mask registers (UART, both sockets) and register storage for the rest.
 
+- Clarion AutoPC board (`src/core/autopc.c`): the FPGA at 0x11000000 (interrupt enable and pending, ignition and power inputs, battery status), the PCI bridge and its configuration space, the faceplate PCI device (its link to the faceplate: LCD controller registers, the 256x64 3 bpp display, the key matrix), the tuner DSP's SPI link, the two PC Card sockets and the debug UART.
+
 - Hitachi HPW-200EC board (`src/core/hpw200ec.c`): the boot loader and ROM at physical 0, the HD64461 on IRQ4, the key matrix, touch panel and power key above, the card slots, and the DOLPHIN gate array at 0x0A000000 as register storage.
 
 Guest time is the instruction count at 58.98 MHz. The peripheral clock is 10 MHz on the Casio A-51, 11.0592 MHz on the HP 320LX and 24 MHz on the HPW-200EC, which give both kernels their 25 ms tick and the HP's serial driver its exact baud rates.
@@ -220,7 +239,7 @@ Not yet: the IR port, an I/O card in the 320LX's CompactFlash slot (Card Service
 
 `make sh3emu` builds the windowed app (`make app` wraps it as `SH3Emu.app` on macOS). It runs the machine with the simulated LCD, PS/2 keyboard mapping and the mouse as the stylus, and takes `--card`, `--net`, `--memory`, `--agent` and `--gdb` like `headless`; Devices has the card and the serial port. Machines, states, snapshots and the ROMs folder live in `$XDG_DATA_HOME/sh3-emu` (otherwise `~/Library/Application Support/sh3-emu` on macOS, `~/.local/share/sh3-emu` elsewhere), and settings in `sh3emu.ini` in `$XDG_CONFIG_HOME/sh3-emu` (otherwise that data folder on macOS, `~/.config/sh3-emu` elsewhere), so it doesn't share anything with velo-emu.
 
-Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Power Button (Cmd-Shift-P) presses the HP 320LX's ON key, which wakes it from suspend, the Casio A-51's, and the HPW-200EC's power key. Devices > Sound turns the sound off and on. Machine > Backlight (Cmd-B) presses the backlight key, and is ticked while the backlight is on; the screen is drawn unlit until it is. On the HP 320LX, F9 is the backlight key too, as it's in F9's place in the key matrix. The title bar says when the machine is suspended.
+Machine > New Machine lists the ROMs in the roms folder by machine. Machine > Power Button (Cmd-Shift-P) presses the HP 320LX's ON key, which wakes it from suspend, the Casio A-51's, the HPW-200EC's and the AutoPC's power key. Devices > Sound turns the sound off and on. Machine > Backlight (Cmd-B) presses the backlight key, and is ticked while the backlight is on; the screen is drawn unlit until it is. On the HP 320LX, F9 is the backlight key too, as it's in F9's place in the key matrix. The title bar says when the machine is suspended.
 
 Machine > CPU Speed > Optimisations (`--optimisations=on|off`, kept in `sh3emu.ini`; on by default on Android; `headless --optimisations`) does some of CE's work natively and skips work that only waits for time to pass:
 
