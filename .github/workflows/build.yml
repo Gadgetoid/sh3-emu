@@ -107,7 +107,7 @@ jobs:
       - name: Package
         run: |
           mkdir -p "dist/SH3Emu-${VERSION}"
-          cp sh3emu.exe headless.exe sh3-run.exe sh3emu-rapi.exe "dist/SH3Emu-${VERSION}"
+          cp sh3emu.exe headless.exe sh3-run.exe "dist/SH3Emu-${VERSION}"
           for dll in $(ldd sh3emu.exe headless.exe | awk '$3 ~ /^\/ucrt64\// { print $3 }' | sort -u); do cp "$dll" "dist/SH3Emu-${VERSION}"; done
           cd dist && zip -r "SH3Emu-${VERSION}-windows-x86_64.zip" "SH3Emu-${VERSION}"
       - uses: actions/upload-artifact@v7
