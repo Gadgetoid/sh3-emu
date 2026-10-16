@@ -14,6 +14,7 @@
 #define INPUT_IGNITION  0x0001u
 #define FPGA_STATUS     0x8000u
 #define STATUS_POWER_ON 0x0200u
+#define STATUS_BATTERY_OK 0x0400u
 
 #define BRIDGE_PA       0x10000000u
 #define BRIDGE_SIZE     0x00000200u
@@ -140,7 +141,7 @@ bool autopc_detect(const uint8_t *image, size_t size) {
 void autopc_reset(autopc_t *board) {
     memset(board, 0, sizeof *board);
     board->fpga[FPGA_INPUTS / 4] = INPUT_IGNITION;
-    board->fpga[FPGA_STATUS / 4] = STATUS_POWER_ON;
+    board->fpga[FPGA_STATUS / 4] = STATUS_POWER_ON | STATUS_BATTERY_OK;
     board->socket_events[0] = board->socket_events[1] = STATUS_CHANGED;
     board->faceplate = (autopc_pci_t){
         .vendor = CLARION_VENDOR,
